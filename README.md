@@ -31,6 +31,12 @@ Python 原型已完成使命（行为对齐后删除）；其基线数字保留�
 > 注：opencode 自带运行时（可在无 Node 的机器上跑），dsh 依赖 Node。
 > 因此 npm 包声明 `engines.node >= 24`；无 Node 的机器后续用 `bun build --compile` 的单文件二进制。
 
+## Public release
+
+**当前 private。转为 public 前必须通过 `docs/security/public-release.md` 的硬门禁**：
+当前树脱敏、Git 历史清洁、GitHub 元数据检查、`dia-security` 独立审核 `pass`。
+未通过前不得改 visibility。
+
 ## 开发
 
 ```bash

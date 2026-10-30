@@ -69,6 +69,7 @@
 | D0.11 | yan-agent@next 迁移设计 | **设计完成；P2.1 + shim 已落** | `dia-job` 全局安装、路径策略项目无关；yan-agent `yan-task` 已转发；见 `docs/migrations/yan-agent-next.md` |
 | D0.12 | yan-kb → dia kb 能力矩阵 | **K0 待做** | 通用 `index/query/get/lint` 可迁；scene/rule/claims 留域；见 `docs/migrations/yan-kb.md` |
 | D0.13 | dia monorepo（core/kb/job） | **M1 完成** | `packages/job` 已合入（subtree 历史）；`dia job` 路由；job 测试 4 文件通过；见 `docs/monorepo.md` |
+| D0.14 | public release gate | **BLOCKED until audit** | 必须完成脱敏 + git 历史清洁 + `dia-security` pass；见 `docs/security/public-release.md` |
 | D1 | doctor（依赖校验 M1）+ audit 哈希链（M3） | **未开始** | — |
 | D2 | ModelSpec + 首次基准 + 事故 sidecar | **未开始** | 设计完成 |
 | D3 | state 事件 + `(T,D,O)` 视图 | **未开始** | 设计完成 |

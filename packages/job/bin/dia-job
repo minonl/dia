@@ -44,6 +44,9 @@ while [ -L "$_SRC" ]; do
 done
 SELF_DIR="$(cd -P "$(dirname "$_SRC")" >/dev/null 2>&1 && pwd)"
 ROOT_DIR="$(cd "$SELF_DIR/.." >/dev/null 2>&1 && pwd)"
+NODE_BIN="${DIA_JOB_NODE:-$(command -v node 2>/dev/null || command -v bun 2>/dev/null || true)}"
+JSON_HELPER="$SELF_DIR/../lib/json.mjs"
+json() { [ -n "$NODE_BIN" ] || { echo "dia-job: 找不到 node/bun（JSON 适配层需要）" >&2; return 3; }; "$NODE_BIN" "$JSON_HELPER" "$@"; }
 # shellcheck source=lib/config.sh
 . "$SELF_DIR/../lib/config.sh"
 dia_job_load_config
@@ -96,15 +99,7 @@ discover() {
   # 1) registry 优先：登记表就是唯一列表
   if [ -f "$REG" ]; then
     local labels
-    labels="$(python3 -c "
-import json,sys
-try: d=json.load(open('$REG'))
-except Exception: sys.exit(0)
-for k,v in (d.get('tasks') or {}).items():
-    lb = v.get('label')
-    if lb: print(lb)
-    else: print('$DIA_JOB_LABEL_PREFIX' + k.lstrip('yan-'))
-" 2>/dev/null)"
+    labels="$(json labels "$REG" "$DIA_JOB_LABEL_PREFIX" 2>/dev/null)"
     if [ -n "$labels" ]; then printf '%s\n' "$labels"; return 0; fi
   fi
   # 2) 回退：registry 缺失/为空时扫真实载体（顺序与历史一致）
@@ -132,16 +127,7 @@ cmd_status() {
   # registry 里有 label 的按 label 查；其余按 discovered 名字拼
   local entries
   if [ -f "$REG" ]; then
-    entries="$(python3 -c "
-import json
-d=json.load(open('$REG'))
-for k,v in (d.get('tasks') or {}).items():
-    iv = v.get('interval')
-    cal = v.get('calendar') or '-'
-    if v.get('weekdays') not in (None,'-'):
-        cal = cal + ' [' + str(v['weekdays']) + ']'
-    sched = iv if iv not in (None,'-') else cal
-    print(k + '|' + (v.get('label') or ('$DIA_JOB_LABEL_PREFIX' + k.lstrip('yan-'))) + '|' + v.get('type','periodic') + '|' + sched + '|' + (v.get('log') or '$YAN_DATA_ROOT/tasks/' + k + '.log'))")"
+    entries="$(json entries "$REG" "$YAN_DATA_ROOT" "$DIA_JOB_LABEL_PREFIX" 2>/dev/null)"
   else
     entries="$(discover | sed 's/$/|periodic|-|$YAN_DATA_ROOT\/tasks\/x.log/')"
   fi
@@ -161,12 +147,7 @@ for k,v in (d.get('tasks') or {}).items():
     printf '      调度=%-10s 状态=%-10s%s\n' "$sched" "${st:-?}" "${pid:+ PID=$pid}"
     local sf="$YAN_DATA_ROOT/tasks/$name.state.jsonl"
     if [ -f "$sf" ]; then
-      tail -1 "$sf" | python3 -c "
-import json,sys,datetime
-try: d=json.loads(sys.stdin.read())
-except Exception: print('      上次运行: ?'); raise SystemExit
-t=datetime.datetime.fromtimestamp(d.get('ts',0)).strftime('%m-%d %H:%M:%S')
-print(f\"      上次运行: {t} · exit={d.get('exit')}\")" 2>/dev/null
+      json state-last "$sf" 2>/dev/null
     else
       printf '      上次运行: （无 state；adopted 任务由其项目自管）\n'
     fi
@@ -181,10 +162,7 @@ cmd_logs() {  # logs <name> [-n N]：看某个任务最近在干什么（最直�
   [ -n "$name" ] || { echo "用法：yan-task logs <name> [-n N]" >&2; return 2; }
   local log="$YAN_DATA_ROOT/tasks/$name.log"
   if [ ! -f "$log" ] && [ -f "$REG" ]; then
-    log="$(python3 -c "
-import json,sys
-d=json.load(open('$REG')); t=(d.get('tasks') or {}).get('$name') or {}
-print(t.get('log') or '$YAN_DATA_ROOT/tasks/$name.log')" 2>/dev/null)"
+    log="$(json log "$REG" "$name" "$YAN_DATA_ROOT/tasks/$name.log" 2>/dev/null)"
   fi
   [ -f "$log" ] || { echo "无日志：${log}（任务可能还没跑过）"; return 0; }
   echo "── ${log}（尾 $n 行）──"; tail -n "$n" "$log"
@@ -311,13 +289,7 @@ cmd_doctor() {
   #    登记了却看不见 / 目录有却查不到。现已改 registry 优先，此处再加体检项兜底。
   if [ -f "$REG" ]; then
     local reglabels loadlabels
-    reglabels="$(python3 -c "
-import json,sys
-try: d=json.load(open('$REG'))
-except Exception: sys.exit(0)
-for k,v in (d.get('tasks') or {}).items():
-    print(v.get('label') or ('$DIA_JOB_LABEL_PREFIX' + k.lstrip('yan-')))
-" 2>/dev/null | sort)"
+    reglabels="$(json labels "$REG" "$DIA_JOB_LABEL_PREFIX" 2>/dev/null | sort)"
     loadlabels="$(launchctl list 2>/dev/null | awk '{print $3}' | grep -E '^com\.' | sort)"
     local onlyreg onlyload
     onlyreg="$(comm -23 <(printf '%s\n' "$reglabels") <(printf '%s\n' "$loadlabels") 2>/dev/null | grep -v '^$')"
@@ -356,11 +328,7 @@ for k,v in (d.get('tasks') or {}).items():
         missing_n=$((missing_n+1))
       fi
       # 7) path_class 一致性 + 「登记了安装器」语义可疑（E5）
-      local rec; rec="$(python3 -c "
-import json,sys
-try: d=json.load(open('$REG'))
-except Exception: sys.exit(0)
-print((d.get('tasks') or {}).get(sys.argv[1],{}).get('path_class',''))" "$name" 2>/dev/null)"
+      local rec; rec="$(json field "$REG" "$name" path_class 2>/dev/null)"
       if [ -n "$rec" ] && [ "$rec" != "$YP_CLASS" ]; then
         echo "  ⚠️ 任务「${name}」path_class 漂移：记录=$rec 实况=$YP_CLASS"
         warn=$((warn+1)); cls_bad=$((cls_bad+1))
@@ -370,13 +338,7 @@ print((d.get('tasks') or {}).get(sys.argv[1],{}).get('path_class',''))" "$name" 
       case "$(basename "$YP_CMD_TARGET")" in
         *install*|*setup*) echo "  ⚠️ 任务「${name}」的命令像**安装器**而非服务本体：$YP_CMD_TARGET"; warn=$((warn+1)) ;;
       esac
-    done < <(python3 - "$REG" <<'PYCHK'
-import json, sys
-d = json.load(open(sys.argv[1]))
-for k, v in (d.get("tasks") or {}).items():
-    print(f"{k}\t{v.get('cmd','') or ''}")
-PYCHK
-)
+    done < <(json rows "$REG")
     [ "$missing_n" = 0 ] && [ "$cls_bad" = 0 ] && echo "  ✓ 各任务命令目标均存在且 path_class 一致"
     bad=$((bad+missing_n))
   fi
@@ -444,31 +406,9 @@ PYCHK
 # ── 写入类：install / uninstall / bootstrap（macOS 后端；设计 §4/§6.1）────
 REG="$YAN_DATA_ROOT/tasks/registry.json"
 
-reg_get() { [ -f "$REG" ] && python3 -c "
-import json,sys
-d=json.load(open('$REG'))
-t=d.get('tasks',{})
-print(json.dumps(t.get(sys.argv[1],{}),ensure_ascii=False))" "$1" 2>/dev/null || echo '{}'; }
-reg_set() {  # reg_set <name> <json>
-  mkdir -p "$YAN_DATA_ROOT/tasks"
-  python3 - "$REG" "$1" "$2" <<'PYX'
-import json, pathlib, sys
-reg, name, payload = pathlib.Path(sys.argv[1]), sys.argv[2], json.loads(sys.argv[3])
-d = json.loads(reg.read_text()) if reg.exists() else {"tasks": {}}
-d.setdefault("tasks", {})[name] = payload
-reg.write_text(json.dumps(d, ensure_ascii=False, indent=2) + "\n")
-PYX
-}
-reg_del() {
-  [ -f "$REG" ] || return 0
-  python3 - "$REG" "$1" <<'PYX'
-import json, pathlib, sys
-reg, name = pathlib.Path(sys.argv[1]), sys.argv[2]
-d = json.loads(reg.read_text())
-d.get("tasks", {}).pop(name, None)
-reg.write_text(json.dumps(d, ensure_ascii=False, indent=2) + "\n")
-PYX
-}
+reg_get() { [ -f "$REG" ] && json get "$REG" "$1" 2>/dev/null || echo '{}'; }
+reg_set() { mkdir -p "$YAN_DATA_ROOT/tasks"; json set "$REG" "$1" "$2"; }
+reg_del() { json del "$REG" "$1"; }
 
 label_of() { echo "${DIA_JOB_LABEL_PREFIX}${1#yan-}"; }        # 归一化：yan-hello → local.dia-job-hello（不叠 yan）
 
@@ -516,48 +456,13 @@ cmd_backfill() {
       esac
     fi
     rows="${rows}${name}"$'\t'"${cls}"$'\t'"${layer}"$'\n'
-  done < <(python3 - "$REG" <<'PYROWS'
-import json, sys
-d = json.load(open(sys.argv[1]))
-for k, v in (d.get("tasks") or {}).items():
-    print(f"{k}\t{v.get('cmd','') or ''}")
-PYROWS
-)
+  done < <(json rows "$REG")
 
-  # ⚠️ **不能 `printf … | python3 - … <<'PY'`**（2026-10-13 实测踩坑）：
-  #    heredoc 会**覆盖该命令的 stdin**，管道送来的 TSV 被丢弃 ⇒ python 读到空输入，
-  #    表现为"补判 0 条"却**没有任何报错**（静默空跑，正是本任务要根治的失败模式）。
-  #    ⇒ 走**临时文件**传 TSV，stdin 留给 heredoc 脚本。
+  # 用临时文件传 TSV；JSON 适配层只读该文件，不与 stdin 抢管道。
   local tsv; tsv="$(mktemp "${TMPDIR:-/tmp}/yan-task-backfill.XXXXXX")"
   printf '%s' "$rows" > "$tsv"
 
-  python3 - "$REG" "$dry" "$force" "$tsv" <<'PYX'
-import json, pathlib, sys
-reg = pathlib.Path(sys.argv[1]); dry = sys.argv[2] == "1"; force = sys.argv[3] == "1"
-tsv = pathlib.Path(sys.argv[4])
-d = json.loads(reg.read_text())
-tasks = d.get("tasks") or {}
-n_add = n_skip = n_eph = 0
-for line in tsv.read_text().splitlines():
-    if not line.strip(): continue
-    name, cls, layer = (line.split("\t") + ["", ""])[:3]
-    t = tasks.get(name)
-    if t is None: continue
-    if cls == "ephemeral":
-        print(f"  ⚠️ {name}: 存量路径被判定为 ephemeral（worktree）—— **不自动改**，请人工核对后重装")
-        n_eph += 1
-    if "path_class" in t and not force:
-        n_skip += 1
-        continue
-    t["path_class"] = cls
-    if layer: t["layer"] = layer
-    print(f"  ✚ {name}: path_class={cls}" + (f" layer={layer}" if layer else ""))
-    n_add += 1
-if n_add and not dry:
-    # **保持嵌套与既有缩进**（该文件人工维护）
-    reg.write_text(json.dumps(d, ensure_ascii=False, indent=2) + "\n")
-print(f"── 补判 {n_add} 条 · 已有值跳过 {n_skip} 条 · ephemeral 待人工 {n_eph} 条{'（dry-run 未写入）' if dry else ''} ──")
-PYX
+  json backfill "$REG" "$dry" "$force" "$tsv"
   rm -f "$tsv"   # R29：不留临时产物
 }
 
@@ -713,9 +618,7 @@ cmd_own_tasks() {
       echo "（其他项目的任务：卸载时**保留**并提示，归各自项目管）"
       ;;
     --json)
-      python3 -c "
-import json,sys
-print(json.dumps({'ownTasks': sys.argv[1:]}))" "${OWN_TASKS[@]}"
+      json own-json "${OWN_TASKS[@]}"
       ;;
     --check)
       local n="${2:-}"
@@ -803,13 +706,8 @@ cmd_install() {
   # 逃生舱：确需接管 → --takeover（须同时 --desc 说明理由），与 T1 的 --allow-unstable 同风格。
   if [ "$takeover" != 1 ] && [ -f "$REG" ]; then
     local adopt_rec
-    adopt_rec="$(python3 -c "
-import json,sys
-try: d=json.load(open('$REG'))
-except Exception: sys.exit(0)
-t=(d.get('tasks') or {}).get('$name') or {}
-print('1' if t.get('adopted') else '0')" 2>/dev/null)"
-    if [ "$adopt_rec" = 1 ]; then
+    adopt_rec="$(json field "$REG" "$name" adopted 2>/dev/null)"
+    if [ "$adopt_rec" = true ]; then
       echo "  ✗ 拒绝重建：任务「${name}」是 **adopted**（plist 由对方项目自管，不归 yan-task 生成）" >&2
       echo "      yan-task 会用自己的模板**整体重写** plist ⇒ 丢失本模板不产出的字段：" >&2
       echo "        · WorkingDirectory（模板不产出）· 自定义 env（模板只写 PATH）· 原日志路径" >&2
@@ -861,9 +759,7 @@ print('1' if t.get('adopted') else '0')" 2>/dev/null)"
   #    写入 label 后，selfcheck/status/bootstrap 一律以 registry 为准，不再推导。
   local real_label; real_label="$(label_for "$name")"
   # T2：同时固化 path_class（install 时判定一次，此后迭代**不需要改注册信息** —— 用户 D4）
-  reg_set "$name" "$(python3 -c "
-import json,sys
-print(json.dumps({'type':sys.argv[1],'backend':'launchd','label':sys.argv[2],'cmd':sys.argv[3],'interval':sys.argv[4],'calendar':sys.argv[5],'weekdays':sys.argv[6],'desc':sys.argv[7],'log':sys.argv[8],'path_class':sys.argv[9]},ensure_ascii=False))" "$type" "$real_label" "$cmd" "$interval" "$calendar" "$weekdays" "$desc" "$log" "$YP_CLASS")"
+  reg_set "$name" "$(json json type="$type" backend=launchd label="$real_label" cmd="$cmd" interval="$interval" calendar="$calendar" weekdays="$weekdays" desc="$desc" log="$log" path_class="$YP_CLASS")"
   echo "INSTALLED ${name}（${f}）"
   echo "  · path_class: $YP_CLASS"
   if _launchd_off; then echo "  · launchd 加载已跳过（测试隔离）";
@@ -892,9 +788,7 @@ cmd_adopt() {
     echo "  ⚠️ $label 当前未加载（仍登记，便于 status/bootstrap 可见）"
   fi
   local short="${label##*.}"
-  reg_set "$short" "$(python3 -c "
-import json,sys
-print(json.dumps({'type':sys.argv[1],'backend':'launchd','label':sys.argv[2],'adopted':True,'desc':sys.argv[3],'cmd':sys.argv[4]},ensure_ascii=False))" "$type" "$label" "$desc" "$cmd")"
+  reg_set "$short" "$(json json type="$type" backend=launchd label="$label" adopted=true desc="$desc" cmd="$cmd")"
   echo "ADOPTED ${short}（label=${label}）"
 }
 
@@ -940,27 +834,14 @@ echo "══ yan-task selfcheck（边界=$PLATFORM${_dry_banner}）══"
             local cmd iv cal wd
             # ⚠️ 重建时**必须把调度字段一并带回来**（2026-10-21 修）：原先只传 --cmd，
             #    plist 会丢 StartCalendarInterval ⇒ selfcheck 一跑，任务就变成「只在 RunAtLoad 跑一次」。
-            IFS=$'\t' read -r cmd iv cal wd < <(reg_get "$short" | python3 -c "
-import json,sys
-t=json.load(sys.stdin)
-print('\t'.join([t.get('cmd',''), t.get('interval','-') or '-', t.get('calendar','-') or '-', t.get('weekdays','-') or '-']))")
+            IFS=$'\t' read -r cmd iv cal wd < <(json fields "$REG" "$short")
             if [ -n "$cmd" ]; then cmd_install "$short" --cmd "$cmd" --label "$label" --interval "$iv" --calendar "$cal" --weekdays "$wd" >/dev/null && { echo "  ✚ $short 已重建"; fixed=$((fixed+1)); }
             else echo "  ⚠️ ${short}：未加载且 registry 无 cmd（adopted 任务请按其项目脚本重装）"; fi
           fi
           fi
         fi
       fi
-    done < <(python3 -c "
-import json, os
-d=json.load(open('$REG'))
-for k,v in (d.get('tasks') or {}).items():
-    # ⚠️ 回退推导必须与 install 的 label_of 一致（去掉 yan- 前缀）——
-    #    （原注释写成反引号包裹的 shell 片段 ⇒ 在外层双引号里被当**命令替换**执行：
-    #     实测「selfcheck --dry-run」会报「--dry-run：未找到命令」——2026-10-16 修）
-    #    否则 key='yan-task.selfcheck' 会推成 local.dia-job-**yan-**task.selfcheck ✗
-    #    → 与实际 label 不符 → 判「缺失」→ 反复重建（2026-10-12 实测：selfcheck 自我复制）
-    lb = v.get('label') or (os.environ.get('DIA_JOB_LABEL_PREFIX','local.dia-job-') + (k[4:] if k.startswith('yan-') else k))
-    print(k + chr(9) + lb + chr(9) + ('1' if v.get('adopted') else '0'))")
+    done < <(json selfcheck-rows "$REG" "$DIA_JOB_LABEL_PREFIX")
   else
     echo "  · 无 registry"
   fi
@@ -1011,18 +892,7 @@ for k,v in (d.get('tasks') or {}).items():
   local manifest="${DIA_JOB_EXPECTED:-}"
   if [ -f "$manifest" ] && [ -f "$REG" ]; then
     local _miss
-    _miss="$(python3 - "$manifest" "$REG" "$PLATFORM" <<'PY'
-import json,sys
-m,r,plat=sys.argv[1],sys.argv[2],sys.argv[3]
-try:
-    exp=json.load(open(m,encoding='utf-8')).get('tasks') or []
-    reg=json.load(open(r,encoding='utf-8')).get('tasks') or {}
-except Exception:
-    sys.exit(0)
-miss=[t['name'] for t in exp if plat in (t.get('platforms') or [plat]) and t['name'] not in reg]
-print(' '.join(miss))
-PY
-)"
+    _miss="$(json expected "$manifest" "$REG" "$PLATFORM")"
     if [ -n "$_miss" ]; then
       echo "  ✗ registry 缺少 expected 任务：$_miss"
       missing=$((missing+1))
@@ -1040,11 +910,7 @@ PY
 cmd_bootstrap() {  # 幂等重建本边界全部条目（设计 §6.1 兜底入口）；--dry-run 只打印解析结果
   local dry=0; [ "${1:-}" = "--dry-run" ] && dry=1
   [ -f "$REG" ] || { echo "无 registry（${REG}）—— 没有可重建的任务"; return 0; }
-  python3 -c "
-import json,sys
-d=json.load(open('$REG'))
-for n,t in (d.get('tasks') or {}).items():
-    print('\t'.join([n, t.get('cmd',''), t.get('interval','-'), t.get('calendar','-'), (t.get('desc','') or ''), t.get('weekdays','-')]))" | \
+  json bootstrap-rows "$REG" | \
   while IFS=$'\t' read -r n c i cal dsc wd; do
     [ -n "$n" ] || continue
     if [ "$dry" = 1 ]; then printf 'DRYRUN\t%s\t%s\t%s\t%s\n' "$n" "$c" "$i" "$cal"; continue; fi

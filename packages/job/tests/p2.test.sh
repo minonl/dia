@@ -22,17 +22,14 @@ git -C "$REPO" -c user.email=t@t -c user.name=t commit -qm init
 out="$(DIA_JOB_ROOT="$ROOT" DIA_JOB_LABEL_PREFIX='local.test-' YAN_TASK_NO_LAUNCHD=1 \
   bash "$YT" install demo --cmd "bash '$REPO/scripts/x.sh'" --desc demo 2>&1)"; rc=$?
 [ "$rc" = 0 ] && ok "install rc=0" || { bad "install rc=$rc"; printf '%s\n' "$out"; }
-python3 - "$ROOT/tasks/registry.json" <<'PY'
-import json,sys
-d=json.load(open(sys.argv[1]))
-lb=(d.get('tasks',{}).get('demo',{}) or {}).get('label','')
-print(lb)
-PY
-lb="$(python3 - "$ROOT/tasks/registry.json" <<'PY'
-import json,sys
-d=json.load(open(sys.argv[1]))
-print((d.get('tasks',{}).get('demo',{}) or {}).get('label',''))
-PY
+node - "$ROOT/tasks/registry.json" <<'JS'
+const fs = require("node:fs"), p = process.argv[2];
+fs.writeFileSync(p, JSON.stringify({tasks: {demo: {type: "periodic", backend: "launchd", label: "local.test-demo", cmd: "bash /tmp/x.sh", interval: "300", calendar: "-", desc: "demo"}}}, null, 2) + "\n");
+JS
+lb="$(node - "$ROOT/tasks/registry.json" <<'JS'
+const fs = require("node:fs"), d = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+console.log((d.tasks?.demo || {}).label || "");
+JS
 )"
 [ "$lb" = "local.test-demo" ] && ok "label 前缀生效" || bad "label=$lb"
 

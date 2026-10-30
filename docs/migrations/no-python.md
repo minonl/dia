@@ -8,26 +8,27 @@
 |---|---|
 | `experiments/*.py` | ✅ 已迁到 `experiments/*.ts`（Bun） |
 | `src/` / `packages/kb` / `packages/cli` | ✅ 无 Python |
-| `packages/job/bin/dia-job` | ⚠️ **遗留**：JSON 解析/写回仍在调用 `python3`（约 15 处） |
-| `packages/job/tests` | ⚠️ 测试夹具仍用 `python3` |
+| `packages/job/bin/dia-job` | ✅ 已改用 `lib/json.mjs`（Node/Bun 内置 JSON） |
+| `packages/job/tests` | ✅ 测试夹具已改 Node |
 
-## 为什么还没清完
+## 迁移记录
 
-`packages/job` 是从 bash 调度器继承的 OS 适配层；当初用 `python3` 做 JSON 解析。
-dia 的 `engines` 只声明 Node/Bun，**public 用户机器不保证有 python3**，所以这是公开前阻断项，不是“可接受例外”。
+`packages/job` 是从 bash 调度器继承的 OS 适配层，原先用 `python3` 做 JSON 解析。
+现已改为 `lib/json.mjs`：只用 Node/Bun 内置 JSON，不新增 workspace 包/解析器。
 
-## 计划（P3）
+## P3 完成（2026-10-30）
 
-1. 新增 `packages/job/lib/json.mjs`：`get/set/del/labels/status/check` 等子命令，统一 JSON 读写；
-2. 逐处替换 `python3 -c` / heredoc，保留现有 bash 退出码与输出格式；
-3. 测试夹具改为 `node`/`bun` 内联脚本；
-4. 新增门禁：`rg -n 'python3?|\.py\b' packages/job` 必须为 0；
-5. 宁可保留一个明确的 Node 依赖，也不让 public 用户装 Python。
+1. ✅ `packages/job/lib/json.mjs`：labels/entries/get/set/del/rows/fields/backfill/selfcheck-rows/expected/bootstrap-rows；
+2. ✅ `packages/job/bin/dia-job` 无 `python3`；
+3. ✅ `packages/job/tests` 夹具改 Node；
+4. ✅ `rg -n 'python3?|\.py\b' packages/job` 为 0；
+5. 运行时要求：Node 或 Bun（`engines` 已声明）。
 
 ## 当前结论
 
-- dia 自研代码：Python 清零；
-- `packages/job`：**public release blocker**，P3 完成前不得公开。
+- dia 全部 Python 清零（含 job）；
+- JSON 适配层不新增包，只用内置 JSON；
+- JSONC/JSON5 未默认引入，按 `no-python` 策略按需 opt-in。
 
 
 ## JSON / JSONC / JSON5 兼容策略

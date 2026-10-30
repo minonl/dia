@@ -28,16 +28,14 @@ bad(){ echo "  ✗ $1"; FAIL=$((FAIL+1)); }
 # 夹具：两个任务，cmd **都含空格路径**（一个引导层直连、一个业务层走指针）
 CMD1="bash '$DR/repos/yan-agent/scripts/yan-task' selfcheck"
 CMD2="CODE=\"\$(bash '$DR/bin/yan-ref' resolve)\" || { CODE='$DR/repos/yan-agent'; echo \"[warn] x\" >&2; }; bash \"\$CODE/scripts/yan-worktree\" check --all --quiet"
-python3 - "$DR/tasks/registry.json" "$CMD1" "$CMD2" <<'PY'
-import json, sys
-p, c1, c2 = sys.argv[1], sys.argv[2], sys.argv[3]
-json.dump({"tasks": {
-    "demo-selfcheck": {"type": "periodic", "backend": "launchd", "label": "local.dia-job-demo-selfcheck",
-                       "cmd": c1, "interval": "300", "calendar": "-", "desc": "演示 引导层（含 空格）"},
-    "demo-business":  {"type": "periodic", "backend": "launchd", "label": "local.dia-job-demo-business",
-                       "cmd": c2, "interval": "-", "calendar": "14:10", "desc": "演示 业务层（含 空格）"},
-}}, open(p, "w"), ensure_ascii=False)
-PY
+node - "$DR/tasks/registry.json" "$CMD1" "$CMD2" <<'JS'
+const fs = require("node:fs");
+const [p, c1, c2] = process.argv.slice(2);
+fs.writeFileSync(p, JSON.stringify({tasks: {
+  "demo-selfcheck": {type: "periodic", backend: "launchd", label: "local.dia-job-demo-selfcheck", cmd: c1, interval: "300", calendar: "-", desc: "演示 引导层（含 空格）"},
+  "demo-business": {type: "periodic", backend: "launchd", label: "local.dia-job-demo-business", cmd: c2, interval: "-", calendar: "14:10", desc: "演示 业务层（含 空格）"},
+}}, null, 2) + "\n");
+JS
 
 echo "== 1. --dry-run 只打印、不重建（分派行必须 shift+透传）=="
 OUT="$(bash "$YT" bootstrap --dry-run 2>&1)"
@@ -45,24 +43,21 @@ printf '%s' "$OUT" | grep -q "重建" && bad "dry-run 竟然真的重建了" || 
 [ "$(printf '%s' "$OUT" | grep -c '^DRYRUN')" = "2" ] && ok "打印 2 行（= 任务数）" || { bad "行数不对"; printf '%s\n' "$OUT" | sed 's/^/     | /'; }
 
 echo "== 2. **含空格的 cmd 不被截断**（核心回归：原实现会截成 \`bash\`）=="
-# ⚠️ 用 `python3 -c`（差值走管道喂 stdin）——不要与 heredoc 抢 stdin（首版就是这么写歪的）
-if printf '%s' "$OUT" | python3 -c '
-import sys
-c1, c2 = sys.argv[1], sys.argv[2]
-rows = {}
-for ln in sys.stdin:
-    f = ln.rstrip("\n").split("\t")
-    if len(f) >= 5 and f[0] == "DRYRUN":
-        rows[f[1]] = f[2]
-bad = 0
-for name, want in {"demo-selfcheck": c1, "demo-business": c2}.items():
-    got = rows.get(name, "")
-    if got == want:
-        print(f"  ✓ {name}: cmd 完整保留（{len(got)} 字符，含空格路径）")
-    else:
-        print(f"  ✗ {name}: cmd 被改动\n      want={want!r}\n      got ={got!r}")
-        bad += 1
-sys.exit(1 if bad else 0)
+# ⚠️ 用 node -e（不要与 heredoc 抢 stdin）
+if printf '%s' "$OUT" | node -e '
+const fs = require("node:fs");
+const [c1, c2] = process.argv.slice(1);
+const rows = {};
+for (const ln of fs.readFileSync(0, "utf8").split("\n")) {
+  const f = ln.split("\t");
+  if (f.length >= 5 && f[0] === "DRYRUN") rows[f[1]] = f[2];
+}
+let bad = 0;
+for (const [name, want] of Object.entries({"demo-selfcheck": c1, "demo-business": c2})) {
+  if (rows[name] === want) console.log(`  ✓ ${name}: cmd 完整保留（${want.length} 字符）`);
+  else { console.log(`  ✗ ${name}: cmd 被改动`); bad++; }
+}
+process.exit(bad ? 1 : 0);
 ' "$CMD1" "$CMD2"; then
   PASS=$((PASS+2))
 else
@@ -75,15 +70,14 @@ YAN_DATA_ROOT="$DRE" bash "$YT" bootstrap >/dev/null 2>&1 && ok "exit 0（无 re
 
 echo "== 4. selfcheck：**adopted 不计缺失**（2026-10-16 修）；普通未加载仍计入 =="
 # 两个任务都指向不存在的 label（= 未加载）：一个 adopted、一个普通
-python3 - "$DR/tasks/registry.json" <<'PYREG'
-import json, sys
-json.dump({"tasks": {
-    "demo-adopted": {"type": "periodic", "backend": "launchd", "label": "local.dia-job-demo-nonexistent-adopted",
-                     "cmd": "bash '/tmp/x.sh'", "interval": "300", "calendar": "-", "desc": "演示 adopted", "adopted": True},
-    "demo-normal":  {"type": "periodic", "backend": "launchd", "label": "local.dia-job-demo-nonexistent-normal",
-                     "cmd": "bash '/tmp/y.sh'", "interval": "300", "calendar": "-", "desc": "演示 普通"},
-}}, open(sys.argv[1], "w"), ensure_ascii=False)
-PYREG
+node - "$DR/tasks/registry.json" <<'JS'
+const fs = require("node:fs");
+const p = process.argv[2];
+fs.writeFileSync(p, JSON.stringify({tasks: {
+  "demo-adopted": {type:"periodic", backend:"launchd", label:"local.dia-job-demo-nonexistent-adopted", cmd:"bash '/tmp/x.sh'", interval:"300", calendar:"-", desc:"演示 adopted", adopted:true},
+  "demo-normal": {type:"periodic", backend:"launchd", label:"local.dia-job-demo-nonexistent-normal", cmd:"bash '/tmp/x.sh'", interval:"300", calendar:"-", desc:"演示 normal"},
+}}, null, 2) + "\n");
+JS
 # 让"生效指针"检查通过：否则 selfcheck 会因**指针断链**多报 1 项「缺失」
 # （那是 doctor/selfcheck 的另一职责，非本用例要测的"adopted 是否计入任务缺失"）
 mkdir -p "$DR/bin"

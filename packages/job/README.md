@@ -67,3 +67,9 @@ bash tests/install.test.sh     # 8 PASS
 | P2.1 | parameterize root/label/path; drop yan-specific expected list (done) |
 | P3 | adapt tests to `DIA_JOB_ROOT`; CI macOS+Linux |
 | P4 | yan-agent@next shim `yan-task` → `dia-job` |
+
+
+## JSON adapter
+
+`lib/json.mjs` is a thin Node adapter for bash (built-in `JSON` only). No Python,
+no custom parser. JSONC/JSON5 are not enabled for registry/state files.

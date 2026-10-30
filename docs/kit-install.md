@@ -320,7 +320,11 @@ flowchart LR
 | K4 worktree → `packages/wt` | ✅ | 7 处 python→node；5 套测试；`dia wt create/status/clean` levm 通过 |
 | K4 删旧命令面 | ✅（部分） | 删 yan-kb / yan-worktree / yan-task / 旧安装器；CI 门禁上线 |
 | K4 未迁移项 | ⏳ | `yan-mr` / `yan-release` / `yan-env` / `yan-ref` / `yan-schedule` / `yan-doctor` / `yan-version` / `yan-data-root` 仍在仓内、不随 persona 安装 |
-| P2 config 合并 | ⏳ | opencode.json 的 permission / default_agent 仍靠人工或旧残留 |
+| P2 默认 agent | ✅ | `dia persona default <id>`（备份 + 原值记录 + `--unset`） |
+| P2 生效版本指针 | ✅ | `dia persona use <id>[@ver]` + `state/active.jsonl` 审计；scope 先读指针 |
+| P2 组合自检 | ✅ | `dia doctor`（0 全绿 / 1 warn / 2 fail） |
+| P2 凭据注入 | ✅ | `dia env list\|check\|run`（白名单、不回显、redact、不进 argv） |
+| P2 上游比对 | ✅ | `dia persona check`（same/differs/unknown/local-only）+ `update` 从记录源重装 |
 
 ---
 

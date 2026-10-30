@@ -84,6 +84,37 @@
 
 ---
 
+### 2.1 persona 可自带内容（内联 kit）——已定案（2026-10-30）
+
+```json
+{
+  "schema": 1, "kind": "persona", "id": "yan", "version": "0.1.0",
+  "entry": { "opencode": "platform/opencode/files/opencode-agent-yan.md" },
+  "files":   [{ "from": "core/AGENTS.md", "to": "~/.config/opencode/AGENTS.md" }],
+  "skills":  [{ "from": "core/skills/yan-onboarding", "name": "yan-onboarding", "mode": "link" }],
+  "dirs":    ["~/.yan-agent/cache", "~/.yan-agent/tasks"],
+  "knowledge": ["core/knowledge"],
+  "data_root": "~/.yan-agent",
+  "commands": [{ "name": "scene", "entry": "scripts/kb-domain.mjs", "env": { "YAN_DATA_ROOT": "~/.yan-agent" } }],
+  "kits": ["../shared/leyan-skills"]
+}
+```
+
+persona 与 kit 用**同一套内容字段**（`files/skills/bin/dirs/commands/knowledge/data_root`），差别只在所有者：
+
+| | 谁的内容 | 路径基准 | 生命周期 |
+|---|---|---|---|
+| persona 自带 | 该人格专属（规则、知识、域命令） | persona 根 | 随 persona 装/卸 |
+| 独立 kit | 跨人格/第三方复用（共享 skill 包） | kit 根 | 独立装/卸，可被多 persona 引用 |
+
+**为什么要有这一层**：把 `core/knowledge` 搬进 `kits/yan-core/` 要改 46 处脚本、65 个 md 的硬编码路径，
+收益只是"目录好看"。内联后 persona 根就是内容根，历史路径零改动；复用需求一旦出现，再拆独立 kit 即可。
+
+实现上两者共用 `kit.renderContent(baseDir, targetDir, manifest)`：persona 传 `baseDir = targetDir = persona 树`，
+kit 传 `baseDir = 包内目录, targetDir = DATA/kits/<id>/<version>`。
+
+---
+
 ## 3. 安装管线
 
 ```mermaid

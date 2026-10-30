@@ -128,7 +128,11 @@ async function kb(argv: string[]): Promise<number> {
     try {
       rows = await search(root, q, db, limit);
     } catch (e: any) {
-      if (has(args, "--auto-index") && String(e?.code || "").startsWith("E_INDEX_")) {
+      // 索引缺失或过期都自动重建（知识随 persona 更新，索引过期是常态，不该让用户手跑 index）
+      const code = String(e?.code || "");
+      // 显式 --root/--db 时保持「缺索引即报错」；persona 作用域下索引过期是常态 → 自动重建
+      const scoped = !flag(args, "--root") && !process.env.DIA_KB_ROOT;
+      if (has(args, "--auto-index") || scoped) {
         await buildIndex(root, db);
         rows = await search(root, q, db, limit);
       } else {

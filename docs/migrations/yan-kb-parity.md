@@ -96,7 +96,7 @@ dia packages/kb (single engine)
 | 阶段 | 动作 | 门禁 |
 |---|---|---|
 | K2.1 | ✅ 完成：索引 meta、原子构建、`DIA_CACHE_DIR`、stat 指纹（docs+mtimeMs+size）、缺/陈旧索引报 `E_INDEX_MISSING/STALE` | 空/陈旧/root 不符/同秒矩阵通过；85 tests |
-| K2.2 | 🟡 代码完成，门禁有条件通过：ID 直通/CJK 退阶/BM25 | 40 query：召回 52/56、零命中 0、top1_equal 31/38；仍有 1 个 known diff |
+| K2.2 | 🟡 100 query 质量过线；延迟口径待重定 | 召回 121/132=91.67%；零命中 0；top1_equal 75/87=86.21%；p95 dia 82.2 vs old 114.6ms；1 个 waiver |
 | K2.3 | ✅ 双跑脚本 `yan-kb-dual.sh`（yan-agent@next）；默认仍 old | 发现 1 个 known diff：旧命中 `rules/design-doc.md`，dia 未召回；**不切默认** |
 | K2.4 | 🟡 观察期：人工 waiver 已批准（旧 design-doc 误排）；默认仍 old | 2026-10-30→11-06：非 waiver miss=0 且指标不降；否则不切 |
 
@@ -135,3 +135,10 @@ dia packages/kb (single engine)
 - 双跑脚本把该条标为 `WAIVED`，不再计入 miss；
 - **默认仍走 old**；观察 7 天（至 2026-11-06），非 waiver miss 必须为 0，且 top1/zero 不降；
 - 观察期满另立 K2.5 切换任务，不在本轮自动切。
+
+
+## 10. K2.2 100 条结论（2026-10-30）
+
+- 召回 91.67%、answerable zero 0、top1 一致 86.21% → 质量门禁通过；
+- CLI p95 82.2ms（旧 114.6ms），绝对 60ms 门槛未过；**不把它偷偷改成 pass**，延迟口径需按环境改为“相对旧实现不退化”；
+- K2.4 观察期继续，K2.5 不切默认。

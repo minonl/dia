@@ -23,5 +23,7 @@ out="$(DIA_JOB_ROOT="$TD/root" "$BIN_DIR/dia-job" list 2>&1)"; printf '%s' "$out
 out="$(HOME="$TD/h" DIA_JOB_BIN="$BIN_DIR/dia-job" bash "$ROOT/shim/yan-task" list 2>&1)"; printf '%s' "$out" | grep -q "平台" && ok "shim 转发" || bad "shim 失败：$out"
 # shim 拒绝 worktree 路径
 WT="$TD/repo-worktree--x"; mkdir -p "$WT"; cp "$ROOT/shim/yan-task" "$WT/yan-task"; chmod +x "$WT/yan-task"
-HOME="$TD/h" DIA_JOB_BIN="$BIN_DIR/dia-job" bash "$WT/yan-task" list >/dev/null 2>&1; [ "$?" = 4 ] && ok "shim 拒绝 worktree" || bad "worktree 未拒绝"
+WT_OUT="$(HOME="$TD/h" DIA_JOB_BIN="$BIN_DIR/dia-job" bash "$WT/yan-task" list 2>&1)"; WT_RC=$?
+# 断言 rc=4；失败时把 rc 与输出打出来（此前只报"未拒绝"，CI 上无法定位，2026-10-30 实测）
+[ "$WT_RC" = 4 ] && ok "shim 拒绝 worktree" || { bad "worktree 未拒绝（rc=${WT_RC}）"; printf '%s\n' "$WT_OUT" | sed 's/^/     | /'; }
 echo; echo "── PASS $PASS · FAIL $FAIL ──"; [ "$FAIL" = 0 ]

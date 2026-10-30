@@ -53,8 +53,11 @@ export SYSTEMCTL_LOG="$TD/systemctl.log"; : > "$SYSTEMCTL_LOG"
 export SVC_STATE_DIR="$TD/svcstate"; mkdir -p "$SVC_STATE_DIR"
 
 HOME_DIR="$TD/home"; ROOT_DIR="$TD/root"; mkdir -p "$HOME_DIR" "$ROOT_DIR"
-run() { HOME="$HOME_DIR" DIA_JOB_ROOT="$ROOT_DIR" DIA_JOB_CRONTAB_BIN="$FAKE/crontab" \
-        DIA_JOB_SYSTEMCTL_BIN="$FAKE/systemctl" PATH="$FAKE:$PATH" "$JOB" "$@"; }
+# ⚠️ XDG_CONFIG_HOME 必须一起沙箱化：CI（GitHub runner）会预置它 ⇒ 不覆盖的话
+#    unit 会写到 runner 的 ~/.config 而不是测试沙箱（本地没设该变量 ⇒ 本地假绿，CI 红）
+run() { HOME="$HOME_DIR" XDG_CONFIG_HOME="$HOME_DIR/.config" DIA_JOB_ROOT="$ROOT_DIR" \
+        DIA_JOB_CRONTAB_BIN="$FAKE/crontab" DIA_JOB_SYSTEMCTL_BIN="$FAKE/systemctl" \
+        PATH="$FAKE:$PATH" "$JOB" "$@"; }
 reg_field() { HOME="$HOME_DIR" DIA_JOB_ROOT="$ROOT_DIR" node "$ROOT/lib/json.mjs" field "$ROOT_DIR/tasks/registry.json" "$1" "$2" 2>/dev/null; }
 
 echo "── periodic：interval → crontab ──"

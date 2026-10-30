@@ -22,14 +22,15 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { execFileSync } from "node:child_process";
 
-const DATA = process.env.DIA_DATA_DIR || join(homedir(), ".local", "share", "dia");
-const CACHE = process.env.DIA_CACHE_DIR || join(homedir(), ".cache", "dia", "src");
-const HOME = process.env.DIA_HOME || homedir();
+// 目录在调用时解析（不在模块加载时固化）：测试与多 persona 场景下 env 会变。
+const dataDir = () => process.env.DIA_DATA_DIR || join(homedir(), ".local", "share", "dia");
+const cacheDir = () => process.env.DIA_CACHE_DIR || join(homedir(), ".cache", "dia", "src");
+const homeDir = () => process.env.DIA_HOME || homedir();
 
 export interface FileArtifact { from: string; to: string }
 export interface SkillArtifact { from: string; name?: string; mode?: "link" | "copy"; to?: string }
 export interface BinArtifact { from: string; name: string }
-export interface CommandArtifact { name: string; entry: string; runtime?: "bun" | "node" }
+export interface CommandArtifact { name: string; entry: string; runtime?: "bun" | "node"; env?: Record<string, string> }
 
 export interface KitManifest {
   schema: number;
@@ -43,6 +44,7 @@ export interface KitManifest {
   dirs?: string[];
   commands?: CommandArtifact[];
   knowledge?: string[];
+  data_root?: string;
   requires?: Record<string, string>;
 }
 
@@ -67,15 +69,16 @@ const sha256 = (buf: string | Buffer) => createHash("sha256").update(buf).digest
 const shaFile = (p: string) => sha256(readFileSync(p));
 
 function expandHome(p: string): string {
-  if (p === "~") return HOME;
-  if (p.startsWith("~/")) return join(HOME, p.slice(2));
-  return isAbsolute(p) ? p : resolve(HOME, p);
+  const home = homeDir();
+  if (p === "~") return home;
+  if (p.startsWith("~/")) return join(home, p.slice(2));
+  return isAbsolute(p) ? p : resolve(home, p);
 }
 
 /** 目标路径必须在 HOME 内（越界即拒绝），且不能是 HOME 本身。 */
 function assertInsideHome(p: string): string {
   const abs = resolve(expandHome(p));
-  const home = resolve(HOME);
+  const home = resolve(homeDir());
   if (abs === home || !abs.startsWith(home + sep)) throw new Error(`E_MANIFEST: target escapes HOME: ${p}`);
   return abs;
 }
@@ -127,10 +130,10 @@ function resolveSource(from: string, ref?: string): { dir: string; commit: strin
   if (from.startsWith("git+") || /^https?:\/\//.test(from) || from.startsWith("git@")) {
     const url = from.replace(/^git\+/, "");
     const key = createHash("sha1").update(url).digest("hex").slice(0, 12);
-    const dir = join(CACHE, key);
+    const dir = join(cacheDir(), key);
     const git = (args: string[]) => execFileSync("git", ["-C", dir, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
     if (!existsSync(dir)) {
-      mkdirSync(CACHE, { recursive: true });
+      mkdirSync(cacheDir(), { recursive: true });
       try { execFileSync("git", ["clone", "--quiet", url, dir], { stdio: "pipe" }); }
       catch { rmSync(dir, { recursive: true, force: true }); throw new Error("E_SOURCE: git clone failed (check URL/credentials)"); }
     }
@@ -168,7 +171,7 @@ function linkManaged(dest: string, wantTarget: string): boolean {
   try { cur = readlinkSync(dest); } catch { return false; }
   const abs = resolve(dirname(dest), cur);
   if (abs === resolve(wantTarget)) return true;
-  return abs.startsWith(resolve(DATA, "kits") + sep);
+  return abs.startsWith(resolve(dataDir(), "kits") + sep);
 }
 
 function isSymlink(p: string): boolean {
@@ -178,8 +181,8 @@ function isSymlink(p: string): boolean {
 export function install(from: string, opts: { ref?: string; dryRun?: boolean; json?: boolean } = {}): KitInstallResult {
   const src = resolveSource(from, opts.ref);
   const m = readKitManifest(src.dir);
-  const target = resolve(DATA, "kits", m.id, m.version);
-  if (!target.startsWith(resolve(DATA, "kits") + sep)) throw new Error("E_MANIFEST: version escapes install dir");
+  const target = resolve(dataDir(), "kits", m.id, m.version);
+  if (!target.startsWith(resolve(dataDir(), "kits") + sep)) throw new Error("E_MANIFEST: version escapes install dir");
   const kitRootRel = m.root ?? ".";
   const kitRoot = resolve(target, kitRootRel);
   if (!kitRoot.startsWith(target + sep) && kitRoot !== target) throw new Error("E_MANIFEST: root escapes kit");
@@ -259,13 +262,13 @@ export function install(from: string, opts: { ref?: string; dryRun?: boolean; js
   const hash = hashTree(target);
   writeFileSync(join(target, "kit.lock"), JSON.stringify({
     id: m.id, version: m.version, commit: src.commit, root: kitRootRel, hash,
-    rendered, commands, knowledge: m.knowledge ?? [],
+    rendered, commands, knowledge: m.knowledge ?? [], dataRoot: m.data_root ?? null,
   }, null, 1));
   return { id: m.id, version: m.version, dir: target, root: kitRoot, rendered, hash, changed: true };
 }
 
 export function list(): { id: string; versions: string[] }[] {
-  const root = join(DATA, "kits");
+  const root = join(dataDir(), "kits");
   if (!existsSync(root)) return [];
   return readdirSync(root, { withFileTypes: true })
     .filter((e) => e.isDirectory())
@@ -273,7 +276,7 @@ export function list(): { id: string; versions: string[] }[] {
 }
 
 export function readLock(id: string, version?: string) {
-  const idDir = join(DATA, "kits", id);
+  const idDir = join(dataDir(), "kits", id);
   if (!existsSync(idDir)) throw new Error("E_NOT_INSTALLED");
   const v = version || readdirSync(idDir).sort().pop()!;
   const lockFile = join(idDir, v, "kit.lock");
@@ -283,7 +286,7 @@ export function readLock(id: string, version?: string) {
 
 export function verify(id: string, version?: string): { ok: boolean; version: string; expected: string; actual: string; drift: string[] } {
   const { version: v, lock } = readLock(id, version);
-  const dir = join(DATA, "kits", id, v);
+  const dir = join(dataDir(), "kits", id, v);
   const files = walkFiles(dir); // kit.lock 已被 walkFiles 排除
   const h = createHash("sha256");
   for (const f of files) h.update(relative(dir, f)).update("\0").update(shaFile(f)).update("\n");
@@ -305,7 +308,7 @@ export function verify(id: string, version?: string): { ok: boolean; version: st
 }
 
 export function remove(id: string): { removed: string[]; skipped: string[] } {
-  const idDir = join(DATA, "kits", id);
+  const idDir = join(dataDir(), "kits", id);
   if (!existsSync(idDir)) throw new Error("E_NOT_INSTALLED");
   const removed: string[] = [];
   const skipped: string[] = [];

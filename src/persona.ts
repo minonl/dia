@@ -3,6 +3,7 @@ import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, re
 import { homedir } from "node:os";
 import { basename, join, relative, resolve, sep } from "node:path";
 import { execFileSync } from "node:child_process";
+import * as kit from "./kit.ts";
 
 const DATA = process.env.DIA_DATA_DIR || join(homedir(), ".local", "share", "dia");
 const CACHE = process.env.DIA_CACHE_DIR || join(homedir(), ".cache", "dia", "src");
@@ -167,10 +168,20 @@ export function install(from: string, opts: { ref?: string; host?: string; dryRu
     renderedDirs.push({ path: dshDest, hash: hashTree(dshDest) });
   }
 
+  // kits：包内相对路径，装完树后逐个分发（内容归 kit，人格只引用）
+  const kitRefs: { id: string; version: string }[] = [];
+  for (const ref of m.kits ?? []) {
+    const kitDir = resolve(target, ref);
+    if (!kitDir.startsWith(target + sep)) throw new Error(`E_MANIFEST: kit escapes persona dir: ${ref}`);
+    if (!existsSync(join(kitDir, "dia.json"))) throw new Error(`E_MANIFEST: kit manifest missing: ${ref}`);
+    const r = kit.install(kitDir);
+    kitRefs.push({ id: r.id, version: r.version });
+  }
+
   const hash = hashTree(target);
   const renderedHashes: Record<string, string> = {};
   for (const f of rendered) renderedHashes[f] = shaFile(f);
-  writeFileSync(join(target, "dia.lock"), JSON.stringify({ id: m.id, version: m.version, commit: src.commit, hash, rendered, renderedHashes, renderedDirs }, null, 1));
+  writeFileSync(join(target, "dia.lock"), JSON.stringify({ id: m.id, version: m.version, commit: src.commit, hash, rendered, renderedHashes, renderedDirs, kits: kitRefs }, null, 1));
   return { id: m.id, version: m.version, dir: target, rendered, hash };
 }
 

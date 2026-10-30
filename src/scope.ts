@@ -1,0 +1,92 @@
+// scope.ts — persona 作用域：命令怎么知道自己属于哪个 agent
+//
+// 解析优先级：显式 --persona > DIA_PERSONA > 唯一已装 persona（>1 个时必须显式指定，不猜）。
+// 作用域回答三件事：读哪棵知识树、用哪个数据根、有哪些域命令可委派。
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
+
+// 目录在调用时解析（同 kit.ts：模块加载时固化会污染跨测试/多 persona 场景）
+const dataDir = () => process.env.DIA_DATA_DIR || join(homedir(), ".local", "share", "dia");
+const homeDir = () => process.env.DIA_HOME || homedir();
+
+export interface KitScope {
+  id: string;
+  version: string;
+  dir: string;
+  root: string;
+  knowledge: string[];
+  commands: { name: string; entry: string; runtime?: "bun" | "node"; env?: Record<string, string> }[];
+  dataRoot?: string;
+}
+
+export interface Scope {
+  id: string;
+  version: string;
+  dir: string;
+  kits: KitScope[];
+  knowledgeRoot?: string;
+  dataRoot?: string;
+}
+
+const expand = (p: string) => { const h = homeDir(); return p === "~" ? h : p.startsWith("~/") ? join(h, p.slice(2)) : p; };
+const latest = (dir: string) => readdirSync(dir).filter((v) => statSync(join(dir, v)).isDirectory()).sort().pop();
+
+function readJson(p: string): any {
+  try { return JSON.parse(readFileSync(p, "utf8")); } catch { return null; }
+}
+
+function loadKit(id: string, version: string): KitScope | null {
+  const dir = join(dataDir(), "kits", id, version);
+  const lock = readJson(join(dir, "kit.lock"));
+  if (!lock) return null;
+  const root = resolve(dir, lock.root ?? ".");
+  return {
+    id, version, dir, root,
+    knowledge: (lock.knowledge ?? []).map((k: string) => resolve(root, k)),
+    commands: lock.commands ?? [],
+    dataRoot: lock.dataRoot ? expand(lock.dataRoot) : undefined,
+  };
+}
+
+export function installedPersonas(): string[] {
+  const p = join(dataDir(), "personas");
+  if (!existsSync(p)) return [];
+  return readdirSync(p, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
+}
+
+export function current(explicit?: string): Scope | null {
+  const want = explicit || process.env.DIA_PERSONA;
+  let id = want;
+  if (!id) {
+    const all = installedPersonas();
+    if (all.length > 1) throw new Error(`E_SCOPE: multiple personas installed (${all.join(", ")}); pass --persona`);
+    id = all[0];
+  }
+  if (!id) return null;
+  const idDir = join(dataDir(), "personas", id);
+  if (!existsSync(idDir)) throw new Error(`E_SCOPE: persona not installed: ${id}`);
+  const version = latest(idDir)!;
+  const dir = join(idDir, version);
+  const lock = readJson(join(dir, "dia.lock")) ?? {};
+  const kits: KitScope[] = [];
+  for (const k of lock.kits ?? []) {
+    const ks = loadKit(k.id, k.version);
+    if (ks) kits.push(ks);
+  }
+  const knowledge = kits.flatMap((k) => k.knowledge);
+  return {
+    id, version, dir, kits,
+    knowledgeRoot: knowledge[0],
+    dataRoot: kits.find((k) => k.dataRoot)?.dataRoot,
+  };
+}
+
+/** 环境注入：把 persona 作用域翻译成子进程可见的变量。 */
+export function scopeEnv(s: Scope, extra: Record<string, string> = {}): Record<string, string> {
+  const env: Record<string, string> = { DIA_PERSONA: s.id, DIA_KITS: s.kits.map((k) => `${k.id}@${k.version}`).join(",") };
+  if (s.dataRoot) { env.DIA_DATA_ROOT_SCOPE = s.dataRoot; env.YAN_DATA_ROOT = s.dataRoot; }
+  if (s.knowledgeRoot) env.DIA_KB_ROOT = s.knowledgeRoot;
+  for (const [k, v] of Object.entries(extra)) env[k] = expand(v);
+  return env;
+}

@@ -7,6 +7,9 @@ import { countCalls } from "../../../src/runtime.ts";
 import { resumeCard } from "../../../src/resume.ts";
 import * as persona from "../../../src/persona.ts";
 import * as kit from "../../../src/kit.ts";
+import * as scope from "../../../src/scope.ts";
+import { spawnSync } from "node:child_process";
+import { resolve as resolvePath } from "node:path";
 import * as task from "../../../src/task.ts";
 import * as team from "../../../src/team.ts";
 import { loadPrices } from "../../../src/pricing.ts";
@@ -29,8 +32,40 @@ function positional(args: string[]): string[] {
   }
   return out;
 }
+function safeScope(explicit?: string): scope.Scope | null {
+  try { return scope.current(explicit); }
+  catch (e: any) {
+    // 显式指定却没装 → 必须报错；多 persona 未指定 → 退回无作用域
+    if (String(e?.message || "").includes("not installed")) throw e;
+    return null;
+  }
+}
+
 function rootOf(args: string[]): string {
-  return flag(args, "--root") || process.env.DIA_KB_ROOT || process.cwd();
+  const explicit = flag(args, "--root") || process.env.DIA_KB_ROOT;
+  if (explicit) return explicit;
+  const sc = safeScope(flag(args, "--persona"));
+  if (sc?.knowledgeRoot) return sc.knowledgeRoot;
+  return process.cwd();
+}
+
+/** 域命令委派：`dia kb <name> …` → kit 声明的可执行（argv 透传，exit code 原样）。 */
+function delegateKb(sub: string, args: string[]): number | null {
+  const sc = safeScope(flag(args, "--persona"));
+  if (!sc) return null;
+  for (const k of sc.kits) {
+    const c = k.commands.find((x) => x.name === sub);
+    if (!c) continue;
+    const entry = resolvePath(k.root, c.entry);
+    const runtime = c.runtime === "node" ? "node" : c.runtime === "bun" ? "bun" : (typeof (globalThis as any).Bun !== "undefined" ? "bun" : "node");
+    const r = spawnSync(runtime, [entry, ...args], {
+      stdio: "inherit",
+      env: { ...process.env, ...scope.scopeEnv(sc, c.env ?? {}) },
+    });
+    if (r.error) { err(`E_DELEGATE: ${sub}: ${r.error.message}`); return 31; }
+    return r.status ?? 1;
+  }
+  return null;
 }
 
 function help() {
@@ -44,6 +79,7 @@ usage:
   dia kb path <doc:...|workflow:...|skill:...|tool:...#mode> [--root DIR] [--repo DIR] [--json]
   dia kb lint [--root DIR] [--db PATH] [--stale-days N] [--json] [--strict]
   dia kb get <path> [--root DIR] [--section HEADING]
+  dia --persona ID kb <cmd>   # persona 作用域：知识根/数据根/域命令委派
   dia ingest sessions [--source dsh|opencode|all] [--domain dabo|yan] [--since ISO]
                       [--full] [--limit N] [--dry-run] [--out DIR] [--project ID] [--json]
   dia ingest git --repo DIR [--since DATE] [--limit N] [--json]
@@ -172,6 +208,10 @@ async function kb(argv: string[]): Promise<number> {
     if (!rel) { err("missing path"); return 2; }
     try { out(getDoc(root, rel, flag(args, "--section"))); return 0; }
     catch (e: any) { err(e?.message || String(e)); return 2; }
+  }
+  if (sub) {
+    const rc = delegateKb(sub, args);
+    if (rc !== null) return rc;
   }
   help();
   return 0;
@@ -540,7 +580,13 @@ async function runCli(argv: string[]): Promise<number> {
   return r.exit;
 }
 
-export async function main(argv: string[]): Promise<number> {
+export async function main(rawArgv: string[]): Promise<number> {
+  // 全局作用域参数：`dia --persona yan kb …` / `dia --persona=yan kb …`
+  const argv = [...rawArgv];
+  const pi = argv.indexOf("--persona");
+  if (pi >= 0 && argv[pi + 1]) { process.env.DIA_PERSONA = argv[pi + 1]; argv.splice(pi, 2); }
+  const peq = argv.find((a) => a.startsWith("--persona="));
+  if (peq) { process.env.DIA_PERSONA = peq.slice("--persona=".length); argv.splice(argv.indexOf(peq), 1); }
   const [cmd] = argv;
   if (!cmd || cmd === "-h" || cmd === "--help") { help(); return 0; }
   if (cmd === "version" || cmd === "--version") { out("dia 0.0.1"); return 0; }

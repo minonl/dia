@@ -264,7 +264,12 @@ DIA_PERSONA=yan dia kb query "MR 合并"    # 会议/脚本里设一次
 | 直推 vs MR（`my_namespaces`/`direct`/`mr`） | **留 yan 域**，经 §6.3 委派（`dia wt route` → yan 扩展） |
 | `route_config_json` 里的 python3 heredoc | 换 Node JSON（`packages/job` 同款，dia 禁止 python） |
 
-验收：5 套测试迁入 `packages/wt/tests` 全绿；**开发侧一次性对照**（旧脚本 vs `dia wt`，同仓同分支跑一遍
+**已落地（2026-10-30）**：`packages/wt/bin/dia-wt`（bash，与 `packages/job` 同模式）+ `packages/cli` 的 `dia wt` 转发 + `install.sh` 分发。
+env 全部改 `DIA_WT_*` / `DIA_SESSION`；7 处 python3 全部换成 Node（含 node_modules 扫描器），包内 python 归零。
+测试 4 套原样迁移全绿（check 27 / clean 20 / prune-merged 31 / route 26）；`scope` 16 项全绿，**其中「与 yan 权限层串联判定」1 项已移出**——
+那是 yan 域契约，不属于 dia wt。levm 上 `create → status → clean` 实跑通过。
+
+验收：**开发侧一次性对照**（旧脚本 vs `dia wt`，同仓同分支跑一遍
 `create/check/clean` 比对输出与 `git worktree list`）——因为 worktree 有分支与文件系统副作用，切错不便宜。
 对照完成后旧脚本即删，不随包分发。
 

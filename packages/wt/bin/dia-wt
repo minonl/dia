@@ -1,0 +1,1148 @@
+#!/usr/bin/env bash
+# ============================================================================
+# dia wt —— worktree 目录形式选型 + 创建（**唯一实现**，2026-10-12）
+#
+# 为什么需要：
+#   R20 要求「任何仓库的改动一律 worktree 隔离」，但目录形式选型
+#   （平级 `<repo>-worktree--<feat>` vs 仓库内 `<repo>/.worktrees/<feat>`）
+#   此前**靠人判断**（`workflows/worktree-forms.md`）→ 2026-10-12 实测：
+#   agent 在 yan-agent 上**忘了建 worktree**、直接在 main 工作区提交，
+#   还用 `git add -A` 抓走了并行会话的未提交改动。
+#   ⇒ 把「选型 + 创建」做成脚本，**固定死**，agent 只需调用它（②③ 脚本化）。
+#
+# 选型规则（**默认平级，白名单才隐藏**；用户 2026-10-12 拍板「拿不准一律平级」）：
+#   平级（默认）：<parent>/<repo>-worktree--<feature>
+#   隐藏（白名单）：<repo>/.worktrees/<feature>
+#     ⚠️ 白名单**不硬编码仓名**，而是**按条件检测**（worktree-forms.md §2）：
+#        ① 无 node_modules   ② 无仓库级扫描工具   ③ .gitignore 含 .worktrees/
+#        三条**同时**满足才用隐藏；任一不满足或**检测不确定** → **平级**（兜底）。
+#
+# 用法：
+#   bash scripts/dia wt create <repo-path> <feature> [--base <ref>] [--dry-run] [--install]
+#   bash scripts/dia wt form   <repo-path>              # 只看选型结论（不创建）
+#   bash scripts/dia wt list   [repo-path]              # 列 worktree（含形式标注）
+#   bash scripts/dia wt check  [<repo>...] [--all] [--deep] [--quiet]   # ★ node_modules 软链体检（R20）
+#   bash scripts/dia wt clean  <repo-path> <feature>    # 按 R25 清理（合并后）
+#
+# 退出码：0 成功/体检干净；1 失败/体检有违规；2 未知子命令
+#
+# ── 依赖策略（R20）与 GVS 试点记录（2026-10-16）────────────────────────────────
+# 【规则】worktree 内一律**真装**（`pnpm install --frozen-lockfile --prefer-offline`，实测 12~58s）；
+#   **禁止**把别的 checkout 的 `node_modules` 软链过来 —— pnpm 会按 realpath **改写对方**的顶层链，
+#   删 worktree 后对方整片悬空（2026-09-30 主仓 198 条 / 10-10 两次 99+100 条 / 10-15 一次）。
+#   ⚠️ 判据精确版 = 禁「**顶层 `node_modules` 是软链 / 跨 checkout 共享**」，**不是**禁 node_modules 内部有软链：
+#      pnpm `isolated` linker 的顶层包链、`link:` 依赖、dsh profile 的 `node_modules/@example/*`、
+#      GVS 的 `<storeDir>/links/**` 都是**合法形态**（`check` 已把 store links 列入白名单）。
+#   ✅ 落地 = `check`（判据 A/B/C/D + 白名单）+ `create` 提示真装/`--install` + `clean` 拒绝软链 worktree；
+#      巡检任务 `com.leyan.yan-nm-check` 每日 14:10 跑 `check --all --quiet`。
+# 【GVS 试点结论：暂停启用（用户 2026-10-16 拍板）】pnpm 官方的多 worktree 共享方案
+#   `virtualStoreType: global`（≥11.23.0；老拼写 `enableGlobalVirtualStore`）在 example-repo 实测：
+#   **收益** 新 worktree 安装 **2.9s**（对照 17.5~20.8s）、`node_modules` **1.9M**（对照名义 1.3G）、lockfile 零变更；
+#   **硬阻** GVS 把「每个包的依赖图目录」实体化 ⇒ `@types/react` 出现 6 个不同 realpath 副本 ⇒ TS 类型身份分裂
+#     ⇒ **CI 同款 `nx typecheck web-hub` 40 错**（单变量对照：同 pnpm 版本关掉 GVS 即通过；pnpm 12.11.2 同样错）。
+#   绕法（tsconfig `paths` 钉 `react`）能救 TS，但被 example-repo 的 `resolve.tsconfigPaths: true` 带到**运行时** ⇒ vitest 挂，故不可用。
+#   ⇒ **不改任何仓**，维持「真装 + 禁软链」。完整数据/复现命令/失败尝试见 `knowledge/tools/pnpm.md`「试点结论」；
+#     流程语境见 `knowledge/workflows/worktree-forms.md` §3。
+# ============================================================================
+set -uo pipefail
+
+# 自身路径（`check` 的修复指引里要能回指本脚本；被 `bash <path>` 调用时 $0 已是路径）
+# ── 解析真实脚本路径（symlink 安全；macOS readlink 无 -f）────────────────
+_SRC="${BASH_SOURCE[0]:-$0}"
+while [ -L "$_SRC" ]; do
+  _D="$(cd -P "$(dirname "$_SRC")" >/dev/null 2>&1 && pwd)"
+  _SRC="$(readlink "$_SRC")"
+  case "$_SRC" in /*) ;; *) _SRC="$_D/$_SRC" ;; esac
+done
+SELF_DIR="$(cd -P "$(dirname "$_SRC")" >/dev/null 2>&1 && pwd)"
+SELF="$_SRC"
+
+# ── SIGPIPE 加固（T8，2026-10-13 实测）─────────────────────────────────────────
+# 现象：`dia wt status | head -3` / `| grep -q …` 会以 **141**（128+SIGPIPE）退出，
+#   且**输出被截断** —— 因为下游提前退出关闭管道后，本脚本仍在 `printf`。
+# 影响面：**用户真实用法**（`| head`、`| less`、`| grep -q`），不只是 e2e 断言。
+#   e2e 3b 段 `T4 status 未标出未提交改动` 的失败即由此而来（grep -q 提前退出）。
+# 修法：默认忽略 SIGPIPE ⇒ 写失败不再杀进程；管道下游截断属**预期行为**，退出码归 0。
+# 注：`trap` 只影响本脚本自身，不改变各子命令（git 等）的语义。
+trap '' PIPE
+
+say()  { printf '\033[1;36m[dia-wt]\033[0m %s\n' "$*"; }
+warn() { printf '\033[1;33m[dia-wt]\033[0m %s\n' "$*" >&2; }
+die()  { printf '\033[1;31m[dia-wt]\033[0m %s\n' "$*" >&2; exit 1; }
+
+# ── 仓库级扫描工具特征（出现任一 → 平级）────────────────────────────────────────
+# 依据 worktree-forms.md §2 条件②：nx / eslint / tsc / vite / CRA 全仓扫描。
+has_repo_scan_tools() {
+  local repo="$1"
+  local pats=(nx.json eslint.config.js eslint.config.mjs eslint.config.cjs .eslintrc .eslintrc.js .eslintrc.cjs
+              tsconfig.json vite.config.ts vite.config.js webpack.config.js)
+  local f
+  for f in "${pats[@]}"; do
+    [ -e "${repo}/${f}" ] && return 0
+  done
+  if [ -f "${repo}/package.json" ]; then
+    grep -qE '"(nx|eslint|typescript|vite|react-scripts)"' "${repo}/package.json" 2>/dev/null && return 0
+  fi
+  return 1
+}
+
+# ── 选型：输出 flat | hidden ────────────────────────────────────────────────────
+pick_form() {
+  local repo="$1"
+  [ -d "${repo}/.git" ] || { printf 'flat'; return 0; }
+
+  if has_repo_scan_tools "$repo"; then printf 'flat'; return 0; fi
+  if [ -d "${repo}/node_modules" ]; then printf 'flat'; return 0; fi
+  if [ -f "${repo}/.gitignore" ] && grep -qE '^/?\.worktrees/?$' "${repo}/.gitignore" 2>/dev/null; then
+    printf 'hidden'; return 0
+  fi
+  printf 'flat'
+}
+
+form_reason() {
+  local repo="$1"
+  if has_repo_scan_tools "$repo"; then echo "有仓库级扫描工具（nx/eslint/tsc/vite…）→ 平级"; return; fi
+  if [ -d "${repo}/node_modules" ]; then echo "有 node_modules（需真装依赖）→ 平级"; return; fi
+  if [ -f "${repo}/.gitignore" ] && grep -qE '^/?\.worktrees/?$' "${repo}/.gitignore" 2>/dev/null; then
+    echo "纯文档/脚本仓（无依赖、无扫描工具、gitignore 已备）→ 隐藏子目录可用"; return; fi
+  echo "条件不足或不确定 → 平级（兜底，用户 2026-10-12 拍板）"
+}
+
+# ── 数据根（与 core/AGENTS.md 原则 9 一致；YAN_DATA_ROOT 优先）──────────────────
+dia_wt_data_root() {
+  if [ -n "${DIA_WT_DATA_ROOT:-}" ]; then printf '%s' "${DIA_WT_DATA_ROOT%/}"; return; fi
+  if [ -n "${DIA_DATA_ROOT_SCOPE:-}" ]; then printf '%s' "${DIA_DATA_ROOT_SCOPE%/}"; return; fi
+  # 默认与 yan 数据根同构：~/.yan-agent（persona 用 data_root 声明覆盖）
+  printf '%s' "$HOME/.yan-agent"
+}
+
+# ── 授权推导的**输入**：产出 scope.json（设计 §4.5 D0–D6；消费方 = dsh 引擎 / P3 兜底插件）──
+#   为什么在这里产出：迭代入口天然知道"本次任务仓库是哪个"，而权限层不知道（这是越权写的根因之一）。
+#   ⚠️ 关键判定：**是否 git 仓库** —— 非 git 仓库（如 ~/repos/leyan 根）**不派生** worktree 同级目录，
+#      否则会把兄弟目录（repos/local 等）误算进作用域（用户 2026-10-15 明确）。
+write_scope() {   # write_scope <repo-or-worktree-path> [feature] [session]
+  local target="$1" feature="${2:-}" session="${3:-}"
+  [ -n "$target" ] || die "write_scope 需要路径"
+  [ -d "$target" ] || die "路径不存在：$target"
+  local abs; abs="$(cd "$target" && pwd)"
+
+  # 若给的是 worktree（<name>-worktree--<slug>）⇒ 归到主仓；否则按主仓处理
+  local base main="$abs" main_checkout=false active="$abs"
+  base="$(basename "$abs")"
+  if case "$base" in *-worktree--*) true ;; *) false ;; esac; then
+    local parent; parent="$(dirname "$abs")"
+    local m="$parent/${base%%-worktree--*}"
+    if [ -d "$m" ]; then main="$m"; fi
+  else
+    [ -d "$abs/.git" ] && main_checkout=true     # 主 checkout：.git 是目录（worktree 的 .git 是文件）
+    [ -f "$abs/.git" ] && main_checkout=false
+  fi
+
+  local git_repo=false
+  git -C "$main" rev-parse --git-dir >/dev/null 2>&1 && git_repo=true
+
+  # ⚠️ 2026-10-16 修：此前写**单份** `tasks/scope.json` ⇒ 多会话并发互相覆盖（实测：后 create 的会话
+  #    把前一个的 active 覆盖掉 ⇒ 权限层会用**别人的作用域**判定越权）。改为**按 worktree 分文件**：
+  #    `<数据根>/tasks/scopes/<active 基名>.json`（worktree 目录名唯一 ⇒ 天然隔离；同一 worktree 内重复写=同一任务，覆盖正确）
+  local scopes_dir; scopes_dir="$(dia_wt_data_root)/tasks/scopes"
+  mkdir -p "$scopes_dir"
+  local out="$scopes_dir/$(basename "$active").json"
+  node - "$out" "$main" "$git_repo" "$main_checkout" "$active" "$feature" "$session" <<'JS'
+const [out, repo, gitRepo, mainCheckout, active, feature, session] = process.argv.slice(2);
+const path = require('node:path');
+const fs = require('node:fs');
+const parent = path.dirname(repo), name = path.basename(repo);
+const writable = [repo];
+let sibling = null;
+if (gitRepo === 'true') {
+  sibling = `${parent}/${name}-worktree--*`;
+  writable.push(sibling);
+}
+const pad = (n) => String(n).padStart(2, '0');
+const d = new Date();
+const since = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+const doc = {
+  task: feature || name, repo, active,
+  gitRepo: gitRepo === 'true', mainCheckout: mainCheckout === 'true',
+  writable, siblingWorktreeGlob: sibling, session: session || null, since,
+  producedBy: 'dia wt scope',
+};
+const tmp = out + '.tmp';
+fs.writeFileSync(tmp, JSON.stringify(doc, null, 1) + '\n');
+fs.renameSync(tmp, out);            // 原子替换
+console.log(JSON.stringify(doc, null, 1));
+JS
+}
+
+cmd_scope() {   # scope <repo-or-worktree> [--feature <slug>] [--session <id>] | scope --show
+  local target="" feature="" session="" show=false list=false
+  while [ $# -gt 0 ]; do case "$1" in
+    --feature) feature="${2:-}"; shift 2 ;;
+    --session) session="${2:-}"; shift 2 ;;
+    --show) show=true; shift ;;
+    --list) list=true; shift ;;
+    *) target="$1"; shift ;;
+  esac; done
+  local scopes; scopes="$(dia_wt_data_root)/tasks/scopes"
+  if [ "$list" = true ]; then
+    ls -1 "$scopes"/*.json 2>/dev/null | while read -r f; do
+      printf '%s\n' "$(basename "$f")"
+    done
+    [ -d "$scopes" ] && [ -n "$(ls -1 "$scopes"/*.json 2>/dev/null)" ] || warn "尚无作用域（先跑：dia wt scope <repo>）"
+    return 0
+  fi
+  if [ "$show" = true ] || [ -z "$target" ]; then
+    # 按 **cwd** 选用：优先匹配 active 前缀最长者；否则回退"当前目录所属 worktree"的 scope 文件
+    local cur; cur="$(pwd)"
+    local best="" best_len=0 f active
+    for f in "$scopes"/*.json; do
+      [ -f "$f" ] || continue
+      active="$(node -e 'try{console.log(require(require("node:path").resolve(process.argv[1])).active||"")}catch{}' "$f" 2>/dev/null)"
+      case "$cur" in "$active"|"$active"/*) [ ${#active} -gt "$best_len" ] && { best="$f"; best_len=${#active}; } ;; esac
+    done
+    [ -n "$best" ] && { cat "$best"; return 0; }
+    [ -f "$(dia_wt_data_root)/tasks/scope.json" ] && { warn "（回退兼容：旧的单份 scope.json）"; cat "$(dia_wt_data_root)/tasks/scope.json"; return 0; }
+    warn "当前目录无适用作用域（先跑：dia wt scope <repo>）"; return 1
+  fi
+  write_scope "$target" "$feature" "$session" >/dev/null
+  local written
+  written="$(ls -1t "$scopes"/*.json 2>/dev/null | head -1)"
+  say "✅ 已写作用域声明：$written"
+  node - "$written" <<'JS'
+const d = JSON.parse(require('node:fs').readFileSync(process.argv[2], 'utf8'));
+console.log(`   repo=${d.repo}｜ gitRepo=${d.gitRepo}｜ writable=` + (d.writable || []).join(', '));
+JS
+}
+
+wt_path() {
+  local repo="$1" feature="$2" form="$3"
+  local parent; parent="$(cd "$(dirname "$repo")" && pwd)"
+  local base;   base="$(basename "$repo")"
+  if [ "$form" = hidden ]; then printf '%s/.worktrees/%s' "$repo" "$feature"
+  else printf '%s/%s-worktree--%s' "$parent" "$base" "$feature"; fi
+}
+
+# ── create ─────────────────────────────────────────────────────────────────────
+cmd_create() {
+  local repo="${1:-}" feature="${2:-}"; shift 2 2>/dev/null || true
+  [ -n "$repo" ] && [ -n "$feature" ] || die "用法：create <repo-path> <feature> [--base <ref>] [--dry-run]"
+  local base="origin/main" dry=0 install=0
+  while [ $# -gt 0 ]; do case "$1" in
+    --base) base="$2"; shift 2 ;;
+    --dry-run) dry=1; shift ;;
+    --install) install=1; shift ;;
+    *) shift ;;
+  esac; done
+
+  repo="$(cd "$repo" 2>/dev/null && pwd)" || die "仓库不存在：$repo"
+  [ -d "${repo}/.git" ] || die "不是 git 仓库：$repo"
+
+  local form; form="$(pick_form "$repo")"
+  local dest; dest="$(wt_path "$repo" "$feature" "$form")"
+  local branch="feat/${feature}"
+
+  say "仓库  : $repo"
+  say "形式  : ${form}（$(form_reason "$repo")）"
+  say "目标  : $dest"
+  say "分支  : ${branch}（基于 ${base}）"
+
+  if [ -e "$dest" ]; then
+    warn "目标已存在：$dest"
+    warn "  → 复用请直接 cd；重建请先 dia wt clean '$repo' '$feature'"
+    return 1
+  fi
+  if [ "$dry" = 1 ]; then say "（dry-run）未创建"; return 0; fi
+
+  git -C "$repo" fetch origin --prune >/dev/null 2>&1 || warn "fetch 失败（继续，用本地 ${base}）"
+  if ! git -C "$repo" rev-parse --verify "$base" >/dev/null 2>&1; then
+    warn "$base 不存在，回退 origin/master"; base="origin/master"
+  fi
+
+  if [ "$form" = hidden ]; then
+    if ! grep -qE '^/?\.worktrees/?$' "${repo}/.gitignore" 2>/dev/null; then
+      say "  补 .gitignore：.worktrees/"
+      printf '\n# worktree 隐藏目录（dia wt）\n.worktrees/\n' >> "${repo}/.gitignore"
+    fi
+    mkdir -p "${repo}/.worktrees"
+  fi
+
+  git -C "$repo" worktree add "$dest" -b "$branch" "$base" || die "worktree 创建失败"
+  say "✅ 已创建：$dest"
+  local gd cd_
+  gd="$(git -C "$dest" rev-parse --git-dir 2>/dev/null)"
+  cd_="$(git -C "$dest" rev-parse --git-common-dir 2>/dev/null)"
+  if [ "$gd" = "$cd_" ]; then
+    warn "⚠️ 隔离校验异常：git-dir == common-dir（${gd}）"
+  else
+    say "隔离校验 ✓（git-dir ≠ common-dir）"
+  fi
+  # 迭代入口自动产出作用域声明（供权限层消费；失败不影响 create）
+  write_scope "$dest" "$feature" "${DIA_SESSION:-}" >/dev/null 2>&1 && say "作用域声明已写：$(basename "$(dia_wt_data_root)")/tasks/scope.json"
+
+  # ── 依赖：真装，**不许软链**（R20；2026-10-15 加机械提示 + 可选 --install）──
+  # 为什么在创建时就提示：软链省下的 13~34s，换来的是对方 checkout 被 pnpm 改写
+  #   （10-10 实证 99/100 条）+ 删 worktree 后对方整片悬空（09-30 实证 198 条）。
+  #   把「真装」变成创建流程里的默认下一步，而不是靠记性。
+  if [ -f "$dest/package.json" ]; then
+    local dep_cmd=""
+    if [ -f "$dest/pnpm-lock.yaml" ];      then dep_cmd="pnpm install --frozen-lockfile --prefer-offline"
+    elif [ -f "$dest/package-lock.json" ]; then dep_cmd="npm ci"
+    else                                        dep_cmd="pnpm install"; fi
+    if [ -L "$dest/node_modules" ]; then
+      warn "依赖     : ⚠️ node_modules 是软链（异常）→ rm -f '$dest/node_modules' 后真装"
+    elif [ -d "$dest/node_modules" ]; then
+      say "依赖     : node_modules 已存在（真目录）✓"
+    elif [ "$install" = 1 ]; then
+      say "真装依赖 : $dep_cmd"
+      ( cd "$dest" && eval "$dep_cmd" ) && say "✅ 依赖就绪" \
+        || warn "依赖安装失败（重跑：cd '$dest' && ${dep_cmd}）"
+    else
+      say "依赖     : 尚未安装 —— 真装：cd '$dest' && $dep_cmd"
+      say "           （R20：**禁止**软链其他 checkout 的 node_modules；要提速请用 pnpm 官方"
+      say "             global virtual store，见 knowledge/workflows/worktree-forms.md §3）"
+    fi
+    [ -L "$repo/node_modules" ] && \
+      warn "主仓 node_modules 是软链 → bash '$SELF' check '$repo' 确认是否需要真装重建"
+  fi
+  say "下一步：cd '$dest' 开发；收尾 dia wt clean '$repo' '$feature'（R25）"
+}
+
+cmd_form() {
+  local repo="${1:-}"; [ -n "$repo" ] || die "用法：form <repo-path>"
+  repo="$(cd "$repo" 2>/dev/null && pwd)" || die "仓库不存在：$repo"
+  echo "  仓库: $repo"
+  echo "  形式: $(pick_form "$repo")"
+  echo "  理由: $(form_reason "$repo")"
+}
+
+# ── status：跨 worktree 可见性（T4，INV-8）──────────────────────────────────────
+# 为什么需要（2026-10-13 实测，设计 §1.4）：
+#   `main..HEAD = 0` 且 `git status` 相对 HEAD 干净 —— **两个常规信号都指向"可安全清理"**，
+#   但 worktree 可能持有**唯一工作副本**（未提交改动）。`git worktree remove` 会连它一起删。
+#   ⇒ 需要「这个 worktree 能不能清」的**统一判据**。
+#
+# 判据（设计 D6，任一不满足即不可直接清理）：
+#   ① 未并入默认分支：`<def>..HEAD` > 0   → 有未合并提交
+#   ② 未推送：`origin/<branch>..HEAD` > 0 → 提交只在本地
+#   ③ 未提交改动 ≠ 空                     → **唯一工作副本**
+#
+# ⚠️ **本命令只读**：不写、不删、不切分支（R21 精神）。
+status_of() {   # 输出该 worktree 的判定行；置全局 ST_UNSAFE=1 表示不可直接清理
+  local p="$1" def="$2"
+  local br ahead unpushed dirty_files dirty_n uniq="—"
+  ST_UNSAFE=0; ST_FILES=""
+  br="$(git -C "$p" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
+  [ "$br" = "HEAD" ] && br="detached"                # E15：detached 明确标注
+  ahead="$(git -C "$p" rev-list --count "$def..HEAD" 2>/dev/null || echo 0)"
+  if [ "$br" = "detached" ]; then unpushed="?"
+  else unpushed="$(git -C "$p" rev-list --count "origin/$br..HEAD" 2>/dev/null || echo 0)"; fi
+  dirty_files="$(git -C "$p" status --porcelain 2>/dev/null | sed 's/^...//')"
+  dirty_n="$(printf '%s' "$dirty_files" | grep -c . 2>/dev/null)"; [ -n "$dirty_n" ] || dirty_n=0
+  # 顺序：未提交 > 未推送 > 未并入（按"先抢救什么"的紧迫度）
+  if [ "$dirty_n" -gt 0 ]; then uniq="⚠️ 是（未提交）"; ST_UNSAFE=1; ST_FILES="$dirty_files"
+  elif [ "$unpushed" != "0" ] && [ "$unpushed" != "?" ]; then uniq="⚠️ 是（未推送）"; ST_UNSAFE=1
+  elif [ "$ahead" != "0" ]; then uniq="⚠️ 是（未并入）"; ST_UNSAFE=1
+  fi
+  printf '  %-50s %-20s %6s %8s  %s\n' "${p/#$HOME/~}" "$br" "$ahead" "${dirty_n}文件" "$uniq"
+}
+
+cmd_status() {
+  local repo="${1:-.}"
+  repo="$(cd "$repo" 2>/dev/null && pwd)" || die "仓库不存在：$repo"
+  [ -d "${repo}/.git" ] || die "不是 git 仓库：$repo"
+  local def; def="$(git -C "$repo" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+  def="${def#origin/}"; [ -n "$def" ] || def="main"
+
+  echo "══ dia wt status（仓库: $repo · 默认分支: ${def}）══"
+  printf '  %-50s %-20s %6s %8s  %s\n' "WORKTREE" "分支" "未并入" "改动" "唯一工作副本"
+  printf '  %s\n' "──────────────────────────────────────────────────────────────────────────────────"
+
+  local total=0 unsafe=0 dirty_map=""
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    [ -d "$p" ] || continue
+    total=$((total+1))
+    status_of "$p" "$def"
+    if [ "$ST_UNSAFE" = 1 ]; then
+      unsafe=$((unsafe+1))
+      [ -n "$ST_FILES" ] && printf '%s\n' "$ST_FILES" | sed 's/^/        · /'
+      [ -n "$ST_FILES" ] && dirty_map="${dirty_map}${p}"$'\t'"$(printf '%s' "$ST_FILES" | tr '\n' ',')"$'\n'
+    fi
+  done < <(git -C "$repo" worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p')
+
+  # 重叠检测（设计 D6）：**同一仓内**两个以上 worktree 改同一**仓内相对路径**。
+  # 不跨仓比较 —— 不同仓的同名相对路径属巧合，报出来是噪音。
+  local overlaps
+  overlaps="$(printf '%s' "$dirty_map" | awk -F'\t' '
+    NF<2 {next}
+    { n=split($2, a, ","); for (i=1;i<=n;i++) if (a[i]!="") { cnt[a[i]]++; if (who[a[i]]=="") who[a[i]]=1; else who[a[i]]++ } }
+    END { for (f in cnt) if (cnt[f]>1) printf "        · %s（%d 个 worktree 同时改）\n", f, cnt[f] }
+  ' | sort)"
+  if [ -n "$overlaps" ]; then
+    echo "  ⚠️ **改动重叠**（同一文件被多个 worktree 同时修改 → 合并必冲突）："
+    printf '%s\n' "$overlaps"
+  fi
+
+  echo "  ── $total 个 worktree · $unsafe 个**不可直接清理** ──"
+  [ "$unsafe" = 0 ] || echo "  （抢救：cd <worktree> && git add -A && git commit -m '…'，或 push 分支后再 clean）"
+  return 0
+}
+
+cmd_list() {
+  local repo="${1:-.}"
+  repo="$(cd "$repo" 2>/dev/null && pwd)" || die "仓库不存在：$repo"
+  echo "  仓库: $repo"
+  git -C "$repo" worktree list | while read -r p rest; do
+    local mark="平级"
+    case "$p" in */.worktrees/*) mark="隐藏";; esac
+    printf '  [%s] %s %s\n' "$mark" "$p" "$rest"
+  done
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# prune-merged —— 扫出「已并入 main 的本地分支」并（可选）清理（R25 的定期闸口）
+#
+# 为什么需要（2026-10-19，用户拍板）：
+#   R25 要求「合并后当场清理分支」，但**没有兜底** —— `clean` 只在有人手动调用时执行。
+#   实证：2026-10-19 一次清出 **16 个**已并入 main 的历史分支（最早 09-30，最晚 10-16），
+#   其中 `fix/dws-hub-*` 是并行会话留下的、挂了 3 天没人管。
+#   ⇒ 与 `check`（node_modules 软链）同理：**「写进规则」不够，要有定期扫描的机械闸口**。
+#
+# 安全性（这是**破坏性**操作，比 check 严格）：
+#   · 只删 **已并入 `--base`（默认 origin/main）** 的分支（`git branch -d` 语义，不是 `-D`）；
+#   · **跳过**：当前分支、被任何 worktree checkout 的分支、`--protect` 名单（默认 main/master/develop/dev）；
+#   · 默认 **dry-run**（只列不删）；真删要显式 `--apply`；
+#   · 删前逐个打印「分支名 + 最后提交日期 + 标题」，可回溯。
+#
+# 用法：prune-merged [<repo>] [--all] [--apply] [--base <ref>] [--protect a,b] [--quiet]
+#   --all  扫已知仓根（数据根 repos/、$DIA_WT_REPOS_ROOT 默认 ~/repos/leyan）下的主 checkout
+# 退出码：0 = 无待清理 / 已全部清理；1 = 仍有残留（dry-run 发现待清理时也是 1）
+# ═══════════════════════════════════════════════════════════════════════════
+cmd_prune_merged() {
+  local repo="" apply=0 base="origin/main" quiet=0 all=0
+  local protect_csv="main,master,develop,dev"
+  while [ $# -gt 0 ]; do case "$1" in
+    --apply)   apply=1; shift ;;
+    --all)     all=1; shift ;;
+    --base)    base="$2"; shift 2 ;;
+    --protect) protect_csv="$2"; shift 2 ;;
+    --quiet)   quiet=1; shift ;;
+    -*)        die "未知参数：$1（支持 --all / --apply / --base <ref> / --protect a,b / --quiet）" ;;
+    *)         repo="$1"; shift ;;
+  esac; done
+
+  # 仓库集合：--all 复用与 `check --all` 相同的发现逻辑（含跳过 worktree 目录）
+  local -a repos=()
+  if [ "$all" = 1 ]; then
+    local dr rr
+    dr="$(dia_wt_data_root 2>/dev/null || true)"
+    rr="${DIA_WT_REPOS_ROOT:-$HOME/repos/leyan}"
+    local -a roots=()
+    [ -n "$dr" ] && [ -d "$dr/repos" ] && roots+=("$dr/repos")
+    [ -d "$rr" ] && roots+=("$rr")
+    [ ${#roots[@]} -gt 0 ] || die "--all：未找到仓根（数据根 repos/ 与 ${rr}）"
+    local root sub
+    for root in "${roots[@]}"; do
+      for sub in "$root"/*; do
+        [ -d "$sub" ] || continue
+        case "$(basename "$sub")" in *-worktree--*) continue ;; esac
+        [ -d "$sub/.git" ] && repos+=("$sub")
+      done
+    done
+  else
+    repos=("${repo:-.}")
+  fi
+
+  local total=0 rc_all=0
+  local r
+  for r in "${repos[@]}"; do
+    prune_one "$r" "$apply" "$base" "$protect_csv" "$quiet" "$all" || rc_all=1
+    total=$((total + 1))
+  done
+  return "$rc_all"
+}
+
+# 单仓处理（被 cmd_prune_merged 调用；返回 0=干净/已清完，1=仍有残留）
+prune_one() {
+  local repo="$1" apply="$2" base="$3" protect_csv="$4" quiet="$5" all="$6"
+  repo="$(cd "$repo" 2>/dev/null && pwd)" || { warn "跳过（非目录）：$repo"; return 0; }
+
+  if ! git -C "$repo" rev-parse --verify --quiet "$base" >/dev/null; then
+    # ⚠️ 两种语境语义不同：
+    #    · 单仓（显式指定）→ **报错**（用户以为能扫，实际基线没 fetch ⇒ 静默空转最坏）
+    #    · --all（批量巡检）→ **跳过**（很多仓没配 origin/main，不能因此中断整轮）
+    if [ "$all" = 1 ]; then
+      [ "$quiet" = 1 ] || warn "跳过（无基线 ${base}，先 git fetch origin）：$repo"
+      return 0
+    fi
+    warn "基线不存在：${base}（先 git fetch origin）—— $repo"
+    return 1
+  fi
+
+  # 受保护集合：名单 + 当前分支 + 所有 worktree checkout 的分支
+  local -A prot=()
+  local IFS=','
+  for b in $protect_csv; do [ -n "$b" ] && prot["$b"]=1; done
+  unset IFS
+  local cur; cur="$(git -C "$repo" branch --show-current 2>/dev/null)"
+  [ -n "$cur" ] && prot["$cur"]=1
+  while IFS= read -r wtpath; do
+    local wb; wb="$(git -C "$wtpath" branch --show-current 2>/dev/null)"
+    [ -n "$wb" ] && prot["$wb"]=1
+  done < <(git -C "$repo" worktree list --porcelain | sed -n 's/^worktree //p')
+
+  # 候选：已并入 base 的本地分支，去掉受保护项
+  local -a todo=()
+  while IFS= read -r b; do
+    [ -n "$b" ] || continue
+    [ -n "${prot[$b]:-}" ] && continue
+    todo+=("$b")
+  done < <(git -C "$repo" branch --merged "$base" --format='%(refname:short)')
+
+  if [ "${#todo[@]}" -eq 0 ]; then
+    [ "$quiet" = 1 ] || say "✅ 无已合并的残留分支（基线 ${base}）"
+    return 0
+  fi
+
+  [ "$quiet" = 1 ] || say "仓库：${repo}（基线 ${base}）—— 已并入但未清理的分支 ${#todo[@]} 个："
+  local b
+  for b in "${todo[@]}"; do
+    if [ "$quiet" = 1 ]; then
+      printf '%s\n' "$b"
+    else
+      local when subj
+      when="$(git -C "$repo" log -1 --format='%ad' --date=short "$b" 2>/dev/null)"
+      subj="$(git -C "$repo" log -1 --format='%s' "$b" 2>/dev/null | cut -c1-60)"
+      printf '  · %-46s %s  %s\n' "$b" "$when" "$subj"
+    fi
+  done
+
+  if [ "$apply" != 1 ]; then
+    [ "$quiet" = 1 ] || {
+      printf '\n'
+      warn "以上为 **dry-run**（未删除）。确认后执行："
+      warn "  bash '$SELF' prune-merged '$repo' --apply"
+    }
+    return 1
+  fi
+
+  local deleted=0 failed=0
+  for b in "${todo[@]}"; do
+    # ⚠️⚠️ **必须先临时 unset upstream，否则 `-d` 会误拒**（2026-10-19 查清根因）：
+    #    `git branch -d` 的判据是「**已并入 upstream（若配置了）**」，不是「已并入 HEAD/main」。
+    #    当分支配置了 `branch.<b>.remote/merge`（`push -u` 常见），而远端那份**落后于本地**
+    #    （推送后又提交、或 MR 合并后远端未同步）⇒ git 报：
+    #      「not deleting branch 'x' that is not yet merged to 'refs/remotes/origin/x',
+    #        even though it is merged to HEAD」⇒ **拒绝删除**。
+    #    实证（example-repo 2026-10-19）：`fix/format-superbook-cli` 的 4 个提交**全部在 origin/main 上**，
+    #    仍被 `-d` 拒绝 —— 正是这个原因（当时误判为「squash 合并」）。
+    #    修法：本函数**已独立判定过「已并入 ${base}」**（候选集就是 `branch --merged $base`），
+    #    故可安全地临时清掉 upstream 让 `-d` 退回 HEAD 判据；判完**原样恢复**（不改用户配置）。
+    #    ⚠️ 不用 `-D`：`-d` 在 upstream 清空后仍会拒绝「未并入 HEAD」的分支 —— 安全网保留。
+    local _bk_remote _bk_merge _had_up=0
+    _bk_remote="$(git -C "$repo" config --get "branch.$b.remote" 2>/dev/null || true)"
+    _bk_merge="$(git -C "$repo" config --get "branch.$b.merge" 2>/dev/null || true)"
+    if [ -n "$_bk_remote" ] || [ -n "$_bk_merge" ]; then
+      _had_up=1
+      git -C "$repo" config --unset "branch.$b.remote" 2>/dev/null || true
+      git -C "$repo" config --unset "branch.$b.merge" 2>/dev/null || true
+    fi
+
+    if git -C "$repo" branch -d "$b" >/dev/null 2>&1; then
+      deleted=$((deleted + 1))
+      [ "$quiet" = 1 ] || say "✅ 已删 $b"
+    else
+      failed=$((failed + 1))
+      # 恢复 upstream 配置（删失败时用户可能还要用这个分支）
+      if [ "$_had_up" = 1 ]; then
+        [ -n "$_bk_remote" ] && git -C "$repo" config "branch.$b.remote" "$_bk_remote" 2>/dev/null || true
+        [ -n "$_bk_merge" ] && git -C "$repo" config "branch.$b.merge" "$_bk_merge" 2>/dev/null || true
+      fi
+      warn "⚠️ 未能删除 ${b}（已并入 $base 但 git 仍拒绝 ⇒ 可能 worktree 占用或分支正被 checkout）"
+      warn "   人工确认后可强删：git -C '$repo' branch -D $b"
+    fi
+  done
+  [ "$quiet" = 1 ] || say "完成：删除 $deleted 个，未删 $failed 个"
+  [ "$failed" -eq 0 ] && return 0 || return 1
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# check —— node_modules 软链体检（R20 的**机械闸口**）
+#
+# 为什么需要（2026-09-30 起四犯，2026-10-15 用户拍板落地）：
+#   R20 明令「worktree 内一律真装依赖、禁止软链其他 checkout 的 node_modules」，
+#   但违规反复发生（09-30 主仓 198 条悬空 / 10-10 一天两次被改写 99+100 条 /
+#   10-12 侥幸未损坏 / 10-15 在软链 worktree 里跑 `pnpm nx` 触发整仓重装）——
+#   **「强化文字」已被证明无效** ⇒ 把判据做成命令（同 `route` / `status` 的思路）。
+#
+# 判据（4 类 + 1 条白名单；**必须与 pnpm 官方共享方案对齐**，否则一启用就全体误报）：
+#   A 顶层 `node_modules` 本身是软链   —— 跨 checkout 共享的典型形态（最危险：pnpm 会 realpath 改写对方）
+#   B 顶层链解析后**逃出本 checkout**   —— 指向别的 checkout（被改写后的现场）
+#   C 顶层链**悬空**（指向已删路径）     —— 对方被清理后的现场
+#   D 深层链逃逸（仅 `--deep`）          —— `node_modules/**` 内部的链
+#   ✅ 白名单：pnpm **global virtual store** 的共享链（`virtualStoreType: global` ⇒ 顶层链指向
+#      `<storeDir>/links/@/…`）。⚠️ 官方共享方案与"软链别人的 checkout"**是两回事**：
+#      前者指向共享 store（删 worktree 不连累他人，实测删后对方链仍可解析），后者指向短命 checkout。
+#      判据不区分 → 一旦启用 GVS 全仓误报；判据不查 → 违规静默破坏。
+#
+# 用法：check [<repo>...] [--all] [--deep] [--quiet]
+#   --all    扫已知仓根（`$YAN_DATA_ROOT/repos`、`$DIA_WT_REPOS_ROOT`（默认 `~/repos/leyan`））下的主 checkout
+#            （跳过 `*-worktree--*`：它们的 worktree 由主仓 `worktree list` 覆盖）+ 仓根杂散 node_modules 检测
+#   --deep   递归扫 node_modules 全树（默认只扫顶层；大仓全树需数秒）
+#   --quiet  只输出有问题的 checkout
+# 退出码：0 干净；1 有违规；2 用法错误
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ── 合法外部目标前缀（GVS 共享链）：<checkout> → 每行一个 ──────────────────────
+nm_allow_prefixes() {
+  local p="$1" nm="$p/node_modules" sd="" vsd=""
+  if [ -f "$nm/.modules.yaml" ]; then
+    local pair; pair="$(node - "$nm/.modules.yaml" <<'JS' 2>/dev/null
+const fs = require('node:fs');
+let txt = '';
+try { txt = fs.readFileSync(process.argv[2], 'utf8'); } catch { console.log('- -'); process.exit(0); }
+const get = (key) => {
+  const m = new RegExp('"' + key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '"\\s*:\\s*"([^"]*)"').exec(txt);
+  return m ? m[1] : '';
+};
+console.log((get('storeDir') || '-') + ' ' + (get('virtualStoreDir') || '-'));
+JS
+)"
+    read -r sd vsd <<<"$pair"
+  fi
+  [ "$sd" = "-" ] && sd=""
+  [ "$vsd" = "-" ] && vsd=""
+  [ -n "$sd" ] || sd="$(pnpm store path 2>/dev/null | head -1 || true)"
+  [ -n "$sd" ] && [ -d "$sd/links" ] && printf '%s\n' "$sd/links"
+  # virtualStoreDir 若被显式设成绝对路径（GVS 自定义位置）也算合法外部目标
+  case "$vsd" in /*) [ -d "$vsd" ] && printf '%s\n' "$vsd" ;; esac
+  return 0
+}
+
+# ── 解析 python 体检输出 ──────────────────────────────────────────────────────
+chk_cnt()   { awk -F'\t' -v k="$2" '$1=="COUNT" && $2==k {print $3}' <<<"$1" | head -1; }
+chk_top()   { awk -F'\t' '$1=="TOP" {print $2}' <<<"$1" | head -1; }
+chk_items() { awk -F'\t' -v k="$2" '$1=="ITEM" && $2==k {print $3"\t"$4}' <<<"$1"; }
+
+# ── 单个 checkout 扫描：<checkout> <deep> <is-main 0|1> → 置 CHK_VIOL / CHK_BLOCK ──
+scan_checkout() {
+  local p="$1" deep="$2" is_main="$3"
+  local nm="$p/node_modules"
+  local _ln=""
+  CHK_VIOL=0; CHK_BLOCK=""
+  { [ -d "$nm" ] || [ -L "$nm" ]; } || return 0
+  local allow=() l
+  while IFS= read -r l; do [ -n "$l" ] && allow+=("$l"); done < <(nm_allow_prefixes "$p")
+
+  local raw; raw="$(node - "$p" "$deep" ${allow[@]+"${allow[@]}"} 2>/dev/null <<'JS'
+const fs = require('node:fs');
+const path = require('node:path');
+const [target, deepFlag, ...allowRaw] = process.argv.slice(2);
+const deep = deepFlag === '1';
+const allow = allowRaw.filter(Boolean).map((a) => fs.realpathSync(a));
+const troot = fs.realpathSync(target);
+const nm = path.join(target, 'node_modules');
+const under = (p, root) => p === root || p.startsWith(root + path.sep);
+
+function classify(link) {
+  let tgt;
+  try { tgt = fs.readlinkSync(link); } catch { return null; }
+  const abs = path.isAbsolute(tgt) ? tgt : path.normalize(path.join(path.dirname(link), tgt));
+  if (!fs.existsSync(abs)) return ['C', abs];
+  const rp = fs.realpathSync(abs);
+  if (under(rp, troot) || allow.some((a) => under(rp, a))) return null;
+  return ['B', rp];
+}
+
+const res = { A: [], B: [], C: [], D: [] };
+let topLinks = 0, capped = false;
+let st = null;
+try { st = fs.lstatSync(nm); } catch { st = null; }
+if (st && st.isSymbolicLink()) {
+  res.A.push(['node_modules', fs.realpathSync(nm)]);
+} else if (st && st.isDirectory()) {
+  for (const name of fs.readdirSync(nm).sort()) {
+    const p = path.join(nm, name);
+    let ls; try { ls = fs.lstatSync(p); } catch { continue; }
+    if (ls.isSymbolicLink()) {
+      topLinks++;
+      const c = classify(p);
+      if (c) res[c[0]].push([name, c[1]]);
+    }
+  }
+  if (deep) {
+    let seen = 0;
+    const walk = (dir) => {
+      let entries; try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+      for (const e of entries) {
+        const p = path.join(dir, e.name);
+        seen++;
+        if (seen > 400000) { capped = true; return; }
+        let ls; try { ls = fs.lstatSync(p); } catch { continue; }
+        if (ls.isSymbolicLink()) {
+          const c = classify(p);
+          if (c) res.D.push([path.relative(target, p), c[1]]);
+        } else if (ls.isDirectory()) {
+          walk(p);
+          if (capped) return;
+        }
+      }
+    };
+    walk(nm);
+    console.log('DEEP\t' + seen);
+  }
+}
+console.log('TOP\t' + topLinks);
+for (const k of ['A', 'B', 'C', 'D']) console.log(`COUNT\t${k}\t${res[k].length}`);
+for (const k of ['A', 'B', 'C', 'D']) for (const [name, tgt] of res[k].slice(0, 5)) console.log(`ITEM\t${k}\t${name}\t${tgt}`);
+console.log(capped ? 'CAPPED\t1' : 'CAPPED\t0');
+JS
+)"
+  local A B C D tot
+  A="$(chk_cnt "$raw" A)"; B="$(chk_cnt "$raw" B)"; C="$(chk_cnt "$raw" C)"; D="$(chk_cnt "$raw" D)"
+  [ -n "$A" ] || A=0; [ -n "$B" ] || B=0; [ -n "$C" ] || C=0; [ -n "$D" ] || D=0
+  tot=$((A + B + C + D)); CHK_VIOL=$tot
+
+  local label="$p" mark=""
+  [ "$is_main" = 1 ] && { mark=" · 主仓"; }
+  if [ "$tot" = 0 ]; then
+    # ⚠️ 用 `printf -v` 而不是 `$(printf …)`：命令替换会**吃掉结尾换行** ⇒ 多个 checkout
+    #    的输出会挤成一行（2026-10-15 实测）。
+    printf -v CHK_BLOCK '  \033[32m✓\033[0m %s%s 0 违规（顶层链 %s 条）\n' "${p/#$HOME/~}" "$mark" "$(chk_top "$raw")"
+    return 0
+  fi
+
+  printf -v CHK_BLOCK '  \033[31m✗\033[0m %s%s 违规 %s\n' "${p/#$HOME/~}" "$mark" "$tot"
+  if [ "$A" != 0 ]; then
+    printf -v _ln '      A 顶层 node_modules 是软链 → %s\n' "$(chk_items "$raw" A | head -1 | cut -f2)"
+    CHK_BLOCK+="$_ln"
+    CHK_BLOCK+="        （跨 checkout 共享：pnpm 会按 realpath 把对方的链改写指向本 worktree）"$'\n'
+  fi
+  local k n
+  for k in B C D; do
+    eval "n=\$$k"
+    [ "$n" = 0 ] && continue
+    case "$k" in
+      B) printf -v _ln '      B 顶层链指向其他 checkout（%s 条，示例）：\n' "$n" ;;
+      C) printf -v _ln '      C 顶层链悬空（%s 条，示例）：\n' "$n" ;;
+      D) printf -v _ln '      D 深层链逃逸（%s 条，示例）：\n' "$n" ;;
+    esac
+    CHK_BLOCK+="$_ln"
+    while IFS=$'\t' read -r rel tgt; do
+      [ -n "$rel" ] || continue
+      printf -v _ln '        · %s → %s\n' "$rel" "$tgt"
+      CHK_BLOCK+="$_ln"
+    done < <(chk_items "$raw" "$k" | head -3)
+  done
+  [ "$(awk -F'\t' '$1=="CAPPED" {print $2}' <<<"$raw")" = 1 ] && \
+    CHK_BLOCK+="      （深层扫描在 40 万条目处截断）"$'\n'
+  return 0
+}
+
+cmd_check() {
+  local repos=() all=0 deep=0 quiet=0 roots=()
+  while [ $# -gt 0 ]; do case "$1" in
+    --all)   all=1; shift ;;
+    --deep)  deep=1; shift ;;
+    --quiet|-q) quiet=1; shift ;;
+    -h|--help)
+      printf '用法：check [<repo>...] [--all] [--deep] [--quiet]\n'
+      return 0 ;;
+    -*) die "未知参数：$1（用法：check [<repo>...] [--all] [--deep] [--quiet]）" ;;
+    *)  repos+=("$1"); shift ;;
+  esac; done
+
+  if [ "$all" = 1 ]; then
+    local dr rr
+    dr="$(dia_wt_data_root 2>/dev/null || true)"
+    rr="${DIA_WT_REPOS_ROOT:-$HOME/repos/leyan}"
+    [ -n "$dr" ] && [ -d "$dr/repos" ] && roots+=("$dr/repos")
+    [ -d "$rr" ] && roots+=("$rr")
+    [ ${#roots[@]} -gt 0 ] || die "--all：未找到仓根（数据根 repos/ 与 ${rr}）"
+    local root sub
+    for root in "${roots[@]}"; do
+      for sub in "$root"/*; do
+        [ -d "$sub" ] || continue
+        case "$(basename "$sub")" in *-worktree--*) continue ;; esac   # worktree 由其主仓覆盖
+        repos+=("$sub")
+      done
+    done
+  fi
+  [ ${#repos[@]} -gt 0 ] || repos=("$PWD")
+
+  printf '══ dia wt check（node_modules 软链体检 · R20）══\n'
+  [ "$deep" = 1 ] && printf '  模式：--deep（递归扫 node_modules 全树）\n'
+  printf '  判据：A 顶层 node_modules 是软链 · B 顶层链逃出 checkout · C 悬空链 · D 深层链逃逸；\n'
+  printf '        白名单：pnpm global virtual store 的 <storeDir>/links（官方共享方案，不算违规）\n'
+
+  local R total=0 viol=0 bad=0 strays=0
+  for R in "${repos[@]}"; do
+    if [ ! -e "$R" ]; then warn "跳过（不存在）：$R"; continue; fi
+    R="$(cd "$R" 2>/dev/null && pwd)" || { warn "跳过（无法进入）：$R"; continue; }
+    local checkouts=() p buf="" vsum=0 vcheckouts=0
+    if [ -d "$R/.git" ] || [ -f "$R/.git" ]; then
+      while IFS= read -r p; do [ -d "$p" ] && checkouts+=("$p"); done \
+        < <(git -C "$R" worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p')
+    fi
+    [ ${#checkouts[@]} -gt 0 ] || checkouts=("$R")
+    for p in "${checkouts[@]}"; do
+      # ⚠️ 用 `pwd -P` 比较：`git worktree list` 给出的是**登记时**的路径，可能含符号链接
+      #    （实测 macOS `$TMPDIR` 下登记 `/var/…`，而 `cd` 后是 `/private/var/…`）⇒
+      #    直接字符串比较会把主仓误判成普通 worktree（丢「· 主仓」标记）。
+      local is_main=0
+      [ "$(cd "$p" 2>/dev/null && pwd -P)" = "$(cd "$R" 2>/dev/null && pwd -P)" ] && is_main=1
+      scan_checkout "$p" "$deep" "$is_main"
+      vsum=$((vsum + CHK_VIOL))
+      [ "$CHK_VIOL" != 0 ] && vcheckouts=$((vcheckouts + 1))
+      buf+="$CHK_BLOCK"
+    done
+    total=$((total + ${#checkouts[@]}))
+    if [ "$vsum" != 0 ]; then
+      viol=$((viol + vsum)); bad=$((bad + vcheckouts))
+      printf '\n── %s ──\n%s' "${R/#$HOME/~}" "$buf"
+    elif [ "$quiet" != 1 ]; then
+      printf '\n── %s ──\n%s' "${R/#$HOME/~}" "$buf"
+    fi
+  done
+
+  # ── 仓根杂散 node_modules（--all）：非 git 仓的目录里躺着 node_modules → 干扰解析 ──
+  local root
+  for root in "${roots[@]+"${roots[@]}"}"; do
+    [ -e "$root/node_modules" ] || continue
+    strays=$((strays + 1)); viol=$((viol + 1)); bad=$((bad + 1))
+    printf '\n  \033[31m✗\033[0m %s/node_modules 杂散（该目录不是仓库）\n' "${root/#$HOME/~}"
+    printf '      → 从该目录运行工具（vite/vitest/nx…）会把缓存/解析落到这里，且不属任何 checkout\n'
+    printf '      → 清理：rm -rf %s/node_modules（确认无项目在用；本机实证为跑错 cwd 的残留）\n' "${root/#$HOME/~}"
+  done
+
+  printf '\n── %s 个 checkout · 违规 %s 处 · 涉及 %s 个 checkout%s ──\n' \
+    "$total" "$viol" "$bad" "$([ "$strays" != 0 ] && printf '（含杂散 %s）' "$strays")"
+  if [ "$viol" = 0 ]; then
+    printf '  \033[32m全部干净 ✅\033[0m（A/B/C/D 四类判据均 0）\n'
+    return 0
+  fi
+  cat <<EOF
+  修复（对每个违规 checkout 执行；若主仓被改写，就在主仓执行）：
+      cd <checkout> && rm -f node_modules && pnpm install --frozen-lockfile --prefer-offline
+  说明：真装实测 13.8s~57.5s 即可全量重建（0 悬空）；成因/现场特征/前三犯实证见
+        core/knowledge/rules/worktree.md R20 与 workflows/worktree-forms.md §3
+EOF
+  return 1
+}
+
+cmd_clean() {
+  local repo="${1:-}" feature="${2:-}"
+  [ -n "$repo" ] && [ -n "$feature" ] || die "用法：clean <repo-path> <feature>"
+  repo="$(cd "$repo" 2>/dev/null && pwd)" || die "仓库不存在：$repo"
+  local candidates=(
+    "$(wt_path "$repo" "$feature" flat)"
+    "$(wt_path "$repo" "$feature" hidden)"
+  )
+  local target=""
+  for c in "${candidates[@]}"; do [ -d "$c" ] && { target="$c"; break; }; done
+  [ -n "$target" ] || die "未找到该 feature 的 worktree（试过：${candidates[*]}）"
+
+  # ── R20 守卫：软链 node_modules 的 worktree **不得直接清理** ────────────────
+  # 为什么拦：这种 worktree 借用了别的 checkout 的依赖，pnpm 早已可能**把对方的链
+  #   改写指向本 worktree**（2026-10-10 实证 99/100 条）——直接 remove 会把唯一的证据
+  #   （这条软链）连同现场一起删掉，事后无法判断主仓是否已被改写。
+  #   所以：先让 check 判定主仓健康度，再手动删链、再清理。
+  if [ -L "$target/node_modules" ]; then
+    warn "⛔ 拒绝清理：该 worktree 的 node_modules 是软链（违反 R20）："
+    warn "     $target/node_modules → $(readlink "$target/node_modules")"
+    warn "  ⚠️ 曾软链共享 ⇒ pnpm 很可能已把**对方 checkout** 的 node_modules 改写/重装"
+    warn "  → 先体检：bash '$SELF' check '$repo'      （0 违规才算安全）"
+    warn "  → 再清理：rm -f '$target/node_modules' && bash '$SELF' clean '$repo' '$feature'"
+    return 1
+  fi
+
+  local dirty; dirty="$(git -C "$target" status --porcelain 2>/dev/null)"
+  if [ -n "$dirty" ]; then
+    # T4（设计 E11）：拒绝行为**原本已有**，真实增量是**列出文件名 + 给抢救命令** ——
+    # 原来只说"有未提交改动"，用户不知道丢的是什么、也不知道怎么救。
+    warn "worktree 有未提交改动，拒绝清理：$target"
+    warn "  ⚠️ 这些改动是**唯一工作副本**（删掉即永久丢失）："
+    printf '%s\n' "$dirty" | sed 's/^/      /' >&2
+    warn "  → 抢救：cd \"$target\" && git add -A && git commit -m '…'"
+    warn "  → 或确认弃用后强删：git worktree remove --force \"$target\""
+    return 1
+  fi
+
+  # ── 分支名：**反查 worktree 的真实 HEAD**，不靠猜前缀（2026-10-19 修，P0 级静默缺陷）──
+  # ⚠️ 原实现写死 `br="feat/${feature}"` —— 而 `create` 接受**任意分支名**
+  #    （本会话实证：`review/head-gate-and-scope`、`review/cred-from-env`、`fix/wt-clean-branch`）。
+  #    名字对不上时 `rev-parse --verify` 失败 ⇒ **整个删分支分支被跳过**，且**不告警**，
+  #    最后照样打印「✅ 清理完成」+ 退出码 0 ⇒ **谎报**（R25 要求的「worktree + 分支」只做了一半）。
+  #    ⇒ 从 worktree 自身取分支名（对称：创建时叫什么，清理时就删什么）。
+  local br; br="$(git -C "$target" branch --show-current 2>/dev/null)"
+  if [ -z "$br" ]; then
+    # detached HEAD（无分支）→ 无可删；但必须**说清楚**，不静默
+    warn "worktree 处于 detached HEAD（无关联分支）→ 跳过删分支"
+    br=""
+  fi
+
+  say "清理：$target${br:+（分支 ${br}）}"
+  git -C "$repo" worktree remove "$target" || die "worktree remove 失败"
+
+  if [ -n "$br" ]; then
+    if ! git -C "$repo" rev-parse --verify --quiet "refs/heads/$br" >/dev/null; then
+      say "分支 $br 已不存在（可能已删）"
+    elif git -C "$repo" branch -d "$br" >/dev/null 2>&1; then
+      say "✅ 已删分支 ${br}（已合并）"
+    else
+      # ⚠️ **未合并 ⇒ 保留分支 + 非 0 退出**（2026-10-19）：
+      #    以前这里是 `warn` 后照样返回 0 ⇒ 调用方（agent）看到「✅ 清理完成」就以为收工了。
+      #    R25 的清理是「worktree + 分支」两件，只完成一半**不算成功**。
+      warn "⚠️ 分支 $br **未完全合并**，已保留（worktree 已删）"
+      warn "   如需强删：git branch -D $br"
+      warn "   若要保留（等 MR 合并后自动可删）→ 本次清理**未完成**，退出码 1"
+      return 1
+    fi
+  fi
+
+  # ── 收尾自检：worktree 必须真的没了（防「说完成但其实还在」）───────────────
+  if [ -d "$target" ]; then
+    warn "⚠️ worktree 目录仍存在：${target}（清理未生效）"
+    return 1
+  fi
+
+  # ── 远端分支提醒（R25 要求「本地 + 远端」都清）──────────────────────────────
+  # ⚠️ **不自动删**：`push origin --delete` 是破坏性且影响他人（若该分支已推给同事/正在评审）。
+  #    但**必须说出来** —— 否则又是「只做一半 + 说完成」（本函数刚修掉的那类缺陷）。
+  if [ -n "$br" ] && git -C "$repo" rev-parse --verify --quiet "refs/remotes/origin/$br" >/dev/null; then
+    warn "⚠️ 远端分支仍在：origin/$br"
+    warn "   如需清理：git -C '$repo' push origin --delete $br && git -C '$repo' fetch --prune"
+  fi
+
+  say "✅ 清理完成（worktree 已删${br:+，本地分支 $br 已删}）"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# route —— 【开工前必查】这次改动该走 MR 还是直推 main？（R1.7）
+#
+# 为什么需要（2026-10-12 复发教训）：R20 管「别污染 main checkout」（隔离）；R1.7 管「要不要评审」——
+#   **两件事独立**。agent 做对了 A（隔离），却错误推导出 B（要 MR）：在内部仓走 MR 全套打扰同事；
+#   随后写规范优化时**又直接污染 main 主 checkout**。⇒ 做成脚本，把「靠记性」升级为「运行一次」。
+#
+# 为什么改成**配置驱动**（2026-10-16 用户指正）：
+#   原先把仓名硬编码在本脚本里（`yan-agent|personal-agent` 内部仓、`example-repo|*-qa|…` 业务仓）⇒
+#   ① 「哪些仓是我的/业务仓」是**环境事实**，换个人就全错；② 它含「**我是谁**」成分 ——
+#      `fed/yan-agent` 对本人是自持（直推）、对同事是别人的仓（该 MR）⇒ **同一仓在不同人机器上结论不同**；
+#   ③ 每加一个仓都要改共享配方库 ⇒ 漂移源。⇒ **规则留在本脚本，数据只落本地**。
+#
+# 判定顺序（**每步都记录来源**、输出可审计；先否决后放行）：
+#   ① 本地配置 `mr` 名单命中            → 走 MR（显式否决，优先级最高）
+#   ② 本地配置 `direct` 名单命中        → 直推
+#   ③ remote 命名空间 ∈ `my_namespaces` → 直推（"这是我的仓" = 可推导事实，不靠猜仓名）
+#   ④ 其余 / 信息不足                   → **走 MR**（安全侧兜底）
+#
+# 配置读取（**数据根为准**，可与个人仓基线合并；三个名单键取**并集**：本地只能增、不能删）：
+#   $YAN_ROUTE_CONFIG                           显式指定（最高优先，一般不用）
+#   $YAN_DATA_ROOT/route.json                   本机主入口 —— **可以是软链**，指向个人仓里的版本化文件
+#   $PERSONAL_AGENT_DIR/config/yan-route.json   个人仓基线（跨设备可版本化，默认 ~/repos/leyan/personal-agent）
+#   格式：{ "my_namespaces": ["example-user"], "direct": ["yan-agent"], "mr": [] }
+#   ⚠️ `my_namespaces` 缺失时**绝不瞎猜**（不拿 git author 的 email 前缀自动当命名空间）：
+#      只在输出里给「推测 + 如何确认」，由人核对（glab auth status）后写进配置。
+#
+# 用法：dia wt route <repo-path>
+# 退出码：0 = 直推；1 = 走 MR（含默认兜底）；2 = 信息不足（按 MR 处理，需补配置/remote）
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ── remote 命名空间：`<host>/<ns>/<repo>` 里的 `<ns>`（无 remote → 空）────────
+route_remote_ns() {
+  local repo="$1" url=""
+  url="$(git -C "$repo" config --get remote.origin.url 2>/dev/null || true)"
+  [ -n "$url" ] || return 0
+  url="${url#ssh://}"; url="${url#https://}"; url="${url#http://}"; url="${url#git://}"
+  url="${url#*@}"                                  # 去 user@
+  case "$url" in *:*) url="${url#*:}" ;; esac      # scp 形式：git@host:ns/repo.git
+  case "$url" in */*/*) url="${url#*/}" ;; esac    # https 形式：host/ns/repo.git
+  url="${url%.git}"
+  printf '%s' "${url%%/*}"
+}
+
+# ── 合并配置（个人仓基线 → 数据根主入口；名单并集）→ JSON ─────────────────────
+# 用法：route_config_json <data-root>   （data root 由调用方用 `yan_data_root()` 解析后传入，
+#   别在 python 里读 env —— 脚本内部是**算**出来的，环境变量往往不存在 ⇒ 静默读不到配置）
+route_config_json() {
+  node - "$1" <<'JS'
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const dr = process.argv[2] || '';
+const explicit = process.env.DIA_WT_ROUTE_CONFIG || process.env.YAN_ROUTE_CONFIG;
+const pa = process.env.DIA_WT_PERSONAL_DIR || process.env.PERSONAL_AGENT_DIR || path.join(os.homedir(), 'repos/leyan/personal-agent');
+const cands = explicit ? [explicit] : [path.join(pa, 'config', 'yan-route.json'), path.join(dr, 'route.json')];
+const merged = { my_namespaces: [], direct: [], mr: [] };
+const srcs = [], errs = [];
+for (const p of cands) {
+  let raw;
+  try { raw = fs.readFileSync(p, 'utf8'); }
+  catch (e) { if (e.code !== 'ENOENT') errs.push(`${p}: ${e.message}`); continue; }
+  let d;
+  try { d = JSON.parse(raw); } catch (e) { errs.push(`${p}: JSON 解析失败（${e.message}）`); continue; }
+  srcs.push(p);
+  if (!d || typeof d !== 'object' || Array.isArray(d)) continue;
+  for (const k of Object.keys(merged)) {
+    const v = d[k];
+    const vals = Array.isArray(v) ? v.map(String) : (typeof v === 'string' && v ? [v] : []);
+    for (const x of vals) if (!merged[k].includes(x)) merged[k].push(x);
+  }
+}
+console.log(JSON.stringify({ config: merged, sources: srcs, errors: errs }));
+JS
+}
+
+cmd_route() {
+  local repo="${1:-}"
+  [ -n "$repo" ] || die "用法：dia wt route <repo-path>"
+
+  # ── 取仓名（关键：worktree 里 show-toplevel 给的是 worktree 路径，不是仓名）──
+  #    用 --git-common-dir 反查主仓 → 那才是仓的身份。
+  local name="" is_git=0
+  if [ -e "$repo" ]; then
+    local common
+    common="$(cd "$repo" 2>/dev/null && git rev-parse --git-common-dir 2>/dev/null)"
+    if [ -n "$common" ]; then
+      is_git=1
+      if [ "${common#/}" = "$common" ]; then
+        common="$(cd "$repo" 2>/dev/null && cd "$(dirname "$common")" 2>/dev/null && pwd)/$(basename "$common")"
+      fi
+      name="$(basename "$(dirname "$common")")"
+    else
+      name="$(basename "$(cd "$repo" 2>/dev/null && pwd)")"
+    fi
+  else
+    name="$(basename "$repo")"
+  fi
+  case "$name" in *-worktree--*) name="${name%%-worktree--*}"; repo="$(dirname "$repo")/$name" ;; esac
+
+  # ── 配置驱动判定（**不再硬编码仓名**；判定来源会被打印出来，可审计）──
+  local cfg ns=""
+  cfg="$(route_config_json "$(dia_wt_data_root 2>/dev/null || true)")"
+  [ "$is_git" = 1 ] && ns="$(route_remote_ns "$repo")"
+
+  # 取三个名单（**必须显式判空**：`grep -qx ""` 会匹配空行 ⇒ 空列表被误判成命中）
+  local _cfg_ns _cfg_direct _cfg_mr
+  _cfg_ns="$(printf '%s' "$cfg" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(JSON.parse(s).config.my_namespaces.join("\n"))}catch{}})' )"
+  _cfg_direct="$(printf '%s' "$cfg" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(JSON.parse(s).config.direct.join("\n"))}catch{}})' )"
+  _cfg_mr="$(printf '%s' "$cfg" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(JSON.parse(s).config.mr.join("\n"))}catch{}})' )"
+  cfg_has() { local list="$1" v="$2"; [ -n "$list" ] && printf '%s\n' "$list" | grep -qx -- "$v"; }
+
+  local verdict="" why=""
+  if cfg_has "$_cfg_mr" "$name"; then
+    verdict=mr; why="配置 mr 名单显式否决"
+  elif cfg_has "$_cfg_direct" "$name"; then
+    verdict=direct; why="配置 direct 名单命中"
+  elif [ -n "$ns" ] && cfg_has "$_cfg_ns" "$ns"; then
+    verdict=direct; why="remote 命名空间「${ns}」∈ my_namespaces（这是我的仓）"
+  elif [ "$is_git" = 0 ]; then
+    verdict=unknown; why="不是 git 仓：无法从命名空间推导"
+  elif [ -z "$ns" ]; then
+    verdict=unknown; why="无 origin remote：无法从命名空间推导"
+  else
+    verdict=mr; why="命名空间「${ns}」不在 my_namespaces（安全侧默认 MR）"
+  fi
+
+  echo "── 仓库路由判定（R1.7 · 配置驱动，不再硬编码仓名）──"
+  echo "  仓库      : $name${ns:+（命名空间 ${ns}）}"
+  printf '  判定来源  : %s\n' "$(printf '%s' "$cfg" | node -e 'let s="";process.stdin.on("data",d=>{s+=d}).on("end",()=>{const d=JSON.parse(s);const srcs=(d.sources&&d.sources.length)?d.sources:["（无配置文件）"];console.log(srcs.join("、")+(d.errors.length?"  ⚠️ "+d.errors.join("；"):""))})')"
+
+  case "$verdict" in
+    direct)
+      cat <<EOS
+  结论    : ✅ **直推 main**（不建 MR）｜依据：$why
+  正确姿势:
+      git worktree add <平级路径> -b <branch> origin/main
+      # ... 开发 + 自测 ...
+      git push origin HEAD:main            # 快进推 main，不建 MR
+  ⚠️ 「worktree 隔离」≠「要评审」——两者独立：
+     · worktree = 别污染 main checkout（R20）
+     · 免 MR    = 我自持的仓、自己主导，review 为辅（R1.7）
+  ⚠️ yan-agent main 拒绝 force push（pre-receive hook）→ 先 rebase 成快进
+EOS
+      exit 0 ;;
+    mr)
+      cat <<EOS
+  结论    : ✅ **走 MR**（+ LGTM + @bot mergeme）｜依据：$why
+  正确姿势:
+      git worktree add <平级路径> -b <分支前缀>/<feat> origin/main
+      # ... 开发 + 自测 + rebase（落后必须为 0）...
+      glab mr create ... && glab mr update <iid> --squash-before-merge
+      # 等 LGTM → @bot mergeme
+  提示    : example-repo 的 docs/** 纯文档改动，用户说「直推」时可直接特权合并（R1.7 常态授权）
+EOS
+      exit 1 ;;
+    *)
+      cat <<EOS
+  结论    : ⚠️ **信息不足，按 MR 处理**（安全侧）｜依据：$why
+  补齐判定（任选）:
+      1) 让仓有 origin remote ⇒ 命名空间可推导；
+      2) 写配置（数据根为主入口，可与个人仓基线合并；名单取并集）：
+         \$YAN_DATA_ROOT/route.json                    ← 本机；**可以是软链**（指向个人仓版本化文件）
+         \$PERSONAL_AGENT_DIR/config/yan-route.json    ← 个人仓基线（跨设备）
+         { "my_namespaces": ["<你的 gitlab 账号>"], "direct": ["<我自持的仓名>"], "mr": [] }
+EOS
+      # 未配置命名空间时给「推测 + 如何确认」，但**绝不自动采用**（不瞎猜"我是谁"）
+      if [ -n "$ns" ] && [ -z "$_cfg_ns" ]; then
+        local guess; guess="$(git -C "$repo" config --get user.email 2>/dev/null | sed 's/@.*//' || true)"
+        printf '  💡 推测（**未采用**）：origin 命名空间 =「%s」；%s\n' "$ns" "${guess:+你的 git user.email 前缀 =「${guess}」}"
+        printf '     两者一致且确属你本人（用 glab auth status 核对）⇒ 写进配置 my_namespaces 后即可自动判定\n'
+      fi
+      exit 2 ;;
+  esac
+}
+
+case "${1:-}" in
+  create) shift; cmd_create "$@" ;;
+  route)  shift; cmd_route "$@" ;;
+  scope)  shift; cmd_scope "$@" ;;
+  form)   shift; cmd_form "$@" ;;
+  list)   shift; cmd_list "$@" ;;
+  status) shift; cmd_status "$@" ;;
+  check)  shift; cmd_check "$@" ;;
+  clean)  shift; cmd_clean "$@" ;;
+  prune-merged) shift; cmd_prune_merged "$@" ;;
+  ""|help|-h|--help)
+    cat <<'EOF'
+dia wt —— worktree 目录形式选型 + 创建（唯一实现）
+
+用法:
+  dia wt create <repo-path> <feature> [--base <ref>] [--dry-run] [--install]
+  dia wt form   <repo-path>          # 只看选型结论
+  dia wt list   [repo-path]
+  dia wt status [repo-path]              # ★ 清理前必查：唯一工作副本 + 改动重叠（只读）
+  dia wt check  [<repo>...] [--all] [--deep] [--quiet]
+                                               # ★ 依赖体检（R20）：软链/逃逸/悬空；--all 扫全部仓
+  dia wt route  <repo-path>              # ★ 开工前必查：走 MR 还是直推（R1.7，配置驱动）
+  dia wt scope  <repo|worktree> [--feature <slug>] [--session <id>]   # ★ 产出作用域声明（设计 §4.5）
+  dia wt scope  --show                   # 看与当前目录匹配的作用域声明
+  dia wt scope  --list                   # 列出全部作用域文件（按 worktree 分文件）
+  dia wt clean  <repo-path> <feature>   # R25 清理（要求工作区干净 + 非软链 node_modules）
+                                               # 删 worktree + **其 HEAD 指向的分支**（任意前缀）；
+                                               # 分支未合并/未删净 → 退出码 1（不谎报完成）
+  dia wt prune-merged [<repo>] [--apply] [--base <ref>] [--protect a,b] [--quiet]
+                                               # ★ R25 定期闸口：扫出「已并入 main 的本地分支」
+                                               # 默认 dry-run（只列）；--apply 才删（用 -d，非 -D）
+                                               # 跳过当前分支 / 被 worktree 占用 / 保护名单
+
+选型（默认平级，白名单才隐藏）:
+  平级   <parent>/<repo>-worktree--<feature>
+  隐藏   <repo>/.worktrees/<feature>   ← 仅当：无 node_modules + 无扫描工具 + gitignore 已备
+  拿不准 → 平级（兜底）
+
+依赖（R20）:
+  worktree 内**一律真装**（create --install 或 cd 后 pnpm install --frozen-lockfile）；
+  **禁止**把别的 checkout 的 node_modules 软链过来 —— pnpm 会按 realpath 改写对方，
+  删 worktree 后对方整片悬空。开工前/收工前跑 `check` 判定（0 违规才算干净）。
+  判据 = 禁「顶层 node_modules 是软链 / 跨 checkout 共享」（pnpm isolated / link: / dsh profile /
+  GVS 的 <storeDir>/links 等**内部软链**都是合法的，check 已白名单）。
+  ⛔ pnpm 官方共享方案（virtualStoreType: global）**试点结论 = 暂停启用**（2026-10-16，example-repo 实测：
+  安装 2.9s / 1.9M 很香，但打破 TS 类型单例 ⇒ nx typecheck 40 错）→ 详见脚本头部与本脚本 docs 指针。
+EOF
+    ;;
+  # 未知子命令 → **退出码 2**（与文件头第 26 行声明一致；2026-10-13 修：此前误用 die ⇒ 返回 1）。
+  # ⚠️ 与「参数/前置不满足」的 `die`(1) **刻意区分** —— 调用方据码可分辨「我参数写错了」
+  #   (1，可重试/改参数) 与「这脚本压根没这个子命令」(2，多为版本不匹配/拼错)。
+  *) printf '\033[1;31m[dia-wt]\033[0m 未知子命令：%s（用 --help）\n' "$1" >&2; exit 2 ;;
+esac

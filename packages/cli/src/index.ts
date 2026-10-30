@@ -9,6 +9,8 @@ import * as persona from "../../../src/persona.ts";
 import * as kit from "../../../src/kit.ts";
 import * as scope from "../../../src/scope.ts";
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { resolve as resolvePath } from "node:path";
 import * as task from "../../../src/task.ts";
 import * as team from "../../../src/team.ts";
@@ -98,6 +100,7 @@ usage:
   dia persona list|verify|remove
   dia kit add --from SRC [--ref REF] [--dry-run] [--json]
   dia kit list|verify <id>|remove <id>
+  dia wt create|form|list|status|check|route|scope|clean|prune-merged …
   dia task add|list|status|done
   dia team run <id> --mock | --acp|--dsh --workspace DIR
   dia team gate|accept|reject|next
@@ -537,6 +540,20 @@ async function kitCli(argv: string[]): Promise<number> {
   return 2;
 }
 
+/** `dia wt …` → packages/wt/bin/dia-wt（bash 实现，与 dia-job 同模式）。 */
+function wtCli(argv: string[]): number {
+  const home = resolvePath(process.env.DIA_HOME_INSTALL || `${process.env.HOME}/.local/share/dia`, "packages/wt/bin/dia-wt");
+  const candidates = [
+    process.env.DIA_WT_BIN,
+    home,
+    resolvePath(fileURLToPath(new URL("../", import.meta.url)), "packages/wt/bin/dia-wt"),
+  ].filter(Boolean) as string[];
+  const bin = candidates.find((c) => existsSync(c));
+  if (!bin) { err("E_WT: dia-wt 未安装（先跑 dia install.sh，或设 DIA_WT_BIN）"); return 33; }
+  const r = spawnSync("bash", [bin, ...argv], { stdio: "inherit", env: process.env });
+  return r.status ?? 1;
+}
+
 async function resumeCli(argv: string[]): Promise<number> {
   const session = flag(argv, "--session");
   if (!session) { err("missing --session"); return 2; }
@@ -605,6 +622,7 @@ export async function main(rawArgv: string[]): Promise<number> {
   if (cmd === "resume") return resumeCli(argv.slice(1));
   if (cmd === "persona") return personaCli(argv.slice(1));
   if (cmd === "kit") return kitCli(argv.slice(1));
+  if (cmd === "wt") return wtCli(argv.slice(1));
   if (cmd === "task") return taskCli(argv.slice(1));
   if (cmd === "team") return teamCli(argv.slice(1));
   if (cmd === "job") return runJob(argv.slice(1));

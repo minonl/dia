@@ -19,11 +19,13 @@ run() { if [ "$DRY" = 1 ]; then printf '[dry-run] %s\n' "$*"; else "$@"; fi; }
 [ -f "$SRC/dist/cli.js" ] || { echo "缺 dist/cli.js；先跑 bun run build" >&2; exit 1; }
 [ -f "$SRC/bin/dia.js" ] || { echo "缺 bin/dia.js" >&2; exit 1; }
 
-run mkdir -p "$DIA_HOME/bin" "$DIA_HOME/dist" "$DIA_HOME/packages/job" "$DIA_BIN_DIR"
+run mkdir -p "$DIA_HOME/bin" "$DIA_HOME/dist" "$DIA_HOME/packages/job" "$DIA_HOME/packages/wt" "$DIA_BIN_DIR"
 run cp "$SRC/bin/dia.js" "$DIA_HOME/bin/dia.js"
 run cp "$SRC/dist/cli.js" "$DIA_HOME/dist/cli.js"
 run cp -R "$SRC/packages/job/bin" "$DIA_HOME/packages/job/"
 run cp -R "$SRC/packages/job/lib" "$DIA_HOME/packages/job/"
+run cp -R "$SRC/packages/wt/bin" "$DIA_HOME/packages/wt/"
+run chmod +x "$DIA_HOME/packages/wt/bin/dia-wt"
 run chmod +x "$DIA_HOME/bin/dia.js" "$DIA_HOME/packages/job/bin/dia-job"
 run ln -sfn "$DIA_HOME/bin/dia.js" "$DIA_BIN_DIR/dia"
 echo "dia installed: $DIA_HOME -> $DIA_BIN_DIR/dia"

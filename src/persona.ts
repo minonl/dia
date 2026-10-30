@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { basename, join, relative, resolve, sep } from "node:path";
 import { execFileSync } from "node:child_process";
 import * as kit from "./kit.ts";
+import * as active from "./active.ts";
 
 // 目录惰性解析（测试与多 persona 场景 env 会变）
 const dataDir = () => process.env.DIA_DATA_DIR || join(homedir(), ".local", "share", "dia");
@@ -194,7 +195,7 @@ export function install(from: string, opts: { ref?: string; host?: string; dryRu
   const hash = hashTree(target);
   const renderedHashes: Record<string, string> = {};
   for (const f of rendered) renderedHashes[f] = shaFile(f);
-  writeFileSync(join(target, "dia.lock"), JSON.stringify({ id: m.id, version: m.version, commit: src.commit, hash, rendered, renderedHashes, renderedDirs, kits: kitRefs,
+  writeFileSync(join(target, "dia.lock"), JSON.stringify({ id: m.id, version: m.version, commit: src.commit, source: from, ref: opts.ref ?? null, hash, rendered, renderedHashes, renderedDirs, kits: kitRefs,
     content: { knowledge: m.knowledge ?? [], commands: m.commands ?? [], dataRoot: m.data_root ?? null, env: m.env ?? null, rendered: inline },
   }, null, 1));
   return { id: m.id, version: m.version, dir: target, rendered, hash };
@@ -349,4 +350,60 @@ export function setDefaultAgent(id: string | null, opts: { host?: string } = {})
   mkdirSync(join(dataDir(), "state"), { recursive: true });
   writeFileSync(stateFile, JSON.stringify(state, null, 1));
   return { file, previous, current: id, backup };
+}
+
+
+export interface UpstreamState {
+  id: string;
+  version: string;
+  source: string | null;
+  ref: string | null;
+  local_commit: string | null;
+  upstream_commit: string | null;
+  relation: "same" | "differs" | "unknown" | "local-only";
+  verify_ok: boolean;
+}
+
+/** 安装态 vs 上游：本地 commit 与 `git ls-remote <source> <ref>` 比对。 */
+export function checkUpstream(id: string, version?: string): UpstreamState {
+  const idDir = join(dataDir(), "personas", id);
+  if (!existsSync(idDir)) throw new Error("E_NOT_INSTALLED");
+  const v = version || (active.effective(id)?.version ?? readdirSync(idDir).sort().pop()!);
+  const lock = JSON.parse(readFileSync(join(idDir, v, "dia.lock"), "utf8"));
+  const vres = verify(id, v);
+  const out: UpstreamState = {
+    id, version: v,
+    source: lock.source ?? null, ref: lock.ref ?? null,
+    local_commit: lock.commit ?? null, upstream_commit: null,
+    relation: "unknown", verify_ok: vres.ok,
+  };
+  const src = lock.source ?? "";
+  if (!(src.startsWith("git+") || /^https?:\/\//.test(src) || src.startsWith("git@"))) {
+    out.relation = "local-only";
+    return out;
+  }
+  try {
+    const url = src.replace(/^git\+/, "");
+    const ref = lock.ref || "HEAD";
+    const r = execFileSync("git", ["ls-remote", url, ref], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    const sha = r.split(/\s+/)[0] || null;
+    out.upstream_commit = sha;
+    out.relation = sha && lock.commit && sha === lock.commit ? "same" : sha ? "differs" : "unknown";
+  } catch {
+    out.relation = "unknown";
+  }
+  return out;
+}
+
+/** 从记录源重新取回（update/heal）：装到新版本号后把 active 指针指过去。 */
+export function update(id: string, opts: { ref?: string } = {}): { installed: Installed; previous: string | null } {
+  const idDir = join(dataDir(), "personas", id);
+  if (!existsSync(idDir)) throw new Error("E_NOT_INSTALLED");
+  const cur = active.effective(id)?.version ?? readdirSync(idDir).sort().pop()!;
+  const lock = JSON.parse(readFileSync(join(idDir, cur, "dia.lock"), "utf8"));
+  if (!lock.source) throw new Error("E_SOURCE: 该 persona 由本地目录安装，无法 update（重新 persona add）");
+  const host = (lock.rendered?.[0] ?? "").includes("agents") ? "opencode" : undefined;
+  const r = install(lock.source, { ref: opts.ref ?? lock.ref ?? undefined, host });
+  const u = active.use(id, r.version, { reason: `update from ${lock.source}` });
+  return { installed: r, previous: u.previous };
 }

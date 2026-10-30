@@ -77,3 +77,29 @@ describe("dia doctor", () => {
     expect(r.status).toBe(2);
   });
 });
+
+describe("persona check / update", () => {
+  beforeAll(() => {
+    // 前一个 describe 故意改坏了 AGENTS.md，这里恢复（重建 persona 树里的原件）
+    writeFileSync(join(home, ".config/opencode/AGENTS.md"), ["---", "description: yan", "mode: primary", "---", "You are yan.", ""].join("\n"));
+  });
+
+  test("本地目录安装 → relation=local-only", () => {
+    const r = run(["persona", "check", "yan", "--json"]);
+    const d = JSON.parse(r.stdout);
+    expect(d.relation).toBe("local-only");
+    expect(d.verify_ok).toBe(true);
+    expect(r.status).toBe(0);
+  });
+
+  test("本地目录安装 → update 从记录的本地源重装（不报错）", () => {
+    const r = run(["persona", "update", "yan", "--json"]);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout).installed.id).toBe("yan");
+  });
+
+  test("内容被改 → check 返回 2", () => {
+    writeFileSync(join(home, ".config/opencode/AGENTS.md"), "tampered\n");
+    expect(run(["persona", "check", "yan"]).status).toBe(2);
+  });
+});

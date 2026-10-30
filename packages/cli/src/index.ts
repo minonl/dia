@@ -114,6 +114,7 @@ usage:
   dia resume --session S [--json]
   dia persona add <id|--from SRC> [--ref REF] [--host opencode] [--dry-run] [--json]
   dia persona list|verify|remove|show <id>|use <id>[@ver]
+  dia persona check <id>|update <id> [--ref REF]
   dia doctor [--persona ID] [--json]
   dia env list|check [KEY…] | env [--dry-run] [--redact] <cmd…>
   dia persona default <id>|--unset|--show [--host opencode]
@@ -529,6 +530,37 @@ async function personaCli(argv: string[]): Promise<number> {
     out(`${id}: 生效 ${eff ? `${eff.version}（${eff.source === "active" ? "active 指针" : "最新安装"}）` : "(未安装)"}`);
     for (const h of hist) out(`  ${h.at}  ${h.previous ?? "-"} → ${h.version}  by ${h.by}${h.reason ? `  ${h.reason}` : ""}`);
     return 0;
+  }
+  if (sub === "check") {
+    const id = positional(args)[0];
+    if (!id) { err("missing id"); return 2; }
+    try {
+      const r = persona.checkUpstream(id, flag(args, "--version"));
+      if (asJson) out(JSON.stringify(r, null, 1));
+      else {
+        out(`${r.id}@${r.version}  本地 ${String(r.local_commit).slice(0, 8)}  上游 ${r.upstream_commit ? String(r.upstream_commit).slice(0, 8) : "(未知)"}  → ${r.relation}`);
+        out(`  内容校验：${r.verify_ok ? "ok" : "MISMATCH"}`);
+        out(`  来源：${r.source ?? "(本地目录)"}${r.ref ? ` @ ${r.ref}` : ""}`);
+      }
+      // 0 一致；1 有更新；2 内容被改；3 无法判定
+      if (!r.verify_ok) return 2;
+      if (r.relation === "same" || r.relation === "local-only") return 0;
+      if (r.relation === "differs") return 1;
+      return 3;
+    } catch (e: any) { err(e?.message || String(e)); return 31; }
+  }
+  if (sub === "update") {
+    const id = positional(args)[0];
+    if (!id) { err("missing id"); return 2; }
+    try {
+      const r = persona.update(id, { ref: flag(args, "--ref") });
+      out(asJson ? JSON.stringify(r) : `updated ${id} → ${r.installed.version}（${r.installed.commit}, 原 ${r.previous ?? "-"}）`);
+      return 0;
+    } catch (e: any) {
+      const m = e?.message || String(e);
+      err(m);
+      return m.startsWith("E_SOURCE") ? 34 : 31;
+    }
   }
   if (sub === "default") {
     const id = positional(args)[0] || null;

@@ -7,7 +7,7 @@ while [ -L "$SELF" ]; do
   case "$t" in /*) SELF="$t" ;; *) SELF="$d/$t" ;; esac
 done
 case "$SELF" in
-  *-worktree--*|*/.worktrees/*) echo "yan-task shim: 拒绝从 worktree 运行（$SELF）" >&2; exit 4 ;;
+  *-worktree--*|*/.worktrees/*) echo "yan-task shim: 拒绝从 worktree 运行（${SELF}）" >&2; exit 4 ;;
 esac
 
 BIN="${DIA_JOB_BIN:-}"
@@ -19,6 +19,6 @@ fi
 [ -n "$BIN" ] || BIN="$(command -v dia-job 2>/dev/null || true)"
 [ -n "$BIN" ] || { echo "yan-task shim: 未找到 dia-job；先跑 dia-job 的 install.sh" >&2; exit 3; }
 case "$BIN" in
-  *-worktree--*|*/.worktrees/*) echo "yan-task shim: 拒绝 worktree 里的 dia-job（$BIN）" >&2; exit 4 ;;
+  *-worktree--*|*/.worktrees/*) echo "yan-task shim: 拒绝 worktree 里的 dia-job（${BIN}）" >&2; exit 4 ;;
 esac
 exec "$BIN" "$@"

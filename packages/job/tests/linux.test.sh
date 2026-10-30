@@ -62,7 +62,7 @@ reg_field() { HOME="$HOME_DIR" DIA_JOB_ROOT="$ROOT_DIR" node "$ROOT/lib/json.mjs
 
 echo "── periodic：interval → crontab ──"
 out="$(run install hello --cmd 'echo hi' --interval 300 --desc '测试任务' --allow-unstable 2>&1)"; rc=$?
-[ "$rc" = 0 ] && ok "install rc=0" || bad "install rc=$rc：$out"
+[ "$rc" = 0 ] && ok "install rc=0" || bad "install rc=${rc}：$out"
 line="$(grep -F '# dia-job:hello' "$CRON_TABLE")"
 printf '%s' "$line" | grep -q '^\*/5 \* \* \* \*' && ok "interval 300 → */5 分钟" || bad "cron 表达式错：$line"
 printf '%s' "$line" | grep -q 'PATH=' && ok "行内含 PATH（cron 最小环境）" || bad "缺 PATH：$line"
@@ -93,16 +93,16 @@ echo "── 在场判定：status / selfcheck / doctor ──"
 out="$(run status 2>&1)"; printf '%s' "$out" | grep -q 'scheduled' && ok "status 显示 scheduled" || bad "status 未见 scheduled：$out"
 grep -vF '# dia-job:hello' "$CRON_TABLE" > "$TD/t" && cp "$TD/t" "$CRON_TABLE"
 out="$(run selfcheck --dry-run 2>&1)"; rc=$?
-[ "$rc" = 1 ] && ok "条目被删 → selfcheck --dry-run rc=1" || bad "selfcheck dry-run 期望 rc=1，实得 $rc：$out"
+[ "$rc" = 1 ] && ok "条目被删 → selfcheck --dry-run rc=1" || bad "selfcheck dry-run 期望 rc=1，实得 ${rc}：$out"
 printf '%s' "$out" | grep -q 'hello' && ok "selfcheck 点名 hello" || bad "selfcheck 未点名：$out"
 run selfcheck >/dev/null 2>&1
 grep -qF '# dia-job:hello' "$CRON_TABLE" && ok "selfcheck 自愈：条目重建" || bad "selfcheck 未重建条目"
 out="$(run selfcheck 2>&1)"; rc=$?
-[ "$rc" = 0 ] && ok "自愈后 selfcheck rc=0" || bad "自愈后 selfcheck rc=$rc：$out"
+[ "$rc" = 0 ] && ok "自愈后 selfcheck rc=0" || bad "自愈后 selfcheck rc=${rc}：$out"
 
 echo "── service：systemd --user ──"
 out="$(run install svc --cmd 'bash /tmp/svc.sh' --type service --allow-unstable --desc '常驻测试' 2>&1)"; rc=$?
-[ "$rc" = 0 ] && ok "service install rc=0" || bad "service install rc=$rc：$out"
+[ "$rc" = 0 ] && ok "service install rc=0" || bad "service install rc=${rc}：$out"
 UNIT="$HOME_DIR/.config/systemd/user/local.dia-job-svc.service"
 [ -f "$UNIT" ] && ok "unit 落到 systemd --user 目录" || bad "缺 unit：$UNIT"
 grep -q 'Restart=always' "$UNIT" && ok "Restart=always（≈ KeepAlive）" || bad "unit 缺 Restart=always"

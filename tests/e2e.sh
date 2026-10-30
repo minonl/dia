@@ -53,8 +53,12 @@ db.prepare("INSERT INTO message VALUES (?,?,?)").run("m1","e2e-oc1",JSON.stringi
 db.prepare("INSERT INTO part VALUES (?,?,?,?)").run("p1","m1","e2e-oc1",JSON.stringify({type:"tool",tool:"bash",state:{status:"completed"}}));
 db.close();
 ' "$TMP/opencode.db"
-DSH_MTIME=$(stat -f "%m %z" "$DSH/session.v4.jsonl.zstd" 2>/dev/null || stat -c "%Y %s" "$DSH/session.v4.jsonl.zstd")
-OC_MTIME=$(stat -f "%m %z" "$TMP/opencode.db" 2>/dev/null || stat -c "%Y %s" "$TMP/opencode.db")
+# ⚠️ 顺序不能反（2026-10-30 实测）：Linux 的 `stat -f` **不报错**（那是「看文件系统」）⇒
+#   `stat -f … || stat -c …` 兜底永不触发，拿到的是含 free-blocks 的 fs 信息（每次跑都不一样）
+#   ⇒ 「源只读」那步必然假红「dsh source changed」。故 GNU 优先、BSD 兜底。
+_stat_meta() { stat -c "%Y %s" "$1" 2>/dev/null || stat -f "%m %z" "$1" 2>/dev/null; }
+DSH_MTIME=$(_stat_meta "$DSH/session.v4.jsonl.zstd")
+OC_MTIME=$(_stat_meta "$TMP/opencode.db")
 
 echo "[4/7] ingest 两源 + 幂等"
 run ingest sessions --full --sessions-root "$TMP/sessions" --opencode-db "$TMP/opencode.db" \
@@ -80,8 +84,8 @@ set +e; run freeze thaw --reason "agent try" >/dev/null 2>&1; TH=$?; set -e; [ "
 echo "[7/8] 人工解冻 + 源只读"
 run freeze thaw --reason "reviewed" --i-am-human >/dev/null
 run guard >/dev/null
-DSH_AFTER=$(stat -f "%m %z" "$DSH/session.v4.jsonl.zstd" 2>/dev/null || stat -c "%Y %s" "$DSH/session.v4.jsonl.zstd")
-OC_AFTER=$(stat -f "%m %z" "$TMP/opencode.db" 2>/dev/null || stat -c "%Y %s" "$TMP/opencode.db")
+DSH_AFTER=$(_stat_meta "$DSH/session.v4.jsonl.zstd")
+OC_AFTER=$(_stat_meta "$TMP/opencode.db")
 [ "$DSH_MTIME" = "$DSH_AFTER" ] || { echo "dsh source changed"; exit 1; }
 [ "$OC_MTIME" = "$OC_AFTER" ] || { echo "opencode source changed"; exit 1; }
 

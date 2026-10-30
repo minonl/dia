@@ -30,7 +30,7 @@ run ln -sfn "$HOME_DIR/bin/dia-job" "$BIN_DIR/dia-job"
 # 配置示例：只在不存在时提示，不覆盖真实配置
 CFG="${XDG_CONFIG_HOME:-$HOME/.config}/dia-job/config"
 if [ ! -f "$CFG" ]; then
-  if [ "$DRY" = 1 ]; then echo "[dry-run] 可创建 $CFG（示例见 $SRC/config.example）"; else
+  if [ "$DRY" = 1 ]; then echo "[dry-run] 可创建 ${CFG}（示例见 $SRC/config.example）"; else
     printf '# dia-job global config; see %s/config.example\n' "$SRC" > "$CFG"
   fi
 fi

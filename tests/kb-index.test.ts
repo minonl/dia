@@ -25,6 +25,13 @@ describe("kb index semantics", () => {
     await expect(search(root, "新增", db)).rejects.toMatchObject({ code: "E_INDEX_STALE" });
   });
 
+  test("same-second content/size change is detected", async () => {
+    const { root, db } = fixture();
+    await buildIndex(root, db);
+    writeFileSync(join(root, "a.md"), "# A\n\n知识库预算 token 压力。changed\n");
+    await expect(search(root, "changed", db)).rejects.toMatchObject({ code: "E_INDEX_STALE" });
+  });
+
   test("index belongs to root", async () => {
     const { root, db } = fixture();
     await buildIndex(root, db);

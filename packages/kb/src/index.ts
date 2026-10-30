@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, normalize, relative, resolve, sep } from "node:path";
@@ -23,6 +23,7 @@ export interface Doc {
   bytes: number;
   tokens: number;
   mtime: number;
+  mtimeMs: number;
   reviewBy: string;
   tags: string;
 }
@@ -74,10 +75,24 @@ export function iterDocs(root: string): Doc[] {
       bytes: Buffer.byteLength(text),
       tokens: tokensEst(text),
       mtime: Math.floor(statSync(full).mtimeMs / 1000),
+      mtimeMs: statSync(full).mtimeMs,
       reviewBy: meta.review_by || "",
       tags: meta.tags || "",
     };
   });
+}
+
+function scanRoot(root: string): { docs: number; fingerprint: string; maxMtimeMs: number } {
+  const abs = resolve(root);
+  const files = walk(abs);
+  let maxMtimeMs = 0;
+  const parts: string[] = [];
+  for (const f of files) {
+    const st = statSync(f);
+    maxMtimeMs = Math.max(maxMtimeMs, st.mtimeMs);
+    parts.push(`${relative(abs, f)}:${st.mtimeMs}:${st.size}`);
+  }
+  return { docs: files.length, maxMtimeMs, fingerprint: createHash("sha1").update(parts.join("\n")).digest("hex") };
 }
 
 export function defaultDb(root: string): string {
@@ -90,9 +105,9 @@ export function defaultDb(root: string): string {
 export async function buildIndex(root: string, dbPath?: string) {
   const target = dbPath || defaultDb(root);
   mkdirSync(dirname(target), { recursive: true });
-  const tmp = `${target}.tmp-${process.pid}-${Date.now()}`;
+  const tmp = `${target}.tmp-${process.pid}-${Date.now()}-${randomUUID()}`;
   const docs = iterDocs(root);
-  const maxMtime = docs.reduce((a, d) => Math.max(a, d.mtime), 0);
+  const scan = scanRoot(root);
   const db = await openDb(tmp);
   let tokenizer = "trigram";
   try {
@@ -115,7 +130,7 @@ export async function buildIndex(root: string, dbPath?: string) {
     const builtAt = new Date().toISOString();
     for (const [k, v] of Object.entries({
       schema: String(SCHEMA_VERSION), root: resolve(root), docs: String(docs.length),
-      built_at: builtAt, max_mtime: String(maxMtime), tokenizer,
+      built_at: builtAt, max_mtime_ms: String(scan.maxMtimeMs), fingerprint: scan.fingerprint, tokenizer,
     })) db.run("INSERT INTO meta VALUES (?,?)", [k, v]);
     db.exec("COMMIT");
     db.close();
@@ -129,7 +144,7 @@ export async function buildIndex(root: string, dbPath?: string) {
   }
 }
 
-interface IndexMeta { docs: number; max_mtime: number; tokenizer: string; root: string; schema: number }
+interface IndexMeta { docs: number; max_mtime_ms: number; fingerprint: string; tokenizer: string; root: string; schema: number }
 
 async function readMeta(path: string): Promise<IndexMeta | null> {
   if (!existsSync(path)) return null;
@@ -139,9 +154,9 @@ async function readMeta(path: string): Promise<IndexMeta | null> {
     const m = new Map(rows.map((r) => [String(r.key), String(r.value)]));
     if (!m.has("schema") || !m.has("docs")) return null;
     return {
-      docs: Number(m.get("docs") || 0), max_mtime: Number(m.get("max_mtime") || 0),
-      tokenizer: m.get("tokenizer") || "unknown", root: m.get("root") || "",
-      schema: Number(m.get("schema") || 0),
+      docs: Number(m.get("docs") || 0), max_mtime_ms: Number(m.get("max_mtime_ms") || 0),
+      fingerprint: m.get("fingerprint") || "", tokenizer: m.get("tokenizer") || "unknown",
+      root: m.get("root") || "", schema: Number(m.get("schema") || 0),
     };
   } catch {
     return null;
@@ -155,10 +170,9 @@ export async function assertIndex(root: string, dbPath?: string): Promise<string
     throw new KbIndexError(`index missing or incompatible: ${target}; run "dia kb index --root ${root}"`, "E_INDEX_MISSING");
   }
   if (meta.root !== resolve(root)) throw new KbIndexError(`index belongs to another root: ${meta.root}`, "E_INDEX_STALE");
-  const docs = iterDocs(root);
-  const maxMtime = docs.reduce((a, d) => Math.max(a, d.mtime), 0);
-  if (meta.docs !== docs.length || meta.max_mtime < maxMtime) {
-    throw new KbIndexError(`index stale: docs ${meta.docs}→${docs.length}, mtime ${meta.max_mtime}→${maxMtime}; run "dia kb index --root ${root}"`, "E_INDEX_STALE");
+  const scan = scanRoot(root);
+  if (meta.docs !== scan.docs || meta.fingerprint !== scan.fingerprint) {
+    throw new KbIndexError(`index stale: docs ${meta.docs}→${scan.docs}; run "dia kb index --root ${root}"`, "E_INDEX_STALE");
   }
   return target;
 }

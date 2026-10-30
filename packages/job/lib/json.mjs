@@ -74,10 +74,10 @@ switch (cmd) {
     for (const [k, v] of Object.entries(tasks(read(a[0])))) out(`${k}\t${v.cmd || ""}\n`);
     break;
   }
-  case "fields": { // <reg> <name> -> cmd \t interval \t calendar \t weekdays
+  case "fields": { // <reg> <name> -> cmd \t interval \t calendar \t weekdays \t type
     if (!existsSync(a[0])) break;
     const t = tasks(read(a[0]))[a[1]] || {};
-    out([t.cmd || "", t.interval || "-", t.calendar || "-", t.weekdays || "-"].join("\t"));
+    out([t.cmd || "", t.interval || "-", t.calendar || "-", t.weekdays || "-", t.type || "periodic"].join("\t"));
     break;
   }
   case "selfcheck-rows": { // <reg> <prefix>
@@ -115,7 +115,7 @@ switch (cmd) {
   }
   case "bootstrap-rows": { // <reg>
     if (!existsSync(a[0])) break;
-    for (const [n, t] of Object.entries(tasks(read(a[0])))) out([n, t.cmd || "", t.interval || "-", t.calendar || "-", t.desc || "", t.weekdays || "-"].join("\t") + "\n");
+    for (const [n, t] of Object.entries(tasks(read(a[0])))) out([n, t.cmd || "", t.interval || "-", t.calendar || "-", t.desc || "", t.weekdays || "-", t.type || "periodic", t.path_class || ""].join("\t") + "\n");
     break;
   }
   case "json": { // <key=value...> -> JSON object (true/false become booleans)

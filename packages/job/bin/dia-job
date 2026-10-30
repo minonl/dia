@@ -29,7 +29,7 @@ trap '' PIPE
 #   bootstrap/bootout` 作用在**真实用户域** `gui/$UID`（无法沙箱化）⇒ **跑一次 e2e 就会 bootout
 #   掉本机真实的 yan 定时任务**（现场：四个自有任务反复「未加载」，根因即当天多次跑 e2e）。
 #   ⇒ 测试侧设此开关；生产/会话侧**不设**（照旧真实加载）。
-DIA_JOB_NO_LAUNCHD="${DIA_JOB_NO_LAUNCHD:-${YAN_TASK_NO_LAUNCHD:-0}}"
+DIA_JOB_NO_LAUNCHD="${DIA_JOB_NO_LAUNCHD:-${DIA_JOB_NO_SCHED:-${YAN_TASK_NO_LAUNCHD:-0}}}"
 YAN_TASK_NO_LAUNCHD="$DIA_JOB_NO_LAUNCHD"
 _launchd_off() { [ "$YAN_TASK_NO_LAUNCHD" = 1 ]; }
 
@@ -88,6 +88,31 @@ detect_platform() {
 }
 PLATFORM="$(detect_platform)"
 
+# ── 调度/服务后端（设计 §4：macOS=launchd；Linux+WSL=periodic 走 cron、service 走 systemd --user）──
+# 为什么 Linux 要分两个后端（2026-10-30 用户拍板 A 方案）：
+#   cron 表达不了「常驻 + 挂了重拉」，systemd 表达不了「每 N 分钟跑一次」而不额外写 timer 单元；
+#   两者都在**本用户作用域**（`systemctl --user` / `crontab` 自己的表），不需要 root。
+#   ⇒ periodic=cron、service=systemd，各自用对的工具，任务 manifest/wrapper 完全不感知平台。
+CRONTAB_BIN="${DIA_JOB_CRONTAB_BIN:-$(command -v crontab 2>/dev/null || true)}"
+SYSTEMCTL_BIN="${DIA_JOB_SYSTEMCTL_BIN:-$(command -v systemctl 2>/dev/null || true)}"
+# cron 的最小环境：wrapper/任务里用的 node/bun/dia 多在 ~/.local/bin ⇒ 行内显式给 PATH
+DIA_JOB_CRON_PATH="${DIA_JOB_CRON_PATH:-$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin}"
+_cron_marker() { printf '# dia-job:%s' "$1"; }
+_unit_dir() { printf '%s' "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"; }
+unit_path() { printf '%s/%s.service' "$(_unit_dir)" "$(label_for "$1")"; }
+_have_systemd() { [ -n "$SYSTEMCTL_BIN" ] && "$SYSTEMCTL_BIN" --user show-environment >/dev/null 2>&1; }
+
+# ── 跨平台 mtime（GNU/BSD 顺序**不能反**）─────────────────────────────────────
+# ⚠️ 2026-10-30 实测：Linux 上 `stat -f %m FILE` **不报错**（那是「看文件系统」）⇒
+#   `stat -f … || stat -c …` 的兜底永远不触发，age 由垃圾值算出 ⇒ 心跳/日志时间全是假的。
+#   ⇒ GNU 语法（Linux）优先，BSD（macOS）兜底。
+_mtime_secs() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo 0; }
+_mtime_human() {  # → "YYYY-MM-DD HH:MM"
+  local d
+  if d="$(stat -c '%y' "$1" 2>/dev/null)"; then printf '%s' "$d" | cut -c1-16
+  else stat -f '%Sm' -t '%m-%d %H:%M' "$1" 2>/dev/null; fi
+}
+
 # ── 发现已登记任务 ─────────────────────────────────────────────────
 # ⚠️ **registry 是唯一列表**（2026-10-12 修，用户指出的一致性缺陷）：
 #   原实现用 `^<前缀>` **正则扫目录**来「发现」，导致两个事实源：
@@ -107,7 +132,10 @@ discover() {
     macos)
       ls -1 "$HOME/Library/LaunchAgents" 2>/dev/null | grep -E "^$(printf '%s' "$DIA_JOB_LABEL_PREFIX" | sed 's/\./\\./g')" | sed 's/\.plist$//' | sort -u ;;
     linux|wsl)
-      crontab -l 2>/dev/null | grep -oE '# (dia-job|yan-task):[a-z0-9._-]+' | sed -E 's/# (dia-job|yan-task)://' ;;
+      _cron_read | grep -oE '# (dia-job|yan-task):[a-z0-9._-]+' | sed -E 's/# (dia-job|yan-task)://'
+      # systemd --user unit（service 型）：按 label 前缀扫 unit 目录
+      ls -1 "$(_unit_dir)" 2>/dev/null | grep -E "^$(printf '%s' "$DIA_JOB_LABEL_PREFIX" | sed 's/\./\\./g')" | sed -e 's/\.service$//' -e "s/^${DIA_JOB_LABEL_PREFIX}//" || true
+      ;;
     *) : ;;
   esac
 }
@@ -136,6 +164,8 @@ cmd_status() {
     [ -n "$name" ] || continue
     printf '  %-9s %-9s %s\n' "$name" "$type" "$label"
     local st="" pid="" last=""
+    local backend=""
+    [ -f "$REG" ] && backend="$(json field "$REG" "$name" backend 2>/dev/null || true)"
     if [ "$PLATFORM" = macos ]; then
       local info; info="$(launchctl print "gui/$UID_NUM/$label" 2>/dev/null)"
       if [ -n "$info" ]; then
@@ -143,6 +173,13 @@ cmd_status() {
         pid="$(printf '%s' "$info" | awk -F' = ' '/^\tpid = /{print $2; exit}')"
         last="$(printf '%s' "$info" | awk -F' = ' '/last exit code = /{print $2; exit}')"
       else st="absent"; fi
+    elif [ "$backend" = systemd ]; then
+      # systemd --user：状态与 MainPID（≈ launchctl print 的 state/pid）
+      local s; s="$(systemd_state "$name")"
+      st="${s%% *}"; case "$s" in *PID=*) pid="${s##*PID=}" ;; esac
+    elif [ "${backend:-cron}" = cron ]; then
+      # cron：**没有进程状态**（一次性进程），只能看条目是否在 + state.jsonl 的上次结论
+      if cron_present "$name"; then st="scheduled"; else st="absent"; fi
     fi
     printf '      调度=%-10s 状态=%-10s%s\n' "$sched" "${st:-?}" "${pid:+ PID=$pid}"
     local sf="$YAN_DATA_ROOT/tasks/$name.state.jsonl"
@@ -151,7 +188,7 @@ cmd_status() {
     else
       printf '      上次运行: （无 state；adopted 任务由其项目自管）\n'
     fi
-    [ -f "$log" ] && printf '      日志: %s（%s · %s）\n' "${log##*tasks/}" "$(wc -c < "$log" | tr -d ' ')B" "$(stat -f '%Sm' -t '%m-%d %H:%M' "$log" 2>/dev/null || stat -c '%y' "$log" | cut -c1-16)"
+    [ -f "$log" ] && printf '      日志: %s（%s · %s）\n' "${log##*tasks/}" "$(wc -c < "$log" | tr -d ' ')B" "$(_mtime_human "$log")"
   done <<< "$entries"
 }
 
@@ -171,7 +208,62 @@ cmd_logs() {  # logs <name> [-n N]：看某个任务最近在干什么（最直�
 # ── doctor：只读体检（把 2026-10-10 的两类坑变成可检测）──────────────
 cmd_doctor() {
   local bad=0 warn=0
-  echo "══ yan-task doctor（${PLATFORM}）══"
+  echo "══ dia-job doctor（${PLATFORM}）══"
+
+  # Linux/WSL：后端 = cron(periodic) + systemd(service) —— 检查项换成这一类（macOS 的
+  # GUI App / launchd pid 判定在 Linux 上无意义，硬跑只会制造假阳性）。
+  if [ "$PLATFORM" != macos ]; then
+    if [ "$PLATFORM" = linux ] || [ "$PLATFORM" = wsl ]; then
+      # 1) crontab 可用性（periodic 后端的前提）
+      if [ -n "$CRONTAB_BIN" ]; then
+        echo "  ✓ crontab 可用（${CRONTAB_BIN}）"
+      else
+        echo "  ✗ 找不到 crontab —— periodic 任务装不了（apt install cron / dnf install cronie）"; bad=$((bad+1))
+      fi
+      # 2) cron 守护进程是否在跑（装了但没跑 = 静默不执行，最坑）
+      if command -v systemctl >/dev/null 2>&1; then
+        if systemctl is-active --quiet cron 2>/dev/null || systemctl is-active --quiet crond 2>/dev/null; then
+          echo "  ✓ cron 守护进程在跑"
+        else
+          echo "  ⚠️ cron 守护进程未运行（systemctl status cron）—— 条目在也不会触发"; warn=$((warn+1))
+        fi
+      fi
+      # 3) systemd --user（service 后端的前提）+ linger（不 linger 的话退出登录即停服务）
+      if _have_systemd; then
+        echo "  ✓ systemctl --user 可用"
+        local linger
+        linger="$(loginctl show-user "$(id -un)" -p Linger --value 2>/dev/null || true)"
+        if [ "$linger" = yes ]; then echo "  ✓ linger 已开启（登出后服务仍跑）"
+        else
+          echo "  ⚠️ linger 未开启 —— 注销后 user service 会停（永久服务：loginctl enable-linger $(id -un)）"; warn=$((warn+1))
+        fi
+      else
+        echo "  ⚠️ systemctl --user 不可用 —— service 型任务装不了"; warn=$((warn+1))
+      fi
+      # 4) 登记的条目是否都在场（按后端分别判）
+      if [ -f "$REG" ]; then
+        local _n=0
+        while IFS=$'\t' read -r short _label _adopted; do
+          [ -n "$short" ] || continue
+          _n=$((_n+1))
+          local _be; _be="$(json field "$REG" "$short" backend 2>/dev/null || true)"
+          case "${_be:-cron}" in
+            systemd) "$SYSTEMCTL_BIN" --user is-enabled "$(label_for "$short").service" >/dev/null 2>&1 \
+                       && echo "  ✓ ${short}（systemd 已启用）" || { echo "  ✗ ${short}（systemd unit 未启用）"; bad=$((bad+1)); } ;;
+            *) cron_present "$short" && echo "  ✓ ${short}（crontab 有条目）" || { echo "  ✗ ${short}（crontab 缺条目）"; bad=$((bad+1)); } ;;
+          esac
+        done < <(json selfcheck-rows "$REG" "$DIA_JOB_LABEL_PREFIX")
+        [ "$_n" -gt 0 ] || echo "  · registry 为空"
+      else
+        echo "  · 无 registry（未装任何任务）"
+      fi
+      echo "── 结论：$([ "$bad" = 0 ] && echo '✅ 通过' || echo "✗ ${bad} 项失败")${warn:+ · $warn 警告 ──}"
+      [ "$bad" = 0 ] || return 1
+      return 0
+    fi
+    echo "  ⚠️ 平台 ${PLATFORM} 未实现后端（设计 §4.1）"; return 3
+  fi
+
 
   # 1) GUI App 多实例（当天的血泪：旧实例用旧代码托管会话）
   #    ⚠️ 判据经过两轮实测修正（2026-10-12）：
@@ -276,7 +368,7 @@ cmd_doctor() {
     local f age stale=0
     for f in "$TASKS_DIR"/*.heartbeat; do
       [ -f "$f" ] || continue
-      age=$(( $(date +%s) - $(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f") ))
+      age=$(( $(date +%s) - $(_mtime_secs "$f") ))
       [ "$age" -gt 600 ] && { echo "  ⚠️ 心跳过期 $((age/60)) 分钟：$(basename "$f" .heartbeat)"; warn=$((warn+1)); stale=1; }
     done
     [ "$stale" = 0 ] && echo "  ✓ 心跳检查通过（或暂无任务）"
@@ -501,25 +593,19 @@ expand_weekdays() {  # expand_weekdays <spec> → 输出空格分隔的星期数
 }
 
 # ⚠️ 坑 1：plist 里不写 XML 注释（注释中含 `--` 会让 launchd 解析失败，高危）
-write_plist() {  # write_plist <name> <cmd> <interval|-> <calendar|-> <log> [<weekdays|- >]
-  local name="$1" cmd="$2" interval="$3" calendar="$4" log="$5" weekdays="${6:--}"
-  local f; f="$(plist_path "$name")"
-  mkdir -p "$(dirname "$f")" "$(dirname "$log")"
-  {
-    printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' \
-      '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
-      '<plist version="1.0"><dict>'
-    printf '  <key>Label</key><string>%s</string>\n' "$(label_for "$name")"
-    # 每任务一个包装脚本：执行任务 → 记 state → 透传退出码
-    #（⚠️ 不在 plist 里内联命令：XML 转义 + 引号嵌套极易写坏，实测踩过 ✗）
-    local wrapper="$YAN_DATA_ROOT/tasks/$name.sh"
-    cat > "$wrapper" <<WRAP
+# ── 任务包装脚本（**唯一实现**：launchd/cron/systemd 三个后端共用）────────────
+# 每任务一个 wrapper：执行任务 → 记 state → 透传退出码。返回 wrapper 路径。
+write_wrapper() {  # write_wrapper <name> <cmd>
+  local name="$1" cmd="$2"
+  local wrapper="$YAN_DATA_ROOT/tasks/$name.sh"
+  mkdir -p "$(dirname "$wrapper")"
+  cat > "$wrapper" <<WRAP
 #!/bin/bash
-# 数据根：由 yan-task 统一导出（唯一事实源 = platform.sh 的 yan_data_root）——
+# 数据根：由 dia-job 统一导出（唯一事实源 = 平台库的 dia_job_root）——
 # 任务/服务无需自行推导，避免各自写死平台默认值导致分叉（2026-10-21 灰度服务事故）。
 export DIA_JOB_ROOT="$DIA_JOB_ROOT"
 export YAN_DATA_ROOT="$YAN_DATA_ROOT"
-# yan-task 包装（由 yan-task install 生成，勿手改）：执行任务并记录 state（设计 §7 / T2b）
+# dia-job 包装（由 dia-job install 生成，勿手改）：执行任务并记录 state（设计 §7 / T2b）
 #
 # state 记录 = **结构化结论**，供 doctor 检查 8 判「假成功」而**不必扫日志**：
 #   {"ts":…,"exit":N,"verdict":"ok|degraded|failed|skipped","errors":N}
@@ -536,9 +622,9 @@ YAN_VERDICT_FILE="$YAN_DATA_ROOT/tasks/$name.verdict"
 export YAN_VERDICT_FILE            # ⚠️ 必须 export：runner 是子进程，未 export 时读不到（2026-10-29 实测：verdict 恒为空）
 rm -f "\$YAN_VERDICT_FILE"          # 清上一轮残留，防陈旧结论被误用
 # ⚠️ **任务本体必须在子 shell 里跑**（2026-10-13 实测修，既有潜伏缺陷）：
-#    原模板把 cmd 直接放进脚本体 —— 若 cmd 含 `exit`（如 `exit 2`），
+#    原模板把 cmd 直接放进脚本体 —— 若 cmd 含 \`exit\`（如 \`exit 2\`），
 #    会**直接终止整个包装脚本** ⇒ 后面的 state 记录**完全没执行**（静默无记录）。
-#    现网 cmd 多为 `bash '<path>'` 形式故侥幸未爆；此处一并根治。
+#    现网 cmd 多为 \`bash '<path>'\` 形式故侥幸未爆；此处一并根治。
 ( $cmd )
 ec=\$?
 verdict=""
@@ -561,7 +647,23 @@ fi
 printf '{"ts":%s,"exit":%s,"verdict":"%s","errors":%s}\\n' "\$(date +%s)" "\$ec" "\$verdict" "\$errors" >> "$YAN_DATA_ROOT/tasks/$name.state.jsonl"
 exit \$ec
 WRAP
-    chmod +x "$wrapper"
+  chmod +x "$wrapper"
+  printf '%s' "$wrapper"
+}
+
+write_plist() {  # write_plist <name> <cmd> <interval|-> <calendar|-> <log> [<weekdays|- >]
+  local name="$1" cmd="$2" interval="$3" calendar="$4" log="$5" weekdays="${6:--}"
+  local f; f="$(plist_path "$name")"
+  mkdir -p "$(dirname "$f")" "$(dirname "$log")"
+  {
+    printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' \
+      '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
+      '<plist version="1.0"><dict>'
+    printf '  <key>Label</key><string>%s</string>\n' "$(label_for "$name")"
+    # 每任务一个包装脚本：执行任务 → 记 state → 透传退出码
+    #（⚠️ 不在 plist 里内联命令：XML 转义 + 引号嵌套极易写坏，实测踩过 ✗）
+    local wrapper
+    wrapper="$(write_wrapper "$name" "$cmd")" || return 1
     printf '  <key>ProgramArguments</key><array><string>/bin/bash</string><string>%s</string></array>\n' "$wrapper"
     if [ "$interval" != "-" ]; then printf '  <key>StartInterval</key><integer>%s</integer>\n' "$interval"; fi
     if [ "$calendar" != "-" ]; then
@@ -609,8 +711,129 @@ WRAP
 OWN_TASKS=()
 for _t in ${DIA_JOB_OWN_TASKS:-}; do OWN_TASKS+=("$_t"); done
 
-cmd_own_tasks() {
-  case "${1:-}" in
+# ═══════════════════════════════════════════════════════════════════════════
+# Linux 后端（2026-10-30）：periodic → crontab（带 `# dia-job:<name>` 标记）
+#                        service  → systemd --user unit（Restart=always）
+# 为什么 service 不用 cron：cron 表达不了「常驻 + 挂了重拉」（设计 §4 平台矩阵）。
+# 为什么 periodic 不用 systemd timer：得额外维护 .timer 单元与 OnCalendar 语法，
+#   而 cron 一行就够，且 WSL/容器里 cron 更常见（沿用设计 §4 的既定口径）。
+# ═══════════════════════════════════════════════════════════════════════════
+cron_spec() {  # cron_spec <interval|-> <calendar|-> [<weekdays|- >] → 5 段表达式；rc=2 参数错 / 3 表达不了
+  local interval="${1:--}" calendar="${2:--}" weekdays="${3:--}" m h dow
+  if [ "$interval" != "-" ] && [ -n "$interval" ]; then
+    case "$interval" in ''|*[!0-9]*) return 2 ;; esac
+    # cron 最小粒度 = 1 分钟；非整分/小于 1 分钟都表达不了 ⇒ **明确拒绝**（别装成"看着跑"）
+    [ "$interval" -ge 60 ] || return 3
+    [ $((interval % 60)) -eq 0 ] || return 3
+    local mins=$((interval / 60))
+    if [ "$mins" -lt 60 ]; then printf '*/%s * * * *' "$mins"; return 0; fi
+    [ $((mins % 60)) -eq 0 ] || return 3
+    local hrs=$((mins / 60))
+    { [ "$hrs" -le 23 ] && [ $((24 % hrs)) -eq 0 ]; } || return 3
+    printf '0 */%s * * *' "$hrs"
+    return 0
+  fi
+  # 既无 interval 也无 calendar：macOS 上等于「仅 RunAtLoad 跑一次」⇒ Linux 用 cron 的 @reboot
+  # 对齐（开机/重载时跑一次），而不是拒绝 —— 否则同样的 registry 在两端语义不同。
+  [ "$calendar" != "-" ] || { printf '@reboot'; return 0; }
+  m="${calendar##*:}"; h="${calendar%%:*}"
+  m=$((10#$m)); h=$((10#$h))
+  dow="*"
+  if [ "$weekdays" != "-" ] && [ -n "$weekdays" ]; then dow="$(printf '%s' "$weekdays" | tr ' ' ',')"; fi
+  printf '%s %s * * %s' "$m" "$h" "$dow"
+}
+
+_cron_read() { [ -n "$CRONTAB_BIN" ] || return 0; "$CRONTAB_BIN" -l 2>/dev/null || true; }
+_cron_drop() {  # _cron_drop <content> <name> → 去掉该任务条目（保留他人条目）
+  local content="$1" marker="$2"
+  printf '%s\n' "$content" | grep -v -F "$marker" | sed -e '/^[[:space:]]*$/d'
+}
+cron_present() { _cron_read | grep -qF "$(_cron_marker "$1")"; }
+
+cron_install() {  # cron_install <name> <wrapper> <log> <spec> → 打印写入的 crontab 行
+  local name="$1" wrapper="$2" log="$3" spec="$4" marker line cur kept
+  [ -n "$CRONTAB_BIN" ] || { echo "  ✗ 找不到 crontab（先装 cron：apt install cron / dnf install cronie；或设 DIA_JOB_CRONTAB_BIN）" >&2; return 3; }
+  mkdir -p "$(dirname "$log")"
+  marker="$(_cron_marker "$name")"
+  # cron 环境极简 ⇒ 行内显式给 PATH（node/bun/dia 多在 ~/.local/bin）
+  line="$spec PATH=$DIA_JOB_CRON_PATH /bin/bash \"$wrapper\" >> \"$log\" 2>&1 $marker"
+  cur="$(_cron_read)"
+  kept="$(_cron_drop "$cur" "$marker")"
+  if [ -n "$kept" ]; then printf '%s\n%s\n' "$kept" "$line"; else printf '%s\n' "$line"; fi | "$CRONTAB_BIN" - || {
+    echo "  ✗ 写 crontab 失败（权限？）" >&2; return 1; }
+  cron_present "$name" || { echo "  ✗ crontab 写入后未检出标记 ${marker}" >&2; return 1; }
+  printf '%s' "$line"
+}
+
+cron_remove() {  # cron_remove <name>
+  local name="$1" marker cur kept
+  marker="$(_cron_marker "$name")"
+  [ -n "$CRONTAB_BIN" ] || { echo "  · 无 crontab（跳过）"; return 0; }
+  cur="$(_cron_read)"
+  kept="$(_cron_drop "$cur" "$marker")"
+  [ "$kept" = "$cur" ] && { echo "  · crontab 无该条目"; return 0; }
+  if [ -n "$kept" ]; then printf '%s\n' "$kept" | "$CRONTAB_BIN" -; else printf '' | "$CRONTAB_BIN" -; fi || return 1
+  echo "  · 已从 crontab 移除"
+}
+
+write_unit() {  # write_unit <name> <wrapper> <log> [<desc>] → 打印 unit 路径
+  local name="$1" wrapper="$2" log="$3" desc="${4:-dia-job 任务 $1}"
+  local f; f="$(unit_path "$name")"
+  mkdir -p "$(dirname "$f")" "$(dirname "$log")"
+  cat > "$f" <<UNIT
+[Unit]
+Description=$desc
+
+[Service]
+Type=simple
+ExecStart=/bin/bash "$wrapper"
+Restart=always
+RestartSec=10
+StandardOutput=append:$log
+StandardError=append:$log
+
+[Install]
+WantedBy=default.target
+UNIT
+  printf '%s' "$f"
+}
+
+systemd_install() {  # systemd_install <name>
+  local name="$1" unit
+  unit="$(label_for "$name").service"
+  _have_systemd || { echo "  ✗ systemctl --user 不可用（无 user manager？容器/无 session 的机器请改用 periodic 或手工 systemd）" >&2; return 3; }
+  "$SYSTEMCTL_BIN" --user daemon-reload >/dev/null 2>&1 || { echo "  ✗ systemctl --user daemon-reload 失败" >&2; return 1; }
+  "$SYSTEMCTL_BIN" --user enable "$unit" >/dev/null 2>&1 || { echo "  ✗ systemctl --user enable $unit 失败" >&2; return 1; }
+  if "$SYSTEMCTL_BIN" --user is-active --quiet "$unit"; then
+    "$SYSTEMCTL_BIN" --user restart "$unit" >/dev/null 2>&1 || { echo "  ✗ systemctl --user restart $unit 失败" >&2; return 1; }
+  else
+    "$SYSTEMCTL_BIN" --user start "$unit" >/dev/null 2>&1 || { echo "  ✗ systemctl --user start $unit 失败（systemctl --user status $unit 看原因）" >&2; return 1; }
+  fi
+  "$SYSTEMCTL_BIN" --user is-active --quiet "$unit" || { echo "  ✗ $unit 未处于 active（别当装好了）" >&2; return 1; }
+}
+
+systemd_remove() {  # systemd_remove <name>
+  local name="$1" unit f
+  unit="$(label_for "$name").service"; f="$(unit_path "$name")"
+  [ -n "$SYSTEMCTL_BIN" ] && "$SYSTEMCTL_BIN" --user disable --now "$unit" >/dev/null 2>&1 || true
+  if [ -f "$f" ]; then rm -f "$f" && echo "  · 已删 unit：$f"; fi
+  [ -n "$SYSTEMCTL_BIN" ] && "$SYSTEMCTL_BIN" --user daemon-reload >/dev/null 2>&1 || true
+}
+
+systemd_state() {  # systemd_state <name> → "active|inactive|failed|unknown[ PID=n]"
+  local name="$1" unit act pid
+  unit="$(label_for "$name").service"
+  if [ -n "$SYSTEMCTL_BIN" ] && _have_systemd; then
+    act="$("$SYSTEMCTL_BIN" --user is-active "$unit" 2>/dev/null || true)"
+    pid="$("$SYSTEMCTL_BIN" --user show -p MainPID --value "$unit" 2>/dev/null || true)"
+    [ -n "$act" ] || act=unknown
+    case "${pid:-0}" in ''|0) printf '%s' "$act" ;; *) printf '%s PID=%s' "$act" "$pid" ;; esac
+  else
+    printf 'unknown'
+  fi
+}
+
+cmd_own_tasks() {  case "${1:-}" in
     ''|--list)
       echo "本仓自身任务（卸载时应移除）："
       for t in "${OWN_TASKS[@]}"; do echo "  · $t"; done
@@ -667,7 +890,18 @@ cmd_install() {
     esac
   done
   [ -n "$name" ] && [ -n "$cmd" ] || { echo "用法：yan-task install <name> --cmd '<shell>' [--interval 300 | --calendar 09:30 [--weekdays 1-5]] [--desc 说明] [--allow-unstable]" >&2; return 2; }
-  if [ "$PLATFORM" != macos ]; then echo "本增量仅实现 macOS 后端（Linux/WSL/Windows 见设计 §4.1）" >&2; return 3; fi
+  if [ "$PLATFORM" = macos ]; then
+    : # launchd 后端（下面的分支照旧）
+  elif [ "$PLATFORM" = linux ] || [ "$PLATFORM" = wsl ]; then
+    # 后端可用性前置检查（宁可装的时候炸，也别装完发现根本不跑）
+    if [ "$type" = service ]; then
+      _have_systemd || { echo "  ✗ 本机 systemctl --user 不可用（无 user manager；容器/无 session 环境请改用 periodic，或手工 systemd unit）" >&2; return 3; }
+    else
+      [ -n "$CRONTAB_BIN" ] || { echo "  ✗ 找不到 crontab（先装 cron：apt install cron / dnf install cronie；或设 DIA_JOB_CRONTAB_BIN）" >&2; return 3; }
+    fi
+  else
+    echo "本平台（${PLATFORM}）暂不支持 install（设计 §4.1：Windows native 待实现）" >&2; return 3
+  fi
 
   # ── 调度参数校验（2026-10-21 补，事故驱动）──────────────────────────────
   # ⚠️ 此前 `--calendar 09`（漏写分钟）被**静默接受**：`${calendar##*:}` 取不到 `:` 就返回整个
@@ -745,13 +979,42 @@ cmd_install() {
       echo "      · 已按 --allow-unstable 放行（desc: ${desc}）" >&2 ;;
   esac
 
-  local log="$YAN_DATA_ROOT/tasks/$name.log" f
-  f="$(write_plist "$name" "$cmd" "$interval" "$calendar" "$log" "${wd_expanded:--}")" || return 1
-  if _launchd_off; then
-    echo "  · 已跳过 launchd 加载（YAN_TASK_NO_LAUNCHD=1；测试隔离）"
+  local log="$YAN_DATA_ROOT/tasks/$name.log" f backend="launchd"
+  if [ "$PLATFORM" = macos ]; then
+    f="$(write_plist "$name" "$cmd" "$interval" "$calendar" "$log" "${wd_expanded:--}")" || return 1
+    if _launchd_off; then
+      echo "  · 已跳过 launchd 加载（YAN_TASK_NO_LAUNCHD=1；测试隔离）"
+    else
+      launchctl bootout "gui/$UID_NUM/$(label_for "$name")" 2>/dev/null || true   # 幂等：先卸
+      launchctl bootstrap "gui/$UID_NUM" "$f" 2>/dev/null || { echo "  ✗ launchctl bootstrap 失败" >&2; return 1; }
+    fi
+  elif [ "$type" = service ]; then
+    # ── Linux service：systemd --user（Restart=always ≈ launchd KeepAlive）──
+    backend=systemd
+    local wrapper; wrapper="$(write_wrapper "$name" "$cmd")" || return 1
+    f="$(write_unit "$name" "$wrapper" "$log" "$desc")" || return 1
+    if [ "$DIA_JOB_NO_LAUNCHD" = 1 ]; then
+      echo "  · 已跳过 systemd 加载（DIA_JOB_NO_LAUNCHD=1；测试隔离）"
+    else
+      systemd_install "$name" || return 1
+    fi
   else
-    launchctl bootout "gui/$UID_NUM/$(label_for "$name")" 2>/dev/null || true   # 幂等：先卸
-    launchctl bootstrap "gui/$UID_NUM" "$f" 2>/dev/null || { echo "  ✗ launchctl bootstrap 失败" >&2; return 1; }
+    # ── Linux periodic：crontab（带标记，幂等增删）──
+    backend=cron
+    local wrapper spec rc
+    spec="$(cron_spec "$interval" "$calendar" "${wd_expanded:--}")"; rc=$?
+    if [ "$rc" = 2 ]; then
+      echo "  ✗ 调度参数不合法（见用法）" >&2; return 2
+    elif [ "$rc" = 3 ]; then
+      echo "  ✗ 该调度在 cron 表达不了：--interval 必须是 ≥60 秒的整分（且 ≤23h、24 可整除），或改用 --calendar HH:MM" >&2; return 2
+    fi
+    wrapper="$(write_wrapper "$name" "$cmd")" || return 1
+    if [ "$DIA_JOB_NO_LAUNCHD" = 1 ]; then
+      echo "  · 已跳过 crontab 写入（DIA_JOB_NO_LAUNCHD=1；测试隔离）"
+      f="$wrapper"
+    else
+      f="$(cron_install "$name" "$wrapper" "$log" "$spec")" || return 1
+    fi
   fi
   # ⚠️ **必须把 label 写进 registry**（2026-10-12 修）：install 此前不记 label →
   #    selfcheck 读不到 → 回退推导（若与 label_of 不一致）→ 判「缺失」→ **重建出重复条目**
@@ -759,20 +1022,41 @@ cmd_install() {
   #    写入 label 后，selfcheck/status/bootstrap 一律以 registry 为准，不再推导。
   local real_label; real_label="$(label_for "$name")"
   # T2：同时固化 path_class（install 时判定一次，此后迭代**不需要改注册信息** —— 用户 D4）
-  reg_set "$name" "$(json json type="$type" backend=launchd label="$real_label" cmd="$cmd" interval="$interval" calendar="$calendar" weekdays="$weekdays" desc="$desc" log="$log" path_class="$YP_CLASS")"
+  reg_set "$name" "$(json json type="$type" backend="$backend" label="$real_label" cmd="$cmd" interval="$interval" calendar="$calendar" weekdays="$weekdays" desc="$desc" log="$log" path_class="$YP_CLASS")"
   echo "INSTALLED ${name}（${f}）"
   echo "  · path_class: $YP_CLASS"
-  if _launchd_off; then echo "  · launchd 加载已跳过（测试隔离）";
-  elif launchctl print "gui/$UID_NUM/$(label_for "$name")" >/dev/null 2>&1; then echo "  ✓ launchd 已加载";
-  else echo "  ⚠️ launchd 未确认加载"; fi
+  echo "  · backend: $backend"
+  if [ "$PLATFORM" = macos ]; then
+    if _launchd_off; then echo "  · launchd 加载已跳过（测试隔离）";
+    elif launchctl print "gui/$UID_NUM/$(label_for "$name")" >/dev/null 2>&1; then echo "  ✓ launchd 已加载";
+    else echo "  ⚠️ launchd 未确认加载"; fi
+  elif [ "$backend" = systemd ]; then
+    if [ "$DIA_JOB_NO_LAUNCHD" = 1 ]; then echo "  · systemd 加载已跳过（测试隔离）"
+    else echo "  ✓ systemd --user 已启用并 active（$(systemd_state "$name")）"; fi
+  else
+    if [ "$DIA_JOB_NO_LAUNCHD" = 1 ]; then echo "  · crontab 写入已跳过（测试隔离）"
+    elif cron_present "$name"; then echo "  ✓ crontab 已登记（$(cron_present_spec "$name")）"; else echo "  ⚠️ crontab 未确认登记"; fi
+  fi
 }
+
+cron_present_spec() { _cron_read | grep -F "$(_cron_marker "$1")" | head -1 | cut -d' ' -f1-5; }
 
 cmd_uninstall() {
   local name="${1:-}"
   [ -n "$name" ] || { echo "用法：yan-task uninstall <name>" >&2; return 2; }
-  local f; f="$(plist_path "$name")"
-  _launchd_off || launchctl bootout "gui/$UID_NUM/$(label_for "$name")" 2>/dev/null || true   # ⚠️ 守卫必须在**这一行**（先前误命中 install 的同名行 ⇒ uninstall 未隔离，实测踩到）
-  [ -f "$f" ] && rm -f "$f" && echo "  · 已删 plist"
+  local backend=""
+  [ -f "$REG" ] && backend="$(json field "$REG" "$name" backend 2>/dev/null || true)"
+  if [ "$PLATFORM" = macos ] || [ "$backend" = launchd ]; then
+    local f; f="$(plist_path "$name")"
+    _launchd_off || launchctl bootout "gui/$UID_NUM/$(label_for "$name")" 2>/dev/null || true   # ⚠️ 守卫必须在**这一行**（先前误命中 install 的同名行 ⇒ uninstall 未隔离，实测踩到）
+    [ -f "$f" ] && rm -f "$f" && echo "  · 已删 plist"
+  elif [ "$backend" = systemd ]; then
+    [ "$DIA_JOB_NO_LAUNCHD" = 1 ] || systemd_remove "$name"
+    [ "$DIA_JOB_NO_LAUNCHD" = 1 ] && echo "  · 已跳过 systemd 卸载（测试隔离）"
+  else
+    [ "$DIA_JOB_NO_LAUNCHD" = 1 ] || cron_remove "$name"
+    [ "$DIA_JOB_NO_LAUNCHD" = 1 ] && echo "  · 已跳过 crontab 移除（测试隔离）"
+  fi
   [ -f "$YAN_DATA_ROOT/tasks/$name.sh" ] && rm -f "$YAN_DATA_ROOT/tasks/$name.sh" && echo "  · 已删包装脚本"
   reg_del "$name"
   echo "REMOVED ${name}（state/日志保留在 $YAN_DATA_ROOT/tasks/）"
@@ -787,9 +1071,17 @@ cmd_adopt() {
   if [ "$PLATFORM" = macos ] && ! launchctl print "gui/$UID_NUM/$label" >/dev/null 2>&1; then
     echo "  ⚠️ $label 当前未加载（仍登记，便于 status/bootstrap 可见）"
   fi
-  local short="${label##*.}"
-  reg_set "$short" "$(json json type="$type" backend=launchd label="$label" adopted=true desc="$desc" cmd="$cmd")"
-  echo "ADOPTED ${short}（label=${label}）"
+  local short="${label##*.}" backend="launchd"
+  case "$PLATFORM" in
+    linux|wsl) if [ "$type" = service ]; then backend=systemd; else backend=cron; fi ;;
+  esac
+  if [ "$backend" = systemd ] && [ ! -f "$(unit_path "$short")" ]; then
+    echo "  ⚠️ 未找到 unit：$(unit_path "$short")（仍登记，便于 status/selfcheck 可见）"
+  elif [ "$backend" = cron ] && ! cron_present "$short"; then
+    echo "  ⚠️ crontab 里没有 $(_cron_marker "$short") 条目（仍登记；adopted 条目由对方维护）"
+  fi
+  reg_set "$short" "$(json json type="$type" backend="$backend" label="$label" adopted=true desc="$desc" cmd="$cmd")"
+  echo "ADOPTED ${short}（label=${label}，backend=${backend}）"
 }
 
 
@@ -821,24 +1113,49 @@ echo "══ yan-task selfcheck（边界=$PLATFORM${_dry_banner}）══"
       #    （实测：personal-agent 的 yan-self-update 长期未加载 ⇒ 每 5 分钟一次 failed）。
       #    正解：**提示**它未加载 + 指向其项目脚本，不进 missing 计数。
       local _adopted=0; [ "${adopted:-}" = "1" ] && _adopted=1
+      # 本条目在其后端是否"在场"（launchd 已加载 / cron 有条目 / systemd 已启用且 active）
+      local _present=0 _why=""
       if [ "$PLATFORM" = macos ]; then
-        if launchctl print "gui/$UID_NUM/$label" >/dev/null 2>&1; then
-          echo "  ✓ ${short}（$label 已加载）"
+        launchctl print "gui/$UID_NUM/$label" >/dev/null 2>&1 && _present=1
+        _why="$label 未加载"
+      else
+        local _be; _be="$(json field "$REG" "$short" backend 2>/dev/null || true)"
+        case "${_be:-cron}" in
+          systemd)
+            if "$SYSTEMCTL_BIN" --user is-enabled "$label.service" >/dev/null 2>&1; then _present=1; fi
+            _why="$label.service 未启用/未 active" ;;
+          *)
+            cron_present "$short" && _present=1
+            _why="crontab 缺 $(_cron_marker "$short") 条目" ;;
+        esac
+      fi
+      if [ "$_present" = 1 ]; then
+        echo "  ✓ ${short}（$label 在场）"
+      else
+        if [ "$_adopted" = 1 ]; then
+          echo "  · ${short}：不在场（**adopted**：${_why} —— 由对方项目自管，不计缺失）"
         else
-          if [ "$_adopted" = 1 ]; then
-            echo "  · ${short}：未加载（**adopted**：plist 由对方项目自管 —— 不计缺失；需其项目脚本重装/启动）"
-          else
-          missing=$((missing+1))
-          if [ "$dry" = 1 ]; then echo "  ⚠️ ${short}：$label 未加载（dry-run 不修）"
-          else
-            local cmd iv cal wd
-            # ⚠️ 重建时**必须把调度字段一并带回来**（2026-10-21 修）：原先只传 --cmd，
-            #    plist 会丢 StartCalendarInterval ⇒ selfcheck 一跑，任务就变成「只在 RunAtLoad 跑一次」。
-            IFS=$'\t' read -r cmd iv cal wd < <(json fields "$REG" "$short")
-            if [ -n "$cmd" ]; then cmd_install "$short" --cmd "$cmd" --label "$label" --interval "$iv" --calendar "$cal" --weekdays "$wd" >/dev/null && { echo "  ✚ $short 已重建"; fixed=$((fixed+1)); }
-            else echo "  ⚠️ ${short}：未加载且 registry 无 cmd（adopted 任务请按其项目脚本重装）"; fi
-          fi
-          fi
+        missing=$((missing+1))
+        if [ "$dry" = 1 ]; then echo "  ⚠️ ${short}：${_why}（dry-run 不修）"
+        else
+          local cmd iv cal wd type pcls dsc
+          # ⚠️ 重建时**必须把调度字段一并带回来**（2026-10-21 修）：原先只传 --cmd，
+          #    plist 会丢 StartCalendarInterval ⇒ selfcheck 一跑，任务就变成「只在 RunAtLoad 跑一次」。
+          # 2026-10-30：type 也要带回（Linux 上 service→systemd / periodic→cron 靠它分派）。
+          # 2026-10-30：path_class 非 main-checkout 的（如 `echo hi` 这种无路径 cmd）重建时要带
+          #    `--allow-unstable --desc`，否则被 T1 门控挡下 ⇒ **selfcheck 永远修不好**（实测）。
+          IFS=$'\t' read -r cmd iv cal wd type < <(json fields "$REG" "$short")
+          pcls="$(json field "$REG" "$short" path_class 2>/dev/null || true)"
+          dsc="$(json field "$REG" "$short" desc 2>/dev/null || true)"
+          local -a _extra=()
+          case "${pcls:-}" in
+            ephemeral) ;;   # 临时 worktree 路径：不自动重建（会引回悬空引用）
+            non-repo-abs|unknown) _extra+=(--allow-unstable) ;;
+          esac
+          [ -n "$dsc" ] || dsc="selfcheck 重建（原 desc 缺失）"
+          if [ -n "$cmd" ]; then cmd_install "$short" --cmd "$cmd" --label "$label" --interval "$iv" --calendar "$cal" --weekdays "$wd" --type "${type:-periodic}" --desc "$dsc" "${_extra[@]}" >/dev/null 2>&1 && { echo "  ✚ $short 已重建"; fixed=$((fixed+1)); }
+          else echo "  ⚠️ ${short}：不在场且 registry 无 cmd（adopted 任务请按其项目脚本重装）"; fi
+        fi
         fi
       fi
     done < <(json selfcheck-rows "$REG" "$DIA_JOB_LABEL_PREFIX")
@@ -876,7 +1193,7 @@ echo "══ yan-task selfcheck（边界=$PLATFORM${_dry_banner}）══"
   local hb="$YAN_DATA_ROOT/observability/kb-review-heartbeat.json"
   if [ -f "$hb" ]; then
     local _mtime _age
-    _mtime="$(stat -f %m "$hb" 2>/dev/null || stat -c %Y "$hb" 2>/dev/null || echo 0)"
+    _mtime="$(_mtime_secs "$hb")"
     _age=$(( $(date +%s) - _mtime ))
     if [ "$_age" -gt $((26*3600)) ]; then
       echo "  ✗ kb-review 心跳过期（$((_age/3600))h > 26h）—— review 可能长期未跑"
@@ -911,7 +1228,7 @@ cmd_bootstrap() {  # 幂等重建本边界全部条目（设计 §6.1 兜底入�
   local dry=0; [ "${1:-}" = "--dry-run" ] && dry=1
   [ -f "$REG" ] || { echo "无 registry（${REG}）—— 没有可重建的任务"; return 0; }
   json bootstrap-rows "$REG" | \
-  while IFS=$'\t' read -r n c i cal dsc wd; do
+  while IFS=$'\t' read -r n c i cal dsc wd type pcls; do
     [ -n "$n" ] || continue
     if [ "$dry" = 1 ]; then printf 'DRYRUN\t%s\t%s\t%s\t%s\n' "$n" "$c" "$i" "$cal"; continue; fi
       # ⚠️ **字段必须制表符分隔**（2026-10-16 实测修）：原先 `print(n, cmd, …)` + `IFS=' '` —— 而 cmd 里
@@ -919,7 +1236,12 @@ cmd_bootstrap() {  # 幂等重建本边界全部条目（设计 §6.1 兜底入�
   #    ⇒ 门控判 unknown ⇒ **每个任务都 rc=4**，bootstrap（设计的兜底恢复入口）在 mac 上**完全不可用**。
   # ⚠️ 退出码必须**显式捕获**：`if cmd …; then` 之后 `$?` 已被条件判定覆盖，
     #   直接读会拿到 0/1 而非真实 rc（2026-10-13 自查发现）⇒ 先执行、再判 rc。
-    cmd_install "$n" --cmd "$c" --interval "$i" --calendar "$cal" --weekdays "$wd" --desc "$dsc" >/dev/null 2>&1
+    # 2026-10-30：带上 type / path_class —— 否则 Linux 上 service 会被建成 periodic，
+    #   而 `echo hi` 这类无绝对路径的 cmd 会撞 T1 门控（rc=4）⇒ bootstrap 修不好自己。
+    local -a _extra=()
+    case "${pcls:-}" in ephemeral) ;; non-repo-abs|unknown) _extra+=(--allow-unstable) ;; esac
+    [ -n "$dsc" ] || dsc="bootstrap 重建（原 desc 缺失）"
+    cmd_install "$n" --cmd "$c" --interval "$i" --calendar "$cal" --weekdays "$wd" --desc "$dsc" --type "${type:-periodic}" "${_extra[@]}" >/dev/null 2>&1
     local rc=$?
     if [ "$rc" = 0 ]; then
       echo "  ✓ 重建 $n"

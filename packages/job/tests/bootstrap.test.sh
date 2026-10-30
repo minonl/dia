@@ -96,7 +96,7 @@ mkdir -p "$DR/repos/yan-agent/scripts"; [ -d "$DR/repos/yan-agent/.git" ] || { g
 printf '#!/bin/bash\n' > "$DR/repos/yan-agent/scripts/x.sh"
 OUT5="$(YAN_TASK_NO_LAUNCHD=1 bash "$YT" install demo-isolated --cmd "bash '$DR/repos/yan-agent/scripts/x.sh'" --desc '隔离演示' 2>&1)"; RC5=$?
 [ "$RC5" = 0 ] && ok "install 成功（rc=0）" || { bad "install 失败（rc=${RC5}）"; printf '%s\n' "$OUT5" | sed 's/^/     | /'; }
-printf '%s' "$OUT5" | grep -q "已跳过 launchd 加载" && ok "明确声明跳过 launchd 写入" || { bad "未声明跳过"; printf '%s\n' "$OUT5" | sed 's/^/     | /'; }
+printf '%s' "$OUT5" | grep -qE "已跳过 (launchd 加载|crontab 写入|systemd 加载)" && ok "明确声明跳过调度写入（launchd/crontab/systemd）" || { bad "未声明跳过"; printf '%s\n' "$OUT5" | sed 's/^/     | /'; }
 printf '%s' "$OUT5" | grep -q "launchctl bootstrap 失败" && bad "仍在尝试真实 launchctl" || ok "未触发真实 launchctl 调用"
 
 echo "== 6. 静态契约：launchd 写入点**必须都在隔离守卫下**（2026-10-16 实测踩到"守卫打错行"）=="

@@ -3,6 +3,7 @@
 // 解析优先级：显式 --persona > DIA_PERSONA > 唯一已装 persona（>1 个时必须显式指定，不猜）。
 // 作用域回答三件事：读哪棵知识树、用哪个数据根、有哪些域命令可委派。
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import * as active from "./active.ts";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -66,7 +67,7 @@ export function current(explicit?: string): Scope | null {
   if (!id) return null;
   const idDir = join(dataDir(), "personas", id);
   if (!existsSync(idDir)) throw new Error(`E_SCOPE: persona not installed: ${id}`);
-  const version = latest(idDir)!;
+  const version = active.effective(id)?.version ?? latest(idDir)!;
   const dir = join(idDir, version);
   const lock = readJson(join(dir, "dia.lock")) ?? {};
   const kits: KitScope[] = [];

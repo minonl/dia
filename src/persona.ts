@@ -225,6 +225,19 @@ export function verify(id: string, version?: string): { ok: boolean; dir: string
   for (const d of lock.renderedDirs || []) {
     if (!existsSync(d.path) || hashTree(d.path) !== d.hash) renderedOk = false;
   }
+  // persona 自带内容的产物（files 复制 / skills 软链）也要校验
+  for (const r of lock.content?.rendered ?? []) {
+    if (r.type === "dir") continue;
+    if (!existsSync(r.path)) { renderedOk = false; continue; }
+    if (r.type === "file") {
+      if (shaFile(r.path) !== r.value) renderedOk = false;
+    } else {
+      let cur = "";
+      try { cur = realpathSync(r.path); } catch { renderedOk = false; continue; }
+      const want = resolve(dir, r.value);
+      if (!existsSync(want) || cur !== realpathSync(want)) renderedOk = false;
+    }
+  }
   return { ok: real === lock.hash && renderedOk, dir, expected: lock.hash, actual: real };
 }
 

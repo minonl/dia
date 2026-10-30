@@ -8,6 +8,8 @@ import { resumeCard } from "../../../src/resume.ts";
 import * as persona from "../../../src/persona.ts";
 import * as kit from "../../../src/kit.ts";
 import * as scope from "../../../src/scope.ts";
+import * as active from "../../../src/active.ts";
+import * as doctor from "../../../src/doctor.ts";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -110,7 +112,8 @@ usage:
   dia run --session S [--tool T] [--agent A] [--waive --risk N] [--redline] -- <cmd> [args...]
   dia resume --session S [--json]
   dia persona add <id|--from SRC> [--ref REF] [--host opencode] [--dry-run] [--json]
-  dia persona list|verify|remove
+  dia persona list|verify|remove|show <id>|use <id>[@ver]
+  dia doctor [--persona ID] [--json]
   dia persona default <id>|--unset|--show [--host opencode]
   dia kit add --from SRC [--ref REF] [--dry-run] [--json]
   dia kit list|verify <id>|remove <id>
@@ -502,6 +505,29 @@ async function personaCli(argv: string[]): Promise<number> {
       return r.ok ? 0 : 1;
     } catch (e: any) { err(e?.message || String(e)); return 31; }
   }
+  if (sub === "use") {
+    const spec = positional(args)[0];
+    if (!spec) { err("usage: dia persona use <id>[@<version>] [--latest] [--reason R]"); return 2; }
+    const [id, ver] = spec.split("@");
+    try {
+      const r = active.use(id, ver || (has(args, "--latest") ? null : null), { reason: flag(args, "--reason") });
+      out(asJson ? JSON.stringify(r) : `${id}: ${r.previous ?? "(未设置)"} → ${r.current.version}（${r.current.commit ?? "?"}, by ${r.current.by}）`);
+      return 0;
+    } catch (e: any) {
+      err(e?.message || String(e));
+      return String(e?.message || "").startsWith("E_VERSION") ? 21 : 31;
+    }
+  }
+  if (sub === "show") {
+    const id = positional(args)[0];
+    if (!id) { err("missing id"); return 2; }
+    const eff = active.effective(id);
+    const hist = active.history(id, 5);
+    if (asJson) { out(JSON.stringify({ id, effective: eff, history: hist }, null, 1)); return 0; }
+    out(`${id}: 生效 ${eff ? `${eff.version}（${eff.source === "active" ? "active 指针" : "最新安装"}）` : "(未安装)"}`);
+    for (const h of hist) out(`  ${h.at}  ${h.previous ?? "-"} → ${h.version}  by ${h.by}${h.reason ? `  ${h.reason}` : ""}`);
+    return 0;
+  }
   if (sub === "default") {
     const id = positional(args)[0] || null;
     try {
@@ -662,6 +688,15 @@ export async function main(rawArgv: string[]): Promise<number> {
   if (cmd === "persona") return personaCli(argv.slice(1));
   if (cmd === "kit") return kitCli(argv.slice(1));
   if (cmd === "wt") return wtCli(argv.slice(1));
+  if (cmd === "doctor") {
+    const r = doctor.run({ persona: flag(argv, "--persona") });
+    if (has(argv, "--json")) out(JSON.stringify(r, null, 1));
+    else {
+      for (const c of r.checks) out(`${c.status === "ok" ? "✓" : c.status === "warn" ? "!" : "✗"} ${c.name.padEnd(20)} ${c.detail}`);
+      out(`verdict: ${r.verdict}`);
+    }
+    return r.verdict === "ok" ? 0 : r.verdict === "warn" ? 1 : 2;
+  }
   // B：`dia cmd <name>` 只查 persona（外部）命令，允许与内置同名也不回退
   if (cmd === "cmd") {
     const [name, ...rest] = argv.slice(1);

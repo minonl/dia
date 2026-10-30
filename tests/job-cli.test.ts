@@ -1,10 +1,21 @@
 import { describe, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 
 const root = join(import.meta.dir, "..");
+
+// 宿主平台期望值（与 dia-job 的 detect_platform 同口径）：
+// 原来的断言把 "macos" 写死 ⇒ 在 Linux/WSL 上必然假红（2026-10-30 实测 levm）。
+function hostPlatform(): string {
+  if (process.platform === "darwin") return "macos";
+  if (process.platform === "linux") {
+    try { return /microsoft/i.test(readFileSync("/proc/version", "utf8")) ? "wsl" : "linux"; }
+    catch { return "linux"; }
+  }
+  return process.platform;
+}
 
 function runJob(args: string[], env: Record<string, string>) {
   return spawnSync(process.execPath, ["src/cli.ts", "job", ...args], {
@@ -36,6 +47,6 @@ describe("dia job routing", () => {
     const dir = mkdtempSync(join(tmpdir(), "dia-job-cli-empty-"));
     const r = runJob(["platform"], { HOME: dir, DIA_JOB_BIN: "" });
     expect(r.status).toBe(0);
-    expect(r.stdout.trim()).toBe("macos");
+    expect(r.stdout.trim()).toBe(hostPlatform());
   });
 });

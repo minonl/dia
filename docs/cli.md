@@ -16,6 +16,7 @@
 | **render** | **不换内容**，只把已安装版本重渲染到宿主（宿主升级/文件漂移） | — | `dia persona render dabo --host dsh` |
 | **verify** | 清单/哈希/版本校验 | — | `dia persona verify dabo` |
 | **list / show** | 列出 / 看详情 | — | `dia persona list` |
+| **path** | 打印**生效版本目录**（服务/脚本取代码的稳定入口） | — | `dia persona path yan` |
 | **add / remove**（kit） | 同上，作用于内容 | — | `dia kit add git+...` |
 
 **不要用**：
@@ -84,6 +85,7 @@ dia persona remove dabo
 | `persona add --from git+... --ref` | 已实现（fetch 后 checkout FETCH_HEAD） |
 | `persona add --host dsh` | 未实现（E_HOST，exit 33） |
 | `persona create / update / render / show` | 未实现（exit 2） |
+| `persona path [<id>[@<ver>]]` | **已实现**（2026-10-30）：生效版本目录；`--json` 出 `{id,version,dir,source,commit}`；**未装/版本不存在即非 0 退出**（消费方据此大声失败，不回退旧 checkout） |
 | `kit ...` | 未实现（exit 2） |
 | `patch ...` | 未实现（exit 2） |
 | `task add/list/status/done` | **已实现**（done 需 judge+evidence） |

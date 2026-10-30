@@ -209,6 +209,18 @@ export function list(): { id: string; versions: string[] }[] {
     .map((e) => ({ id: e.name, versions: readdirSync(join(root, e.name)).filter((v) => statSync(join(root, e.name, v)).isDirectory()) }));
 }
 
+/**
+ * 版本目录解析（`dia persona path` 的唯一实现）。
+ * version 缺省 ⇒ **生效版本**（active 指针，无指针回退最新安装）——与 scope.current 同口径，
+ * 供服务入口 / 脚本取「当前生效的 persona 快照目录」，别让消费方自己拼 personas/<id>/<ver>。
+ */
+export function dirOf(id: string, version?: string): { dir: string; version: string } | null {
+  const v = version || active.effective(id)?.version;
+  if (!v) return null;
+  const dir = join(dataDir(), "personas", id, v);
+  return existsSync(dir) ? { dir, version: v } : null;
+}
+
 export function verify(id: string, version?: string): { ok: boolean; dir: string; expected: string; actual: string } {
   const idDir = join(dataDir(), "personas", id);
   if (!existsSync(idDir)) throw new Error("E_NOT_INSTALLED");

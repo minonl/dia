@@ -114,6 +114,7 @@ usage:
   dia resume --session S [--json]
   dia persona add <id|--from SRC> [--ref REF] [--host opencode] [--dry-run] [--json]
   dia persona list|verify|remove|show <id>|use <id>[@ver]
+  dia persona path [<id>[@<ver>]] [--json]   # 打印生效版本目录（服务/脚本取代码入口）
   dia persona check <id>|update <id> [--ref REF]
   dia doctor [--persona ID] [--json]
   dia env list|check [KEY…] | env [--dry-run] [--redact] <cmd…>
@@ -531,6 +532,28 @@ async function personaCli(argv: string[]): Promise<number> {
     for (const h of hist) out(`  ${h.at}  ${h.previous ?? "-"} → ${h.version}  by ${h.by}${h.reason ? `  ${h.reason}` : ""}`);
     return 0;
   }
+  // 生效版本目录：服务入口 / 脚本取代码用（2026-10-30 迁移：dws-hub 服务入口从 yan-ref 切到这里）
+  // 语义：id 缺省 ⇒ 走 persona 作用域（--persona / DIA_PERSONA / 唯一已装）；版本缺省 ⇒ active 指针
+  if (sub === "path") {
+    const spec = positional(args)[0] || "";
+    const [wantId, wantVer] = spec.split("@");
+    try {
+      const sc = scope.current(wantId || undefined);
+      if (!sc) { err("E_SCOPE: 未安装任何 persona（先 dia persona add <id>）"); return 31; }
+      const hit = persona.dirOf(sc.id, wantVer || undefined);
+      if (!hit) { err(`E_VERSION: ${sc.id}@${wantVer} 未安装`); return 21; }
+      const eff = active.effective(sc.id);
+      const payload = {
+        id: sc.id,
+        version: hit.version,
+        dir: hit.dir,
+        source: wantVer ? "explicit" : (eff?.source ?? "latest"),
+        commit: active.read(sc.id)?.commit ?? null,
+      };
+      out(asJson ? JSON.stringify(payload, null, 1) : hit.dir);
+      return 0;
+    } catch (e: any) { err(e?.message || String(e)); return 31; }
+  }
   if (sub === "check") {
     const id = positional(args)[0];
     if (!id) { err("missing id"); return 2; }
@@ -591,7 +614,7 @@ async function personaCli(argv: string[]): Promise<number> {
       return r.skipped?.length ? 30 : 0;
     } catch (e: any) { err(e?.message || String(e)); return 31; }
   }
-  err("usage: dia persona add|list|verify|remove");
+  err("usage: dia persona add|list|verify|remove|show|use|path|check|update|default");
   return 2;
 }
 

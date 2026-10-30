@@ -179,27 +179,102 @@ export async function assertIndex(root: string, dbPath?: string): Promise<string
 
 export interface Hit { path: string; title: string; snippet: string }
 
+export interface Hit { path: string; title: string; snippet: string; score?: number; why?: string }
+
+function queryTerms(q: string): string[] {
+  const out = new Set<string>();
+  const parts = q.split(/[\s,，。.;；:：!?！？、|/]+/).map((x) => x.trim()).filter(Boolean);
+  for (const p of parts) {
+    out.add(p);
+    // CJK 长词切 2/3 字，避免把“评审请求消息模板”当成一个不可匹配的整串
+    for (const run of p.match(/[\u4e00-\u9fff]+/g) || []) {
+      const chars = [...run];
+      for (let n = 2; n <= 3; n++) {
+        for (let i = 0; i + n <= chars.length; i++) out.add(chars.slice(i, i + n).join(""));
+      }
+    }
+  }
+  return [...out].slice(0, 24);
+}
+
+function ftsOr(terms: string[]): string {
+  return terms.map((t) => `"${t.replace(/"/g, "")}"`).join(" OR ");
+}
+
 export async function search(root: string, query: string, dbPath?: string, limit = 10): Promise<Hit[]> {
   const q = query.trim();
   if (!q) return [];
   const path = await assertIndex(root, dbPath);
   const db = await openDb(path, { readonly: true });
   try {
+    const out: Hit[] = [];
+    const seen = new Set<string>();
+    const add = (rows: any[], why: string) => {
+      for (const r of rows) {
+        const p = String(r.path || "");
+        if (!p || seen.has(p) || out.length >= limit) continue;
+        seen.add(p);
+        out.push({ path: p, title: r.title, snippet: String(r.snip || "").replace(/\n/g, " "), score: r.score, why });
+      }
+    };
+
+    // 1) ID 直通：R30.5 / V1 等精确 ID，不依赖分词
+    if (/^[RVS]\d+(?:\.\d+)*$/i.test(q)) {
+      add(db.all<any>(
+        "SELECT path,title,substr(body, max(1, instr(body, ?) - 40), 180) AS snip FROM docs " +
+        "WHERE body LIKE ? OR title LIKE ? ORDER BY CASE WHEN body LIKE ? THEN 0 ELSE 1 END, tokens ASC LIMIT ?",
+        [q, `%${q}%`, `%${q}%`, `%### %${q}.%`, limit],
+      ), "id");
+      return out;
+    }
+
+    // 1b) 查询里夹带 ID（如 “R30.5 评审…”）：ID 精确命中优先，但继续合并语义结果
+    const idToken = q.match(/\b[RVS]\d+(?:\.\d+)*\b/i)?.[0];
+    if (idToken) {
+      add(db.all<any>(
+        "SELECT path,title,substr(body, max(1, instr(body, ?) - 40), 180) AS snip FROM docs " +
+        "WHERE body LIKE ? OR title LIKE ? ORDER BY CASE WHEN body LIKE ? THEN 0 ELSE 1 END, tokens ASC LIMIT ?",
+        [idToken, `%${idToken}%`, `%${idToken}%`, `%### %${idToken}.%`, limit],
+      ), "id-token");
+    }
+
+    const terms = queryTerms(q);
+    // 2) 整句 phrase（英文/短词优先）
     if ([...q].length >= 3) {
       const phrase = '"' + q.replace(/"/g, "") + '"';
       try {
-        const rows = db.all<any>(
-          "SELECT path, title, snippet(docs_fts, 2, '[', ']', '…', 12) AS snip FROM docs_fts WHERE docs_fts MATCH ? ORDER BY bm25(docs_fts) LIMIT ?",
+        add(db.all<any>(
+          "SELECT path,title,snippet(docs_fts, 2, '[', ']', '…', 12) AS snip FROM docs_fts " +
+          "WHERE docs_fts MATCH ? ORDER BY bm25(docs_fts, 0.0, 5.0, 1.0) + CASE WHEN path LIKE 'rules/%' THEN -0.3 ELSE 0 END LIMIT ?",
           [phrase, limit],
-        );
-        if (rows.length) return rows.map((r) => ({ path: r.path, title: r.title, snippet: String(r.snip || "").replace(/\n/g, " ") }));
+        ), "phrase");
       } catch { /* fall through */ }
     }
-    const rows = db.all<any>(
-      "SELECT path, title, substr(body, max(1, instr(body, ?) - 40), 160) AS snip FROM docs WHERE body LIKE ? ORDER BY tokens DESC LIMIT ?",
-      [q, "%" + q + "%", limit],
-    );
-    return rows.map((r) => ({ path: r.path, title: r.title, snippet: String(r.snip || "").replace(/\n/g, " ") }));
+    // 3) term OR（多词/长中文退阶）；FTS 对 <3 字可能无结果，继续 LIKE
+    if (out.length < limit && terms.length > 1) {
+      try {
+        add(db.all<any>(
+          "SELECT path,title,snippet(docs_fts, 2, '[', ']', '…', 12) AS snip FROM docs_fts " +
+          "WHERE docs_fts MATCH ? ORDER BY bm25(docs_fts, 0.0, 5.0, 1.0) + CASE WHEN path LIKE 'rules/%' THEN -0.3 ELSE 0 END LIMIT ?",
+          [ftsOr(terms), limit],
+        ), "terms");
+      } catch { /* fall through */ }
+    }
+    // 4) LIKE 退阶：按 title/body 命中权重排序，不再按文档长度
+    if (out.length < limit) {
+      const where = terms.map(() => "(title LIKE ? OR body LIKE ?)").join(" OR ");
+      const params: any[] = [];
+      for (const t of terms) params.push(`%${t}%`, `%${t}%`);
+      const score = terms.map(() => "(CASE WHEN title LIKE ? THEN 4 ELSE 0 END + CASE WHEN body LIKE ? THEN 1 ELSE 0 END)").join(" + ") + " + CASE WHEN path LIKE 'rules/%' THEN 2 ELSE 0 END";
+      const scoreParams: any[] = [];
+      for (const t of terms) scoreParams.push(`%${t}%`, `%${t}%`);
+      add(db.all<any>(
+        `SELECT path,title,substr(body, max(1, instr(body, ?) - 40), 180) AS snip, (${score}) AS score ` +
+        "FROM docs WHERE " + where + " ORDER BY score DESC, tokens ASC LIMIT ?",
+        [terms[0] || q, ...scoreParams, ...params, limit],
+      ), "like");
+    }
+    return out;
   } finally {
     db.close();
   }

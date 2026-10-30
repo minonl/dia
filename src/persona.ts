@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, relative, resolve, sep } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -19,6 +19,13 @@ export interface Manifest {
   hosts?: string[];
   entry?: Record<string, string>;
   kits?: string[];
+  // persona 可自带内容（等价于内联 kit）：路径相对 persona 根
+  files?: { from: string; to: string }[];
+  skills?: { from: string; name?: string; mode?: "link" | "copy"; to?: string }[];
+  dirs?: string[];
+  commands?: { name: string; entry: string; runtime?: "bun" | "node"; env?: Record<string, string> }[];
+  knowledge?: string[];
+  data_root?: string;
   capabilities?: Record<string, unknown>;
 }
 
@@ -144,7 +151,7 @@ export function install(from: string, opts: { ref?: string; host?: string; dryRu
 
   rmSync(target, { recursive: true, force: true });
   mkdirSync(target, { recursive: true });
-  cpSync(src.dir, target, { recursive: true, filter: (p: string) => !p.split(sep).includes(".git") && !p.split(sep).includes("node_modules") });
+  cpSync(src.dir, target, { recursive: true, dereference: true, filter: (p: string) => !p.split(sep).includes(".git") && !p.split(sep).includes("node_modules") });
 
   if (hosts.includes("opencode")) {
     mkdirSync(OPENCODE_AGENTS, { recursive: true });
@@ -168,6 +175,9 @@ export function install(from: string, opts: { ref?: string; host?: string; dryRu
     renderedDirs.push({ path: dshDest, hash: hashTree(dshDest) });
   }
 
+  // persona 自带内容（内联 kit 语义）：baseDir = target，链接指向 persona 树自身
+  const inline = kit.renderContent(target, target, m) ?? [];
+
   // kits：包内相对路径，装完树后逐个分发（内容归 kit，人格只引用）
   const kitRefs: { id: string; version: string }[] = [];
   for (const ref of m.kits ?? []) {
@@ -181,7 +191,9 @@ export function install(from: string, opts: { ref?: string; host?: string; dryRu
   const hash = hashTree(target);
   const renderedHashes: Record<string, string> = {};
   for (const f of rendered) renderedHashes[f] = shaFile(f);
-  writeFileSync(join(target, "dia.lock"), JSON.stringify({ id: m.id, version: m.version, commit: src.commit, hash, rendered, renderedHashes, renderedDirs, kits: kitRefs }, null, 1));
+  writeFileSync(join(target, "dia.lock"), JSON.stringify({ id: m.id, version: m.version, commit: src.commit, hash, rendered, renderedHashes, renderedDirs, kits: kitRefs,
+    content: { knowledge: m.knowledge ?? [], commands: m.commands ?? [], dataRoot: m.data_root ?? null, rendered: inline },
+  }, null, 1));
   return { id: m.id, version: m.version, dir: target, rendered, hash };
 }
 
@@ -231,12 +243,32 @@ export function remove(id: string): { removed: string[]; skipped: string[] } {
         if (!existsSync(abs) || hashTree(abs) !== d.hash) { skipped.push(abs); continue; }
         rmSync(abs, { recursive: true, force: true }); removed.push(abs);
       }
+      // 内容产物（persona 自带 files/skills）：按 lock 里记录的哈希/指向回收
+      for (const r of lock.content?.rendered ?? []) {
+        if (r.type === "dir") continue;
+        if (!existsSync(r.path)) continue;
+        if (r.type === "file") {
+          if (!existsSync(r.path) || shaFile(r.path) !== r.value) { skipped.push(r.path); continue; }
+          unlinkSync(r.path); removed.push(r.path);
+        } else {
+          let cur = "";
+          try { cur = realpathSync(r.path); } catch { skipped.push(r.path); continue; }
+          const want = resolve(dir, r.value);
+          if (existsSync(want) && cur === realpathSync(want)) { unlinkSync(r.path); removed.push(r.path); }
+          else skipped.push(r.path);
+        }
+      }
+      // 宿主渲染（agent md / dsh profile）
       for (const f of lock.rendered || []) {
         const abs = resolve(f);
         if (abs !== allowed) { skipped.push(abs); continue; }
         const expectedHash = lock.renderedHashes?.[f];
         if (!expectedHash || !existsSync(abs) || shaFile(abs) !== expectedHash) { skipped.push(abs); continue; }
         rmSync(abs); removed.push(abs);
+      }
+      // kit：随 persona 一起卸载
+      for (const k of lock.kits ?? []) {
+        try { kit.remove(k.id); removed.push(`kit:${k.id}@${k.version}`); } catch { skipped.push(`kit:${k.id}`); }
       }
     }
     rmSync(dir, { recursive: true, force: true });

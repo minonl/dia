@@ -24,8 +24,9 @@ beforeAll(async () => {
   mkdirSync(join(src, "kits", "core", "bin"), { recursive: true });
   writeFileSync(join(src, "agents", "yan.md"), "---\ndescription: yan\nmode: primary\n---\nYou are yan.\n");
   writeFileSync(join(src, "kits", "core", "knowledge", "scenes.md"), "# scenes\n");
+  // argv[0] = 子命令（dia 注入），argv[1] = 首个参数
   writeFileSync(join(src, "kits", "core", "bin", "scene.mjs"),
-    "const [a]=process.argv.slice(2);\nconsole.log('SCENE:'+a+' data='+(process.env.YAN_DATA_ROOT||'-'));\nprocess.exit(a==='S1'?0:5);\n");
+    "const [sub,a]=process.argv.slice(2);\nconsole.log('SUB:'+sub+' ARG:'+a+' data='+(process.env.YAN_DATA_ROOT||'-'));\nprocess.exit(a==='S1'?0:5);\n");
   writeFileSync(join(src, "kits", "core", "dia.json"), JSON.stringify({
     schema: 1, kind: "kit", id: "yan-core", version: "0.1.0", root: ".",
     knowledge: ["knowledge"],
@@ -77,12 +78,25 @@ describe("persona → kit 联动", () => {
   });
 });
 
+describe("persona remove 回收自带内容", () => {
+  test("remove 后 agent md / AGENTS.md / skill 软链消失，dirs 保留", () => {
+    const r = runCli(["persona", "remove", "yan"]);
+    expect(r.status).toBe(0);
+    expect(existsSync(join(home, ".config/opencode/agents/yan.md"))).toBe(false);
+    expect(existsSync(join(home, ".config/opencode/AGENTS.md"))).toBe(false);
+    expect(existsSync(join(home, ".agents/skills/onboarding"))).toBe(false);
+    expect(existsSync(join(home, ".yan-agent/cache"))).toBe(true);
+    // 重装回去，后面的 kb 测试还要用
+    expect(runCli(["persona", "add", "--from", src]).status).toBe(0);
+  });
+});
+
 describe("dia kb 作用域与委派", () => {
   const run = (args: string[]) => runCli(args, { DIA_PERSONA: "yan" });
 
   test("dia kb scene S1 → 委派到 kit 命令，注入数据根", () => {
     const r = run(["kb", "scene", "S1"]);
-    expect(r.stdout).toContain("SCENE:S1");
+    expect(r.stdout).toContain("SUB:scene ARG:S1");
     expect(r.stdout).toContain(join(home, ".yan-agent"));
     expect(r.status).toBe(0);
   });

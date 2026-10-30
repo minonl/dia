@@ -58,7 +58,7 @@ function delegateKb(sub: string, args: string[]): number | null {
     if (!c) continue;
     const entry = resolvePath(k.root, c.entry);
     const runtime = c.runtime === "node" ? "node" : c.runtime === "bun" ? "bun" : (typeof (globalThis as any).Bun !== "undefined" ? "bun" : "node");
-    const r = spawnSync(runtime, [entry, ...args], {
+    const r = spawnSync(runtime, [entry, sub, ...args], {
       stdio: "inherit",
       env: { ...process.env, ...scope.scopeEnv(sc, c.env ?? {}) },
     });

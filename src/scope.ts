@@ -70,6 +70,16 @@ export function current(explicit?: string): Scope | null {
   const dir = join(idDir, version);
   const lock = readJson(join(dir, "dia.lock")) ?? {};
   const kits: KitScope[] = [];
+  // persona 自带内容优先（它就在 persona 树里，路径即 lock 所在目录）
+  const c = lock.content ?? {};
+  if ((c.knowledge ?? []).length || (c.commands ?? []).length) {
+    kits.push({
+      id, version, dir, root: dir,
+      knowledge: (c.knowledge ?? []).map((k: string) => resolve(dir, k)),
+      commands: c.commands ?? [],
+      dataRoot: c.dataRoot ? expand(c.dataRoot) : undefined,
+    });
+  }
   for (const k of lock.kits ?? []) {
     const ks = loadKit(k.id, k.version);
     if (ks) kits.push(ks);

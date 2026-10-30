@@ -48,6 +48,15 @@ export interface KitManifest {
   requires?: Record<string, string>;
 }
 
+export interface ContentFields {
+  files?: FileArtifact[];
+  skills?: SkillArtifact[];
+  bin?: BinArtifact[];
+  dirs?: string[];
+  commands?: CommandArtifact[];
+  knowledge?: string[];
+}
+
 export interface RenderedEntry {
   path: string;
   type: "file" | "link" | "dir";
@@ -178,68 +187,47 @@ function isSymlink(p: string): boolean {
   try { return lstatSync(p).isSymbolicLink(); } catch { return false; }
 }
 
-export function install(from: string, opts: { ref?: string; dryRun?: boolean; json?: boolean } = {}): KitInstallResult {
-  const src = resolveSource(from, opts.ref);
-  const m = readKitManifest(src.dir);
-  const target = resolve(dataDir(), "kits", m.id, m.version);
-  if (!target.startsWith(resolve(dataDir(), "kits") + sep)) throw new Error("E_MANIFEST: version escapes install dir");
-  const kitRootRel = m.root ?? ".";
-  const kitRoot = resolve(target, kitRootRel);
-  if (!kitRoot.startsWith(target + sep) && kitRoot !== target) throw new Error("E_MANIFEST: root escapes kit");
-
-  // ── 计划（dry-run 与冲突检查共用）─────────────────────────────────────
+/** 内容渲染：files 复制、skills/bin 软链到 targetDir、dirs mkdir；dry-run 返回 null。 */
+export function renderContent(
+  baseDir: string,
+  targetDir: string,
+  m: ContentFields,
+  opts: { dryRun?: boolean } = {},
+): RenderedEntry[] | null {
   type Plan = { entry: RenderedEntry; dest: string; linkTarget?: string; content?: string };
   const plans: Plan[] = [];
   for (const f of m.files ?? []) {
-    const srcFile = assertInside(src.dir, f.from);
+    const srcFile = assertInside(baseDir, f.from);
     const dest = assertInsideHome(f.to);
     plans.push({ entry: { path: dest, type: "file", value: "" }, dest, content: readFileSync(srcFile).toString("base64") });
   }
   for (const s of m.skills ?? []) {
-    const srcDir = assertInside(src.dir, s.from);
-    const rel = relative(src.dir, srcDir);
+    const srcDir = assertInside(baseDir, s.from);
+    const rel = relative(baseDir, srcDir);
     const dest = assertInsideHome(s.to ?? `~/.agents/skills/${s.name ?? s.from.split("/").filter(Boolean).pop()}`);
-    const mode = s.mode ?? "link";
-    if (mode === "link") {
-      const linkTarget = resolve(target, rel);
-      plans.push({ entry: { path: dest, type: "link", value: rel }, dest, linkTarget });
+    if ((s.mode ?? "link") === "link") {
+      plans.push({ entry: { path: dest, type: "link", value: rel }, dest, linkTarget: resolve(targetDir, rel) });
     } else {
-      // copy 模式：把目录内容逐个算 hash 记账（目录本身用 dir 语义就不会误删）
       plans.push({ entry: { path: dest, type: "dir", value: "" }, dest });
     }
   }
   for (const b of m.bin ?? []) {
-    assertInside(src.dir, b.from);
+    assertInside(baseDir, b.from);
     const dest = assertInsideHome(`~/.local/bin/${b.name}`);
-    const linkTarget = resolve(target, relative(src.dir, resolve(src.dir, b.from)));
-    plans.push({ entry: { path: dest, type: "link", value: relative(target, linkTarget) }, dest, linkTarget });
+    const rel = relative(baseDir, resolve(baseDir, b.from));
+    plans.push({ entry: { path: dest, type: "link", value: rel }, dest, linkTarget: resolve(targetDir, rel) });
   }
   const dirs = (m.dirs ?? []).map((d) => assertInsideHome(d));
-  const commands = m.commands ?? [];
-  for (const c of commands) assertInside(src.dir, c.entry);
 
-  // 冲突检查（写之前全部过一遍，避免半装）
+  // 冲突检查：写盘前全部过一遍，避免半装
   for (const p of plans) {
     if (p.entry.type === "file" && p.content !== undefined) {
       checkTargetFree(p.dest, "file", sha256(Buffer.from(p.content, "base64")));
-    } else if (p.linkTarget) {
-      if (existsSync(p.dest) || isSymlink(p.dest)) {
-        if (!linkManaged(p.dest, p.linkTarget)) throw new Error(`E_CONFLICT: ${p.dest} exists and is not managed`);
-      }
+    } else if (p.linkTarget && (existsSync(p.dest) || isSymlink(p.dest))) {
+      if (!linkManaged(p.dest, p.linkTarget)) throw new Error(`E_CONFLICT: ${p.dest} exists and is not managed`);
     }
   }
-
-  if (opts.dryRun) {
-    return { id: m.id, version: m.version, dir: target, root: kitRoot, rendered: plans.map((p) => p.entry), hash: null, changed: false };
-  }
-
-  // ── 落盘 ───────────────────────────────────────────────────────────────
-  const alreadyInstalled = existsSync(join(target, "kit.lock"));
-  if (!alreadyInstalled || hashTree(src.dir) !== hashTree(target)) {
-    rmSync(target, { recursive: true, force: true });
-    mkdirSync(target, { recursive: true });
-    cpSync(src.dir, target, { recursive: true, filter: (p: string) => !p.split(sep).includes(".git") && !p.split(sep).includes("node_modules") });
-  }
+  if (opts.dryRun) return plans.map((p) => p.entry);
 
   const rendered: RenderedEntry[] = [];
   for (const p of plans) {
@@ -250,7 +238,7 @@ export function install(from: string, opts: { ref?: string; dryRun?: boolean; js
     } else if (p.linkTarget) {
       if (existsSync(p.dest) || isSymlink(p.dest)) unlinkSync(p.dest);
       symlinkSync(resolve(p.linkTarget), p.dest);
-      p.entry.value = relative(target, resolve(p.linkTarget));
+      p.entry.value = relative(targetDir, resolve(p.linkTarget));
     }
     rendered.push(p.entry);
   }
@@ -258,11 +246,35 @@ export function install(from: string, opts: { ref?: string; dryRun?: boolean; js
     mkdirSync(d, { recursive: true });
     rendered.push({ path: d, type: "dir", value: "" });
   }
+  return rendered;
+}
+
+export function install(from: string, opts: { ref?: string; dryRun?: boolean; json?: boolean } = {}): KitInstallResult {
+  const src = resolveSource(from, opts.ref);
+  const m = readKitManifest(src.dir);
+  const target = resolve(dataDir(), "kits", m.id, m.version);
+  if (!target.startsWith(resolve(dataDir(), "kits") + sep)) throw new Error("E_MANIFEST: version escapes install dir");
+  const kitRootRel = m.root ?? ".";
+  const kitRoot = resolve(target, kitRootRel);
+  if (!kitRoot.startsWith(target + sep) && kitRoot !== target) throw new Error("E_MANIFEST: root escapes kit");
+
+  // 先做一遍纯校验（冲突检查写盘前完成，失败不留半装目录）
+  const planned = renderContent(src.dir, target, m, { dryRun: true }) ?? [];
+  if (opts.dryRun) return { id: m.id, version: m.version, dir: target, root: kitRoot, rendered: planned, hash: null, changed: false };
+
+  // 落盘：先复制内容树（bin/skills 的软链指向它），再渲染
+  const alreadyInstalled = existsSync(join(target, "kit.lock"));
+  if (!alreadyInstalled || hashTree(src.dir) !== hashTree(target)) {
+    rmSync(target, { recursive: true, force: true });
+    mkdirSync(target, { recursive: true });
+    cpSync(src.dir, target, { recursive: true, dereference: true, filter: (p: string) => !p.split(sep).includes(".git") && !p.split(sep).includes("node_modules") });
+  }
+  const rendered = renderContent(src.dir, target, m) ?? planned;
 
   const hash = hashTree(target);
   writeFileSync(join(target, "kit.lock"), JSON.stringify({
     id: m.id, version: m.version, commit: src.commit, root: kitRootRel, hash,
-    rendered, commands, knowledge: m.knowledge ?? [], dataRoot: m.data_root ?? null,
+    rendered, commands: m.commands ?? [], knowledge: m.knowledge ?? [], dataRoot: m.data_root ?? null,
   }, null, 1));
   return { id: m.id, version: m.version, dir: target, root: kitRoot, rendered, hash, changed: true };
 }

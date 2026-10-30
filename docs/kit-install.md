@@ -309,7 +309,22 @@ flowchart LR
 
 ---
 
-## 9. 待拍板（实现前需要人确认）
+## 9. 实施状态（2026-10-30）
+
+| 阶段 | 状态 | 证据 |
+|---|---|---|
+| K1 kit 安装器 | ✅ | `src/kit.ts` + 9 例单测 |
+| K1.5 作用域 + 委派 | ✅ | `src/scope.ts`、`dia --persona yan kb scene S1` |
+| K2 persona 内联内容 | ✅ | `renderContent(baseDir, targetDir)` 两处复用 |
+| K3 yan@next 形态 | ✅ | `feat/dia-persona` 分支；levm 实装通过 |
+| K4 worktree → `packages/wt` | ✅ | 7 处 python→node；5 套测试；`dia wt create/status/clean` levm 通过 |
+| K4 删旧命令面 | ✅（部分） | 删 yan-kb / yan-worktree / yan-task / 旧安装器；CI 门禁上线 |
+| K4 未迁移项 | ⏳ | `yan-mr` / `yan-release` / `yan-env` / `yan-ref` / `yan-schedule` / `yan-doctor` / `yan-version` / `yan-data-root` 仍在仓内、不随 persona 安装 |
+| P2 config 合并 | ⏳ | opencode.json 的 permission / default_agent 仍靠人工或旧残留 |
+
+---
+
+## 10. 待拍板（实现前需要人确认）
 
 1. **kit 与 persona 是否同仓**：本文假设同仓、persona 用相对路径引用（`"kits": ["./kits/yan-core"]`）。若要支持独立 kit 仓（`git+…`），清单里就写 URL，实现多一条解析分支。
 2. **`config` 合并放 P1 还是 P2**：放 P1 能一次装到「开箱可用」，但要引入 JSONC 读写与回滚记账；放 P2 则先装内容、权限靠用户手动或旧 install.sh 兜一次。

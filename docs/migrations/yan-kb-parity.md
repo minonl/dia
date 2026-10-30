@@ -128,7 +128,7 @@ dia packages/kb (single engine)
 - 原始 query 只写本地 `~/.yan-agent/observability/kb-dual-*.jsonl`，不进 dia 仓。
 
 
-## 9. K2.4 观察期（2026-10-30）
+## 9. K2.4 观察期（2026-10-30 → 2026-11-06）
 
 - 人工裁决（用户 2026-10-30）：`R30.5 评审请求消息模板` 的旧 `rules/design-doc.md` 命中判为旧实现误排；
 - waiver 记录在 `yan-agent@next:scripts/kb-dual-waivers.json`（query hash + old path + 到期日）；

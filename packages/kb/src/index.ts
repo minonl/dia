@@ -135,6 +135,7 @@ export interface LintResult {
   index_covered: number;
   index_missing: string[];
   review_missing: number;
+  review_missing_paths: string[];
   review_overdue: { path: string; review_by: string }[];
   stale: { path: string; age_days: number }[];
   broken_links: { path: string; link: string }[];
@@ -175,6 +176,7 @@ export async function lint(root: string, dbPath?: string, staleDays = 180): Prom
     index_covered: indexText ? rows.length - missing.length : 0,
     index_missing: missing,
     review_missing: rows.filter((r) => !r.review_by).length,
+    review_missing_paths: rows.filter((r) => !r.review_by).map((r) => r.path),
     review_overdue: overdue,
     stale,
     broken_links: broken,

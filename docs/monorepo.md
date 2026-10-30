@@ -65,7 +65,7 @@ dia/
 |---|---|---|
 | M0 | ✅ 完成：`pnpm-workspace.yaml` + `packageManager` + `packages/job` 空壳 | `pnpm install` 成功；68 tests / build / smoke / e2e（node+bun）通过 |
 | M1 | ✅ 完成：`dia-job` 用 `git subtree` 合入 `packages/job`（保留历史）；根加 `dia job` 路由 | job 4 个测试文件通过；`dia job platform` 可用；独立仓待归档 |
-| M2 | `src/kb.ts` 抽到 `packages/kb`，`src/kb.ts` 做 re-export | 现有 kb 测试逐字节通过；查询 golden 不变 |
+| M2 | ✅ 完成：`src/kb.ts`/`sqlite.ts` 抽到 `packages/kb`，根做 re-export；K1 query/review 已补 | `bun test` 73；`@dia/kb` 5；build/smoke/e2e |
 | M3 | `packages/cli` 聚合；发布/安装脚本统一；评估 Turborepo | 一条 `dia` 安装；job 可选装；CI 仍 <5min 则不加 Turbo |
 | M4 | 归档 `minonl/dia-job`，README 指向 monorepo | shim 只指向 monorepo 安装路径 |
 

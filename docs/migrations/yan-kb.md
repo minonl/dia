@@ -55,17 +55,17 @@ dia `src/kb.ts` 现在只有：`index / search / lint / get`。
 
 ## 3. 修正后的迁移计划
 
-### K0：冻结查询集（无模型，1 天）
+### K0：冻结查询集（无模型，1 天）✅
 
 - 从 yan 真实 `kb-calls.jsonl` 抽 20 条查询（含 scene/rule/auto）；
 - 记录 `path 集合 + 顺序 + exit code` 为 golden；
 - 只读，不改 yan。
 
-### K1：dia kb 补通用契约（2–3 天）
+### K1：dia kb 补通用契约（进行中）
 
-- `dia kb query`：兼容 `search`，加 `--json/--full/--bytes`；
-- 复审队列：`dia kb review`（到期/缺失/超预算）；
-- `dia kb path`：知识地址 → 绝对路径（通用语法，不绑定 yan scene）；
+- ✅ `dia kb query`：兼容 `search`，加 `--json/--full/--bytes`；
+- ✅ 复审队列：`dia kb review`（缺失/到期/stale）；
+- ⏳ `dia kb path`：知识地址 → 绝对路径（通用语法，不绑定 yan scene）；
 - `dia kb observe/report`：可选；先定义 JSONL schema，不急着迁。
 - 判据：20 条查询路径集合一致；索引重建两次哈希一致。
 

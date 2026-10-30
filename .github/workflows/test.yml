@@ -18,6 +18,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: bun --version && node --version && pnpm --version
       - run: bun test tests
+      - run: pnpm --filter @dia/kb test
       - run: pnpm --filter @dia/job test
         if: runner.os == 'macOS'
       - run: bun run build

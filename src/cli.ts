@@ -38,6 +38,8 @@ function help() {
 usage:
   dia kb index [--root DIR] [--db PATH] [--json]
   dia kb search <query> [--root DIR] [--db PATH] [--limit N] [--json]
+  dia kb query <query> [--root DIR] [--db PATH] [--limit N] [--json] [--full] [--bytes]
+  dia kb review [--root DIR] [--db PATH] [--json]
   dia kb lint [--root DIR] [--db PATH] [--stale-days N] [--json] [--strict]
   dia kb get <path> [--root DIR] [--section HEADING]
   dia ingest sessions [--source dsh|opencode|all] [--domain dabo|yan] [--since ISO]
@@ -73,14 +75,44 @@ async function kb(argv: string[]): Promise<number> {
     out(has(args, "--json") ? JSON.stringify(res) : `indexed ${res.docs} docs -> ${res.db} (${res.tokenizer})`);
     return 0;
   }
-  if (sub === "search") {
+  if (sub === "search" || sub === "query") {
     const q = positional(args)[0];
     if (!q) return err("missing query") as any ?? 2;
     const limit = Number(flag(args, "--limit") || 10);
     const rows = await search(root, q, db, limit);
-    if (has(args, "--json")) out(JSON.stringify(rows));
-    else for (const r of rows) out(`${r.path}\t${r.title}\n  ${r.snippet}`);
+    const full = sub === "query" && has(args, "--full");
+    const bytes = sub === "query" && has(args, "--bytes");
+    const enrich = rows.map((r) => {
+      const item: any = { ...r };
+      if (bytes) item.bytes = Buffer.byteLength(getDoc(root, r.path), "utf8");
+      if (full) item.text = getDoc(root, r.path);
+      return item;
+    });
+    if (has(args, "--json")) out(JSON.stringify(enrich));
+    else for (const r of enrich) {
+      out(`${r.path}\t${r.title}\n  ${r.snippet}`);
+      if (r.bytes !== undefined) out(`  bytes ${r.bytes}`);
+      if (r.text !== undefined) out(r.text);
+    }
     return rows.length ? 0 : 1;
+  }
+  if (sub === "review") {
+    const res = await lint(root, db, Number(flag(args, "--stale-days") || 180));
+    const data = {
+      missing: res.review_missing_paths,
+      overdue: res.review_overdue,
+      stale: res.stale,
+    };
+    if (has(args, "--json")) out(JSON.stringify(data, null, 1));
+    else {
+      out(`review missing: ${data.missing.length}`);
+      for (const p of data.missing) out(`  missing  ${p}`);
+      out(`review overdue: ${data.overdue.length}`);
+      for (const r of data.overdue) out(`  overdue  ${r.path} (review_by ${r.review_by})`);
+      out(`stale: ${data.stale.length}`);
+      for (const r of data.stale) out(`  stale    ${r.path} (${r.age_days}d)`);
+    }
+    return data.missing.length || data.overdue.length ? 1 : 0;
   }
   if (sub === "lint") {
     const res = await lint(root, db, Number(flag(args, "--stale-days") || 180));

@@ -98,7 +98,7 @@ dia packages/kb (single engine)
 | K2.1 | ✅ 完成：索引 meta、原子构建、`DIA_CACHE_DIR`、stat 指纹（docs+mtimeMs+size）、缺/陈旧索引报 `E_INDEX_MISSING/STALE` | 空/陈旧/root 不符/同秒矩阵通过；85 tests |
 | K2.2 | 🟡 代码完成，门禁有条件通过：ID 直通/CJK 退阶/BM25 | 40 query：召回 52/56、零命中 0、top1_equal 31/38；仍有 1 个 known diff |
 | K2.3 | ✅ 双跑脚本 `yan-kb-dual.sh`（yan-agent@next）；默认仍 old | 发现 1 个 known diff：旧命中 `rules/design-doc.md`，dia 未召回；**不切默认** |
-| K2.4 | ⛔ 未启动：known diff 未裁决；先人工确认旧 top1 是否为误排 | 无 diff 才切默认 |
+| K2.4 | 🟡 观察期：人工 waiver 已批准（旧 design-doc 误排）；默认仍 old | 2026-10-30→11-06：非 waiver miss=0 且指标不降；否则不切 |
 
 ---
 
@@ -126,3 +126,12 @@ dia packages/kb (single engine)
   dia 命中 `rules/notify.md`。旧实现的 R33/design-doc 与 R30.5 语义不一致，疑似旧误排；
 - 在人工裁决前 **不切默认**，旧 query 继续服务。
 - 原始 query 只写本地 `~/.yan-agent/observability/kb-dual-*.jsonl`，不进 dia 仓。
+
+
+## 9. K2.4 观察期（2026-10-30）
+
+- 人工裁决（用户 2026-10-30）：`R30.5 评审请求消息模板` 的旧 `rules/design-doc.md` 命中判为旧实现误排；
+- waiver 记录在 `yan-agent@next:scripts/kb-dual-waivers.json`（query hash + old path + 到期日）；
+- 双跑脚本把该条标为 `WAIVED`，不再计入 miss；
+- **默认仍走 old**；观察 7 天（至 2026-11-06），非 waiver miss 必须为 0，且 top1/zero 不降；
+- 观察期满另立 K2.5 切换任务，不在本轮自动切。

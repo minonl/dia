@@ -33,6 +33,13 @@ describe("kb query/review CLI", () => {
     expect(rows[0].bytes).toBeGreaterThan(0);
   });
 
+  test("rejects non-positive limit", () => {
+    const { dir, db } = fixture();
+    const r = cli(["kb", "query", "知识库", "--root", dir, "--db", db, "--limit", "abc"]);
+    expect(r.status).toBe(2);
+    expect(r.stderr).toContain("positive integer");
+  });
+
   test("review reports missing and overdue", () => {
     const { dir, db } = fixture();
     const r = cli(["kb", "review", "--root", dir, "--db", db, "--json"]);

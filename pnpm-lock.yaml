@@ -164,6 +164,12 @@ settings:
 
 importers:
 
-  .: {}
+  .:
+    devDependencies:
+      '@dia/kb':
+        specifier: workspace:*
+        version: link:packages/kb
 
   packages/job: {}
+
+  packages/kb: {}

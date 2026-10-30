@@ -77,15 +77,23 @@ async function kb(argv: string[]): Promise<number> {
   }
   if (sub === "search" || sub === "query") {
     const q = positional(args)[0];
-    if (!q) return err("missing query") as any ?? 2;
-    const limit = Number(flag(args, "--limit") || 10);
+    if (!q) { err("missing query"); return 2; }
+    const rawLimit = flag(args, "--limit");
+    const limit = rawLimit === undefined ? 10 : Number(rawLimit);
+    if (!Number.isInteger(limit) || limit <= 0) { err("--limit must be a positive integer"); return 2; }
     const rows = await search(root, q, db, limit);
     const full = sub === "query" && has(args, "--full");
     const bytes = sub === "query" && has(args, "--bytes");
     const enrich = rows.map((r) => {
       const item: any = { ...r };
-      if (bytes) item.bytes = Buffer.byteLength(getDoc(root, r.path), "utf8");
-      if (full) item.text = getDoc(root, r.path);
+      try {
+        if (bytes) item.bytes = Buffer.byteLength(getDoc(root, r.path), "utf8");
+        if (full) item.text = getDoc(root, r.path);
+      } catch {
+        item.stale_index = true;
+        item.text = null;
+        item.bytes = null;
+      }
       return item;
     });
     if (has(args, "--json")) out(JSON.stringify(enrich));

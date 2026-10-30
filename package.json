@@ -27,5 +27,8 @@
     "test:kb": "pnpm --filter @dia/kb test"
   },
   "license": "MIT",
-  "packageManager": "pnpm@12.5.1"
+  "packageManager": "pnpm@12.5.1",
+  "devDependencies": {
+    "@dia/kb": "workspace:*"
+  }
 }

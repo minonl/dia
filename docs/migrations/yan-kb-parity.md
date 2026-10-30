@@ -96,9 +96,9 @@ dia packages/kb (single engine)
 | 阶段 | 动作 | 门禁 |
 |---|---|---|
 | K2.1 | ✅ 完成：索引 meta、原子构建、`DIA_CACHE_DIR`、stat 指纹（docs+mtimeMs+size）、缺/陈旧索引报 `E_INDEX_MISSING/STALE` | 空/陈旧/root 不符/同秒矩阵通过；85 tests |
-| K2.2 | 🟡 进行中：ID 直通、CJK 2/3 字退阶、BM25 + path 权重已实现 | 9 条：召回 11/12、零命中 0/9、top1 6/9；**40+ golden 未跑，不切默认** |
-| K2.3 | yan adapter：query 双跑 + diff 报告；默认仍 old | diff 可归因；无静默降级 |
-| K2.4 | 切默认并删除旧 query 实现（或冻结为显式 fallback，限期） | 一周真实使用无回归 |
+| K2.2 | 🟡 代码完成，门禁有条件通过：ID 直通/CJK 退阶/BM25 | 40 query：召回 52/56、零命中 0、top1_equal 31/38；仍有 1 个 known diff |
+| K2.3 | ✅ 双跑脚本 `yan-kb-dual.sh`（yan-agent@next）；默认仍 old | 发现 1 个 known diff：旧命中 `rules/design-doc.md`，dia 未召回；**不切默认** |
+| K2.4 | ⛔ 未启动：known diff 未裁决；先人工确认旧 top1 是否为误排 | 无 diff 才切默认 |
 
 ---
 
@@ -117,3 +117,12 @@ dia packages/kb (single engine)
 - 不用 9 条样本做切换结论；
 - 不在索引缺失/陈旧时返回空列表冒充“无命中”；
 - 不先做 K2.4 再补 K2.1/K2.2。
+
+
+## 8. K2.3 双跑记录（2026-10-30）
+
+- 9 条 golden query：`old_hits` 全部被 dia 覆盖 8/9；`top1_equal` 7/9；
+- 唯一 miss：query `R30.5 评审请求消息模板`，旧实现命中 `rules/design-doc.md`，
+  dia 命中 `rules/notify.md`。旧实现的 R33/design-doc 与 R30.5 语义不一致，疑似旧误排；
+- 在人工裁决前 **不切默认**，旧 query 继续服务。
+- 原始 query 只写本地 `~/.yan-agent/observability/kb-dual-*.jsonl`，不进 dia 仓。

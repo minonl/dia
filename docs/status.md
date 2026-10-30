@@ -67,7 +67,7 @@
 | D0.9 | H9/H10：角色 JSON 契约 + 修复重试 | **实现+单元测试** | 68 测试；build/smoke/e2e（node+bun）通过；真实模型修复率待测 |
 | D0.10 | H0：三层覆盖分类实验 | **推翻（严格口径）** | 20/140 抽样：17/20=85%；宿主适配缺口 3；成本未测；见 `docs/research/h0/report.md` |
 | D0.11 | yan-agent@next 迁移设计 | **设计完成；P2.1 + shim 已落** | `dia-job` 全局安装、路径策略项目无关；yan-agent `yan-task` 已转发；见 `docs/migrations/yan-agent-next.md` |
-| D0.12 | yan-kb → dia kb 能力矩阵 | **K2.1 完成；K2.2 进行中** | planner 已实现；9 条召回 11/12、top1 6/9，40+ golden 未过硬门禁；见 `docs/migrations/yan-kb-parity.md` |
+| D0.12 | yan-kb → dia kb 能力矩阵 | **K2.2 有条件；K2.3 双跑完成** | 40 query 召回 52/56、零命中 0；1 个 known diff（旧 design-doc）待裁决；不切默认；见 `docs/migrations/yan-kb-parity.md` |
 | D0.13 | dia monorepo（core/kb/job） | **M2 完成** | `packages/kb` 已抽离，根 re-export；`dia kb query/review`；见 `docs/monorepo.md` |
 | D0.14 | public release gate | **BLOCKED until audit** | 必须完成脱敏 + git 历史清洁 + `dia-security` pass；见 `docs/security/public-release.md` |
 | D1 | doctor（依赖校验 M1）+ audit 哈希链（M3） | **未开始** | — |

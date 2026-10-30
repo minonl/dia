@@ -69,18 +69,22 @@ dia `src/kb.ts` 现在只有：`index / search / lint / get`。
 - `dia kb observe/report`：可选；先定义 JSONL schema，不急着迁。
 - 判据：20 条查询路径集合一致；索引重建两次哈希一致。
 
-### K2：yan-kb 变 thin shim（1 天）
+### K2：yan-kb thin shim（进行中）
 
 ```text
-yan-kb query   → exec dia kb query --root <yan-core/knowledge>
-yan-kb index   → exec dia kb index --root ...
-yan-kb get     → exec dia kb get ...
-yan-kb lint    → exec dia kb lint ...（基础项）；yan 额外项保留
-yan-kb --scene/--rule/--auto/claims/baseline/alerts/record → 本地实现
+yan-kb index   → exec dia kb index --root <yan-core/knowledge>   ✅
+yan-kb lint    → exec dia kb lint --root ...                     ✅
+yan-kb get     → exec dia kb get --root ...                      ✅
+yan-kb query   → 默认旧实现；YAN_KB_ENGINE=dia 显式走 dia       ⚠️ parity 未达
+yan-kb --scene/--rule/--auto/claims/baseline/alerts/record → 本地实现（不动）
 ```
 
+> 2026-10-30 实测：`YAN_KB_ENGINE=dia` 对真实 query `R30.5 评审请求消息模板` 返回空，
+> 旧实现有 R33 命中。因此 **query 默认继续走旧实现**，K2 只完成 index/get/lint 路由；
+> query parity 归入 K2.1，不得切默认。
+
 - 不复制实现；`yan-kb` 只做路由和域参数；
-- 先双跑 `query/index/get`，diff 为零后切。
+- `index/get/lint` 已切；`query` 双跑显示路径/语义未对齐，暂不切默认。
 
 ### K3：一周双跑 + 回滚
 

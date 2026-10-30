@@ -67,6 +67,7 @@ dia/
 | M1 | ✅ 完成：`dia-job` 用 `git subtree` 合入 `packages/job`（保留历史）；根加 `dia job` 路由 | job 4 个测试文件通过；`dia job platform` 可用；独立仓待归档 |
 | M2 | ✅ 完成：`src/kb.ts`/`sqlite.ts` 抽到 `packages/kb`，根做 re-export；K1 query/review 已补 | `bun test` 73；`@dia/kb` 5；build/smoke/e2e |
 | M3a | ✅ 全局安装：`install.sh` 复制 `bin/dist/packages/job`，链接 `~/.local/bin/dia`；job 可选 | `dia version` / `dia job platform` 通过；CI 加 install 测试 |
+| M3b | ✅ CLI 聚合到 `packages/cli`；根 `src/cli.ts` 兼容 re-export | `bun test` 88、build、install、e2e 通过 |
 | M4 | 归档 `minonl/dia-job`，README 指向 monorepo | shim 只指向 monorepo 安装路径 |
 
 ## 5. 不做

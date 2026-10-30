@@ -70,7 +70,7 @@
 | D0.12 | yan-kb → dia kb 能力矩阵 | **K2.2 有条件；K2.3 完成；K2.4 观察期** | waiver 已批准；默认 old；观察至 2026-11-06；见 `docs/migrations/yan-kb-parity.md` |
 | D0.13 | dia monorepo（core/kb/job） | **M2 完成** | `packages/kb` 已抽离，根 re-export；`dia kb query/review`；见 `docs/monorepo.md` |
 | D0.14 | public release gate | **BLOCKED until audit** | 必须完成脱敏 + git 历史清洁 + `dia-security` pass；见 `docs/security/public-release.md` |
-| D0.15 | dia global install (M3a) | **完成** | `install.sh` + `dia version/job` 测试；`packages/cli` 聚合未做 |
+| D0.15 | dia global install + CLI package (M3a/M3b) | **完成** | `install.sh` + `packages/cli`；根 `src/cli.ts` 兼容；88 tests |
 | D1 | doctor（依赖校验 M1）+ audit 哈希链（M3） | **未开始** | — |
 | D2 | ModelSpec + 首次基准 + 事故 sidecar | **未开始** | 设计完成 |
 | D3 | state 事件 + `(T,D,O)` 视图 | **未开始** | 设计完成 |

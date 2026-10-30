@@ -18,10 +18,10 @@
     "bun": ">=1.2"
   },
   "scripts": {
-    "dev": "bun src/cli.ts",
-    "build": "bun build src/cli.ts --target node --outfile dist/cli.js --external bun:sqlite",
+    "dev": "bun packages/cli/src/index.ts",
+    "build": "bun build packages/cli/src/index.ts --target node --outfile dist/cli.js --external bun:sqlite",
     "test": "bun test tests && bash tests/smoke.sh && bash tests/e2e.sh",
-    "compile": "bun build src/cli.ts --compile --outfile dist/dia",
+    "compile": "bun build packages/cli/src/index.ts --compile --outfile dist/dia",
     "prepublishOnly": "bun run build",
     "test:job": "pnpm --filter @dia/job test",
     "test:kb": "pnpm --filter @dia/kb test"

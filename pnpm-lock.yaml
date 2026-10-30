@@ -170,6 +170,12 @@ importers:
         specifier: workspace:*
         version: link:packages/kb
 
+  packages/cli:
+    dependencies:
+      '@dia/kb':
+        specifier: workspace:*
+        version: link:../kb
+
   packages/job: {}
 
   packages/kb: {}

@@ -22,6 +22,7 @@ jobs:
       - run: pnpm --filter @dia/job test
         if: runner.os == 'macOS'
       - run: bun run build
+      - run: bash tests/install-dia.test.sh
       - run: bash tests/smoke.sh
       - run: bash tests/e2e.sh
       - run: DIA_E2E_RUNTIME=bun bash tests/e2e.sh

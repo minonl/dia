@@ -30,7 +30,7 @@
 - 过滤测试夹具（`headless`、`Implement this task`、`verify-ws`、`team-data`、`Return only JSON`、
   `You are teammate`、`YAN-OK` 等）后剩 **140 条**。
 - 固定 `seed=11` 抽 20 条；样本与逐条标注见 `sample.json`。
-- 复现：`python3 experiments/h0-sample.py <episodes.jsonl> 11`。
+- 复现：`bun experiments/h0-sample.ts <episodes.jsonl> 11`。
 
 ### 分类口径
 

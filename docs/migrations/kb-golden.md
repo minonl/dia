@@ -14,13 +14,13 @@
 复现：
 
 ```sh
-python3 experiments/kb-golden.py <kb-calls.jsonl> <out.json>
+bun experiments/kb-golden.ts <kb-calls.jsonl> <out.json>
 ```
 
 
 ## K2.2 100 条基准（2026-10-30）
 
-- 命令：`python3 experiments/kb-bench.py <kb-calls.jsonl> 100`
+- 命令：`bun experiments/kb-bench.ts <kb-calls.jsonl> 100`
 - 样本：100 条真实 query；原始数据只在 `~/.yan-agent/observability/kb-bench-100.json`
 - 结果：
   - answerable 87

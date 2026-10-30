@@ -13,6 +13,7 @@
 | 2 | Git 历史清洁 | 所有 ref 可达历史扫描通过；旧敏感对象不可达；tags/releases 已清理 |
 | 3 | GitHub 元数据 | 仓库描述、topics、Actions 日志、releases、issues/PR、wiki 无内部信息 |
 | 4 | 配置 | provider/baseURL/token 全部走 env 或通用占位符，无硬编码 |
+| 4b | 运行时 | 无 Python 依赖；`packages/job` 的 JSON 层迁到 Node/Bun（见 `docs/migrations/no-python.md`） |
 | 5 | 打包 | `private` 仅在 audit 通过后移除；lockfile/registry 无私有源；无 source map 泄漏 |
 | 6 | 文档 | 内部迁移文档移出 public 仓或脱敏；示例全部通用化 |
 | 7 | 政策文件 | `LICENSE`、`SECURITY.md`、漏洞报告渠道就绪 |

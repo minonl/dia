@@ -24,7 +24,9 @@
     "compile": "bun build packages/cli/src/index.ts --compile --outfile dist/dia",
     "prepublishOnly": "bun run build",
     "test:job": "pnpm --filter @dia/job test",
-    "test:kb": "pnpm --filter @dia/kb test"
+    "test:kb": "pnpm --filter @dia/kb test",
+    "bench:kb": "bun experiments/kb-bench.ts",
+    "golden:kb": "bun experiments/kb-golden.ts"
   },
   "license": "MIT",
   "packageManager": "pnpm@12.5.1",

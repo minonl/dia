@@ -137,7 +137,7 @@ review missing: 103 | overdue: 0
 broken links: 5
 ```
 
-这套数字同时是 `prototype/python` 的对照基线：TS 与 Python 结果必须一致
+这套数字保留为历史基线；当前实现是 TS/Bun，不再维护 Python 原型
 （token 估算允许 ±0.1% 差异，原因是 JS 按 UTF-16 计长、Python 按码点）。
 
 ## 原则

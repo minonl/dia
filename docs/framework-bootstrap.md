@@ -9,12 +9,8 @@
 
 ```
 framework/
-├── bin/agentctl              # 唯一入口（bash 壳 + python 实现）
-├── lib/                      # python 模块（stdlib only）
-│   ├── kb.py                 # 知识索引/检索/lint
-│   ├── ingest.py             # 会话采集
-│   ├── audit.py              # 审计/冻结（后续）
-│   └── config.py             # 域配置加载
+├── bin/dia.js                # 唯一入口（Node/Bun）
+├── packages/                 # TS 包：core / kb / job / cli
 ├── packages/                 # 内置包（可选）
 ├── tests/                    # unittest + shell
 └── docs/
@@ -25,7 +21,7 @@ framework/
 | 方案 | 优点 | 缺点 | 适合 |
 |---|---|---|---|
 | **A. GitHub Release tarball + `install.sh` + sha256** | 零依赖、离线可用、私有仓用 `gh` 下载、版本可钉 | 需要 `gh` 或 token；无自动更新 | **当前首选** |
-| B. 私有 npm（GitHub Packages） | 版本语义清晰、可锁 | 需要 npm 登录与 token；对 bash/python 项目是多余依赖 | 以后出 TS 插件时 |
+| B. 私有 npm（GitHub Packages） | 版本语义清晰、可锁 | 需要 npm 登录与 token；对 bash/TS 项目是多余依赖 | 以后出 TS 插件时 |
 | C. 公开 npm | 安装最省事 | 代码公开 | 若决定开源 |
 | D. git submodule / subtree | 无发布流程 | 两个域版本耦合，回滚困难 | 不推荐 |
 
@@ -38,7 +34,7 @@ framework/
 
 | 源 | 位置 | 规模 | 读取方式 |
 |---|---|---|---|
-| dsh | `~/.dsh/sessions/<escaped-workspace>/session-<uuid>/session.v4.jsonl.zstd` | 241 个 / 146MB | `zstd -dc` 或 `python -m compression.zstd` 流式解压后逐行 JSON |
+| dsh | `~/.dsh/sessions/<escaped-workspace>/session-<uuid>/session.v4.jsonl.zstd` | 241 个 / 146MB | `node:zlib` zstd 流式解压后逐行 JSON |
 | opencode | `~/.local/share/opencode/opencode.db`（SQLite） | 449MB / 34 会话 / 7377 消息 / 30201 片段 | `sqlite3` **只读 URI**，按 session 逐条流式读 |
 
 依赖兜底：`zstd` CLI 优先；没有则用 Python ≥3.14 的 `compression.zstd`；都没有 → 跳过并写 `degraded_reason`。

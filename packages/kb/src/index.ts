@@ -1,12 +1,20 @@
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, statSync, mkdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, normalize, relative, resolve, sep } from "node:path";
 import { openDb } from "./sqlite.ts";
 
 const CJK = /[\u4e00-\u9fff]/g;
 const LINK = /\[[^\]]*\]\(([^)\s]+)\)/g;
-const DB_DIR = join(homedir(), ".cache", "dia", "index");
+const SCHEMA_VERSION = 1;
+
+export class KbIndexError extends Error {
+  constructor(message: string, public code: "E_INDEX_MISSING" | "E_INDEX_STALE" = "E_INDEX_MISSING") { super(message); }
+}
+
+function cacheDir(): string {
+  return process.env.DIA_CACHE_DIR || join(process.env.XDG_CACHE_HOME || join(homedir(), ".cache"), "dia", "index");
+}
 
 export interface Doc {
   path: string;
@@ -74,30 +82,85 @@ export function iterDocs(root: string): Doc[] {
 
 export function defaultDb(root: string): string {
   const key = createHash("sha1").update(resolve(root)).digest("hex").slice(0, 16);
-  mkdirSync(DB_DIR, { recursive: true });
-  return join(DB_DIR, key + ".db");
+  const dir = cacheDir();
+  mkdirSync(dir, { recursive: true });
+  return join(dir, key + ".db");
 }
 
 export async function buildIndex(root: string, dbPath?: string) {
-  const db = await openDb(dbPath || defaultDb(root));
-  db.exec("DROP TABLE IF EXISTS docs");
-  db.exec("DROP TABLE IF EXISTS docs_fts");
-  db.exec("CREATE TABLE docs (path TEXT PRIMARY KEY, title TEXT, body TEXT, bytes INTEGER, tokens INTEGER, mtime INTEGER, review_by TEXT, tags TEXT)");
+  const target = dbPath || defaultDb(root);
+  mkdirSync(dirname(target), { recursive: true });
+  const tmp = `${target}.tmp-${process.pid}-${Date.now()}`;
+  const docs = iterDocs(root);
+  const maxMtime = docs.reduce((a, d) => Math.max(a, d.mtime), 0);
+  const db = await openDb(tmp);
   let tokenizer = "trigram";
   try {
-    db.exec("CREATE VIRTUAL TABLE docs_fts USING fts5(path UNINDEXED, title, body, tokenize='trigram')");
+    db.exec("BEGIN");
+    db.exec("DROP TABLE IF EXISTS docs");
+    db.exec("DROP TABLE IF EXISTS docs_fts");
+    db.exec("DROP TABLE IF EXISTS meta");
+    db.exec("CREATE TABLE docs (path TEXT PRIMARY KEY, title TEXT, body TEXT, bytes INTEGER, tokens INTEGER, mtime INTEGER, review_by TEXT, tags TEXT)");
+    try {
+      db.exec("CREATE VIRTUAL TABLE docs_fts USING fts5(path UNINDEXED, title, body, tokenize='trigram')");
+    } catch {
+      tokenizer = "unicode61";
+      db.exec("CREATE VIRTUAL TABLE docs_fts USING fts5(path UNINDEXED, title, body, tokenize='unicode61')");
+    }
+    for (const doc of docs) {
+      db.run("INSERT OR REPLACE INTO docs VALUES (?,?,?,?,?,?,?,?)", [doc.path, doc.title, doc.text, doc.bytes, doc.tokens, doc.mtime, doc.reviewBy, doc.tags]);
+      db.run("INSERT INTO docs_fts (path, title, body) VALUES (?,?,?)", [doc.path, doc.title, doc.text]);
+    }
+    db.exec("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)");
+    const builtAt = new Date().toISOString();
+    for (const [k, v] of Object.entries({
+      schema: String(SCHEMA_VERSION), root: resolve(root), docs: String(docs.length),
+      built_at: builtAt, max_mtime: String(maxMtime), tokenizer,
+    })) db.run("INSERT INTO meta VALUES (?,?)", [k, v]);
+    db.exec("COMMIT");
+    db.close();
+    renameSync(tmp, target);
+    return { db: target, docs: docs.length, tokenizer, built_at: builtAt };
+  } catch (e) {
+    try { db.exec("ROLLBACK"); } catch { /* ignore */ }
+    try { db.close(); } catch { /* ignore */ }
+    rmSync(tmp, { force: true });
+    throw e;
+  }
+}
+
+interface IndexMeta { docs: number; max_mtime: number; tokenizer: string; root: string; schema: number }
+
+async function readMeta(path: string): Promise<IndexMeta | null> {
+  if (!existsSync(path)) return null;
+  const db = await openDb(path, { readonly: true });
+  try {
+    const rows = db.all<any>("SELECT key, value FROM meta");
+    const m = new Map(rows.map((r) => [String(r.key), String(r.value)]));
+    if (!m.has("schema") || !m.has("docs")) return null;
+    return {
+      docs: Number(m.get("docs") || 0), max_mtime: Number(m.get("max_mtime") || 0),
+      tokenizer: m.get("tokenizer") || "unknown", root: m.get("root") || "",
+      schema: Number(m.get("schema") || 0),
+    };
   } catch {
-    tokenizer = "unicode61";
-    db.exec("CREATE VIRTUAL TABLE docs_fts USING fts5(path UNINDEXED, title, body, tokenize='unicode61')");
+    return null;
+  } finally { db.close(); }
+}
+
+export async function assertIndex(root: string, dbPath?: string): Promise<string> {
+  const target = dbPath || defaultDb(root);
+  const meta = await readMeta(target);
+  if (!meta || meta.schema !== SCHEMA_VERSION) {
+    throw new KbIndexError(`index missing or incompatible: ${target}; run "dia kb index --root ${root}"`, "E_INDEX_MISSING");
   }
-  let n = 0;
-  for (const doc of iterDocs(root)) {
-    db.run("INSERT OR REPLACE INTO docs VALUES (?,?,?,?,?,?,?,?)", [doc.path, doc.title, doc.text, doc.bytes, doc.tokens, doc.mtime, doc.reviewBy, doc.tags]);
-    db.run("INSERT INTO docs_fts (path, title, body) VALUES (?,?,?)", [doc.path, doc.title, doc.text]);
-    n++;
+  if (meta.root !== resolve(root)) throw new KbIndexError(`index belongs to another root: ${meta.root}`, "E_INDEX_STALE");
+  const docs = iterDocs(root);
+  const maxMtime = docs.reduce((a, d) => Math.max(a, d.mtime), 0);
+  if (meta.docs !== docs.length || meta.max_mtime < maxMtime) {
+    throw new KbIndexError(`index stale: docs ${meta.docs}→${docs.length}, mtime ${meta.max_mtime}→${maxMtime}; run "dia kb index --root ${root}"`, "E_INDEX_STALE");
   }
-  db.close();
-  return { db: dbPath || defaultDb(root), docs: n, tokenizer };
+  return target;
 }
 
 export interface Hit { path: string; title: string; snippet: string }
@@ -105,7 +168,8 @@ export interface Hit { path: string; title: string; snippet: string }
 export async function search(root: string, query: string, dbPath?: string, limit = 10): Promise<Hit[]> {
   const q = query.trim();
   if (!q) return [];
-  const db = await openDb(dbPath || defaultDb(root));
+  const path = await assertIndex(root, dbPath);
+  const db = await openDb(path, { readonly: true });
   try {
     if ([...q].length >= 3) {
       const phrase = '"' + q.replace(/"/g, "") + '"';
@@ -144,7 +208,8 @@ export interface LintResult {
 
 export async function lint(root: string, dbPath?: string, staleDays = 180): Promise<LintResult> {
   const abs = resolve(root);
-  const db = await openDb(dbPath || defaultDb(root));
+  const path = await assertIndex(root, dbPath);
+  const db = await openDb(path, { readonly: true });
   const rows = db.all<any>("SELECT path, bytes, tokens, mtime, review_by FROM docs");
   db.close();
   const indexFile = join(abs, "index.md");

@@ -488,7 +488,13 @@ export async function main(argv: string[]): Promise<number> {
   const [cmd] = argv;
   if (!cmd || cmd === "-h" || cmd === "--help") { help(); return 0; }
   if (cmd === "version" || cmd === "--version") { out("dia 0.0.1"); return 0; }
-  if (cmd === "kb") return kb(argv.slice(1));
+  if (cmd === "kb") {
+    try { return await kb(argv.slice(1)); }
+    catch (e: any) {
+      if (String(e?.code || "").startsWith("E_INDEX_")) { err(e.message); return 3; }
+      throw e;
+    }
+  }
   if (cmd === "ingest") return ingestCli(argv.slice(1));
   if (cmd === "audit") return auditCli(argv.slice(1));
   if (cmd === "freeze") return freezeCli(argv.slice(1));

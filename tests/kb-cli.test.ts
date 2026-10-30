@@ -33,6 +33,14 @@ describe("kb query/review CLI", () => {
     expect(rows[0].bytes).toBeGreaterThan(0);
   });
 
+  test("missing index exits 3 with explicit message", () => {
+    const dir = mkdtempSync(join(tmpdir(), "dia-kb-cli-noidx-"));
+    writeFileSync(join(dir, "a.md"), "# A\n");
+    const r = cli(["kb", "query", "A", "--root", dir, "--db", join(dir, ".idx.db")]);
+    expect(r.status).toBe(3);
+    expect(r.stderr).toContain("index missing");
+  });
+
   test("rejects non-positive limit", () => {
     const { dir, db } = fixture();
     const r = cli(["kb", "query", "知识库", "--root", dir, "--db", db, "--limit", "abc"]);

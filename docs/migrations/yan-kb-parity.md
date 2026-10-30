@@ -95,7 +95,7 @@ dia packages/kb (single engine)
 
 | 阶段 | 动作 | 门禁 |
 |---|---|---|
-| K2.1 | 修索引语义：meta 校验、原子构建、缓存目录可配；query 缺索引报 unknown | 空/陈旧/并发矩阵全过 |
+| K2.1 | ✅ 完成：索引 meta、原子构建、`DIA_CACHE_DIR`、缺/陈旧索引报 `E_INDEX_MISSING/STALE` | 空/陈旧/root 不符矩阵通过；84 tests |
 | K2.2 | query planner：ID 直通、term OR 退阶、BM25 + title/tags/path 加权 | 40+ golden 指标达标 |
 | K2.3 | yan adapter：query 双跑 + diff 报告；默认仍 old | diff 可归因；无静默降级 |
 | K2.4 | 切默认并删除旧 query 实现（或冻结为显式 fallback，限期） | 一周真实使用无回归 |

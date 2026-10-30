@@ -28,3 +28,24 @@ dia 的 `engines` 只声明 Node/Bun，**public 用户机器不保证有 python3
 
 - dia 自研代码：Python 清零；
 - `packages/job`：**public release blocker**，P3 完成前不得公开。
+
+
+## JSON / JSONC / JSON5 兼容策略
+
+不新写 JSON 解析器，也不把 JSON 支持做成 workspace 包；只用 Node/Bun 内置 JSON + 一层薄适配。
+
+| 文件 | 规则 |
+|---|---|
+| `*.json`（registry/state/`dia.json`） | **严格 JSON**；机器写入，不接受注释/尾逗号 |
+| `*.jsonc`（人工配置，若引入） | 允许注释/尾逗号；读取兼容，写回 canonical JSON 并提示“注释会丢失” |
+| `*.json5` | **不默认支持**；单引号/无引号键/NaN 会扩大歧义面，只在明确需求时 opt-in |
+| `key=value` 配置 | 继续用现有 env/config 格式，不改成 JSON |
+
+实现约束：
+
+- 不写自定义 parser，不用 `eval`；
+- JSONC 若落地，使用固定版本的成熟解析器（如 `jsonc-parser`），并只对 `.jsonc` 生效；
+- job 的 `registry.json` / `state.jsonl` 永远 strict JSON，JSONC 只用于用户配置；
+- 写入始终原子化，不能因为兼容格式破坏状态文件。
+
+**结论**：兼容优先做 `JSON` + `JSONC`；`JSON5` 先不做，避免为了“宽松”把机器状态也弄脏。

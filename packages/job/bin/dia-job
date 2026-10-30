@@ -1,0 +1,1087 @@
+#!/usr/bin/env bash
+# dia-job —— 通用后台 / 定时任务入口（P2：根/前缀可配；兼容 yan-task）
+# 设计：docs/compose/spec/yan-task-design.md（三型任务 + 四后端 + 边界自愈）
+# 本增量：**只读**（list / status / doctor）。不写任何调度条目 —— 写入在下一增量（bootstrap/install）。
+#
+# ── 退出码契约（2026-10-13 补记；此前**完全未记载**，属接口事实）──────────────
+#   0  成功（含「无需操作」类良性结果，如 list 为空、logs 无日志）
+#   1  校验/操作**失败**（doctor 有 ✗ 项、selfcheck 有缺失、plist 语法错、launchctl 失败）
+#   2  **用法/未知参数/未知子命令**（拼错命令、缺必填参数）
+#   3  平台不支持（非 macOS 走 install 等写入类）
+#   4  门控**拒绝**：路径不稳定（worktree）/ 未加逃生舱 / --takeover 缺 --desc
+#   5  门控**拒绝**：目标是 adopted 任务（plist 由对方项目自管，重建会丢字段）
+# ⚠️ 与 `yan-worktree` **刻意不同**：后者只有 0/1/2（简单三档）；本脚本因含**路径与接管门控**，
+#   额外用 3/4/5 表达「为什么拒绝」—— 调用方据此可分辨「我参数错了(2)」与
+#   「被安全门控拦下(4/5，多为**正确行为**，别当 bug 重试)」。合并成两档会**丢失该信息**。
+# ⚠️ 未知子命令两脚本**一致为 2**（2026-10-13 实测核对）。
+set -uo pipefail
+
+# ── SIGPIPE 加固（T8，2026-10-13 实测）─────────────────────────────────────────
+# 现象：`yan-task doctor | head -2` 以 **141**（128+SIGPIPE）退出、输出被截断 ——
+#   下游（head/less/grep -q）提前退出关管道后，本脚本仍在 printf。
+# 属**用户真实用法**（翻看 doctor 长输出必用 `| less` / `| head`）。
+# 修法：忽略 SIGPIPE ⇒ 管道下游截断为预期行为，退出码归 0。同 yan-worktree。
+trap '' PIPE
+
+
+# ── 测试隔离开关：YAN_TASK_NO_LAUNCHD=1 ⇒ **不做任何 launchd 写入**（plist/registry 照常）──
+# 为什么需要（2026-10-16 实测事故）：e2e 用**沙箱 HOME** 跑 install/uninstall，但 `launchctl
+#   bootstrap/bootout` 作用在**真实用户域** `gui/$UID`（无法沙箱化）⇒ **跑一次 e2e 就会 bootout
+#   掉本机真实的 yan 定时任务**（现场：四个自有任务反复「未加载」，根因即当天多次跑 e2e）。
+#   ⇒ 测试侧设此开关；生产/会话侧**不设**（照旧真实加载）。
+DIA_JOB_NO_LAUNCHD="${DIA_JOB_NO_LAUNCHD:-${YAN_TASK_NO_LAUNCHD:-0}}"
+YAN_TASK_NO_LAUNCHD="$DIA_JOB_NO_LAUNCHD"
+_launchd_off() { [ "$YAN_TASK_NO_LAUNCHD" = 1 ]; }
+
+# ── 平台库（**唯一实现**：平台差异只在那里表达）────────────────────────
+# T1 起复用：dia_job_main_checkout_of / dia_job_path_stability / dia_job_extract_target
+# ── 解析真实脚本路径（symlink 安全；macOS readlink 无 -f）────────────────
+_SRC="${BASH_SOURCE[0]:-$0}"
+while [ -L "$_SRC" ]; do
+  _D="$(cd -P "$(dirname "$_SRC")" >/dev/null 2>&1 && pwd)"
+  _SRC="$(readlink "$_SRC")"
+  case "$_SRC" in /*) ;; *) _SRC="$_D/$_SRC" ;; esac
+done
+SELF_DIR="$(cd -P "$(dirname "$_SRC")" >/dev/null 2>&1 && pwd)"
+ROOT_DIR="$(cd "$SELF_DIR/.." >/dev/null 2>&1 && pwd)"
+# shellcheck source=lib/config.sh
+. "$SELF_DIR/../lib/config.sh"
+dia_job_load_config
+# 数据根：DIA_JOB_ROOT 优先；未显式设置时兼容旧 YAN_DATA_ROOT；最后才用新默认。
+DIA_JOB_ROOT="${DIA_JOB_ROOT:-${YAN_DATA_ROOT:-$HOME/.yan-agent}}"
+if [ ! -d "$DIA_JOB_ROOT" ]; then DIA_JOB_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/dia-job"; fi
+YAN_DATA_ROOT="$DIA_JOB_ROOT"  # 内部兼容：旧函数/旧任务仍读这个变量
+TASKS_DIR="$DIA_JOB_ROOT/tasks"
+DIA_JOB_LABEL_PREFIX="${DIA_JOB_LABEL_PREFIX:-local.dia-job-}"
+UID_NUM="$(id -u)"
+# shellcheck source=lib/policy.sh
+. "$SELF_DIR/../lib/policy.sh"
+
+# ── 工具函数 ───────────────────────────────────────────────────────
+# 数「非空行数」——**唯一实现**，用于一切 `[ N -gt X ]` 数值判定。
+# ⚠️ **为什么不用 `grep -c . || echo 0`**（2026-10-13 T0 修，实测）：
+#    `grep -c` 无匹配时**既输出 `0` 又返回退出码 1** → `|| echo 0` 再补一个 `0`
+#    ⇒ 变量成为**两行字符串 `"0\n0"`** ⇒ 数值比较报
+#      `[: 0\n0: integer expected`，且该分支判定**静默失效**（doctor 会照常打印结论，
+#      但这一项的判定结果不可信 —— 属"工具自身在骗人"，比崩掉更坏）。
+#    纯 bash 实现，无子进程退出码歧义，零多行风险。
+count_lines() {
+  local s="${1-}" n=0 line
+  while IFS= read -r line; do
+    [ -n "$line" ] && n=$((n+1))
+  done <<< "$s"
+  printf '%s' "$n"
+}
+
+# ── 平台探测（设计 §4.1）────────────────────────────────────────────
+detect_platform() {
+  case "$(uname -s)" in
+    Darwin) echo macos ;;
+    Linux)
+      if grep -qi microsoft /proc/version 2>/dev/null; then echo wsl; else echo linux; fi ;;
+    MINGW*|MSYS*|CYGWIN*) echo windows-native ;;
+    *) echo unknown ;;
+  esac
+}
+PLATFORM="$(detect_platform)"
+
+# ── 发现已登记任务 ─────────────────────────────────────────────────
+# ⚠️ **registry 是唯一列表**（2026-10-12 修，用户指出的一致性缺陷）：
+#   原实现用 `^<前缀>` **正则扫目录**来「发现」，导致两个事实源：
+#     ① `list` 扫目录（隐含「只认特定前缀」的约束，非该前缀的任务**看不见**）；
+#     ② `status` 读 registry —— 两者**可能不一致**（登记了却看不见 / 目录有却查不到）。
+#   改为 **registry 优先**；仅当 registry 缺失/为空时才回退扫目录（保持初始行为，零破坏）。
+#   ⇒ 前缀回归「纯偏好」（见设计 §9.0），任意 label 都能纳入管理。
+discover() {
+  # 1) registry 优先：登记表就是唯一列表
+  if [ -f "$REG" ]; then
+    local labels
+    labels="$(python3 -c "
+import json,sys
+try: d=json.load(open('$REG'))
+except Exception: sys.exit(0)
+for k,v in (d.get('tasks') or {}).items():
+    lb = v.get('label')
+    if lb: print(lb)
+    else: print('$DIA_JOB_LABEL_PREFIX' + k.lstrip('yan-'))
+" 2>/dev/null)"
+    if [ -n "$labels" ]; then printf '%s\n' "$labels"; return 0; fi
+  fi
+  # 2) 回退：registry 缺失/为空时扫真实载体（顺序与历史一致）
+  case "$PLATFORM" in
+    macos)
+      ls -1 "$HOME/Library/LaunchAgents" 2>/dev/null | grep -E "^$(printf '%s' "$DIA_JOB_LABEL_PREFIX" | sed 's/\./\\./g')" | sed 's/\.plist$//' | sort -u ;;
+    linux|wsl)
+      crontab -l 2>/dev/null | grep -oE '# (dia-job|yan-task):[a-z0-9._-]+' | sed -E 's/# (dia-job|yan-task)://' ;;
+    *) : ;;
+  esac
+}
+
+cmd_list() {
+  echo "平台: $PLATFORM   数据根: $YAN_DATA_ROOT"
+  local found=0
+  while read -r t; do
+    [ -n "$t" ] || continue
+    found=1; echo "  · $t"
+  done < <(discover)
+  [ "$found" = 1 ] || echo "  （未发现已登记任务；现有 session-diary / review 尚未纳入统一命名 ✓ 属预期）"
+}
+
+cmd_status() {
+  echo "平台: $PLATFORM   数据根: $YAN_DATA_ROOT"
+  # registry 里有 label 的按 label 查；其余按 discovered 名字拼
+  local entries
+  if [ -f "$REG" ]; then
+    entries="$(python3 -c "
+import json
+d=json.load(open('$REG'))
+for k,v in (d.get('tasks') or {}).items():
+    iv = v.get('interval')
+    cal = v.get('calendar') or '-'
+    if v.get('weekdays') not in (None,'-'):
+        cal = cal + ' [' + str(v['weekdays']) + ']'
+    sched = iv if iv not in (None,'-') else cal
+    print(k + '|' + (v.get('label') or ('$DIA_JOB_LABEL_PREFIX' + k.lstrip('yan-'))) + '|' + v.get('type','periodic') + '|' + sched + '|' + (v.get('log') or '$YAN_DATA_ROOT/tasks/' + k + '.log'))")"
+  else
+    entries="$(discover | sed 's/$/|periodic|-|$YAN_DATA_ROOT\/tasks\/x.log/')"
+  fi
+  [ -n "$entries" ] || { echo "  （未登记任何任务）"; return 0; }
+  while IFS='|' read -r name label type sched log; do
+    [ -n "$name" ] || continue
+    printf '  %-9s %-9s %s\n' "$name" "$type" "$label"
+    local st="" pid="" last=""
+    if [ "$PLATFORM" = macos ]; then
+      local info; info="$(launchctl print "gui/$UID_NUM/$label" 2>/dev/null)"
+      if [ -n "$info" ]; then
+        st="$(printf '%s' "$info" | awk -F' = ' '/^\tstate = /{print $2; exit}')"
+        pid="$(printf '%s' "$info" | awk -F' = ' '/^\tpid = /{print $2; exit}')"
+        last="$(printf '%s' "$info" | awk -F' = ' '/last exit code = /{print $2; exit}')"
+      else st="absent"; fi
+    fi
+    printf '      调度=%-10s 状态=%-10s%s\n' "$sched" "${st:-?}" "${pid:+ PID=$pid}"
+    local sf="$YAN_DATA_ROOT/tasks/$name.state.jsonl"
+    if [ -f "$sf" ]; then
+      tail -1 "$sf" | python3 -c "
+import json,sys,datetime
+try: d=json.loads(sys.stdin.read())
+except Exception: print('      上次运行: ?'); raise SystemExit
+t=datetime.datetime.fromtimestamp(d.get('ts',0)).strftime('%m-%d %H:%M:%S')
+print(f\"      上次运行: {t} · exit={d.get('exit')}\")" 2>/dev/null
+    else
+      printf '      上次运行: （无 state；adopted 任务由其项目自管）\n'
+    fi
+    [ -f "$log" ] && printf '      日志: %s（%s · %s）\n' "${log##*tasks/}" "$(wc -c < "$log" | tr -d ' ')B" "$(stat -f '%Sm' -t '%m-%d %H:%M' "$log" 2>/dev/null || stat -c '%y' "$log" | cut -c1-16)"
+  done <<< "$entries"
+}
+
+cmd_logs() {  # logs <name> [-n N]：看某个任务最近在干什么（最直观）
+  local name="${1:-}" n=30
+  shift || true
+  [ "${1:-}" = "-n" ] && { n="$2"; shift 2; }
+  [ -n "$name" ] || { echo "用法：yan-task logs <name> [-n N]" >&2; return 2; }
+  local log="$YAN_DATA_ROOT/tasks/$name.log"
+  if [ ! -f "$log" ] && [ -f "$REG" ]; then
+    log="$(python3 -c "
+import json,sys
+d=json.load(open('$REG')); t=(d.get('tasks') or {}).get('$name') or {}
+print(t.get('log') or '$YAN_DATA_ROOT/tasks/$name.log')" 2>/dev/null)"
+  fi
+  [ -f "$log" ] || { echo "无日志：${log}（任务可能还没跑过）"; return 0; }
+  echo "── ${log}（尾 $n 行）──"; tail -n "$n" "$log"
+}
+
+# ── doctor：只读体检（把 2026-10-10 的两类坑变成可检测）──────────────
+cmd_doctor() {
+  local bad=0 warn=0
+  echo "══ yan-task doctor（${PLATFORM}）══"
+
+  # 1) GUI App 多实例（当天的血泪：旧实例用旧代码托管会话）
+  #    ⚠️ 判据经过两轮实测修正（2026-10-12）：
+  #    《坑 A》**必须用 `ps`，不能用 `pgrep`** —— 实测 `pgrep -f "MacOS/DeepSeek Harness"`
+  #       **漏掉了 GUI 主进程**（14851，ps 可见、kill -0 存活，但 pgrep 不返回）⇒ 数出 0 个 ✗。
+  #    《坑 B》**不能用 `--expose-internals` 判「是不是服务」** —— GUI App 的 CLI 子进程
+  #       （14872，即人当前会话）也带该参数 ⇒ 会被误判成服务 ✗。
+  #    《坑 C》**不能数 `ppid==1`** —— GUI App 主进程与 launchd 服务**都必然 ppid=1**
+  #       （实测 14851 ppid=1、18046 ppid=1）⇒ 正常即 ≥2，必误报 ✗。
+  #    ⇒ 正确判据：**GUI App 主进程** = 命令行形如 `<App>/Contents/MacOS/DeepSeek Harness`
+  #       **且不带** `--expose-internals`（区分纯 App 与 CLI 子进程）。
+  #       正常应为 **1 个**；>1 = 残留实例（真问题）。Helper/Renderer 一律不计（它们是子进程）。
+  local gui_n gui_list
+  gui_list="$(ps -eo pid,command 2>/dev/null | grep -E "MacOS/DeepSeek Harness" | grep -v grep \
+    | grep -vE "/Frameworks/" \
+    | grep -v -- "--expose-internals" \
+    | awk '{print $1}')"
+  # ⚠️ **不能写 `grep -c . || echo 0`**（2026-10-13 修，实测报错）：
+  #    `grep -c` 在**无匹配**时既输出 `0` **又**返回退出码 1 → 触发 `|| echo 0`
+  #    ⇒ 变量变成**两行的 `"0\n0"`** ⇒ `[ "0\n0" -gt 1 ]` 报
+  #       `scripts/yan-task: line 146: [: 0\n0: integer expected`，
+  #    该分支判定**完全失效**（doctor 的这项检查形同虚设）。
+  #    ⇒ 统一走 `count_lines`（纯 bash、无 `||` 兜底、零多行风险）。
+  gui_n="$(count_lines "$gui_list")"
+  if [ "${gui_n:-0}" -gt 1 ]; then
+    echo "  ✗ 有 $gui_n 个 GUI App 主进程（正常 1）—— 多实例会让旧代码继续托管会话"
+    printf '%s\n' $gui_list | sed 's/^/      pid=/'
+    bad=$((bad+1))
+  elif [ "${gui_n:-0}" -eq 1 ]; then
+    echo "  ✓ GUI App 主进程 1 个（正常；Helper/Renderer 为其子进程，不计）"
+  else
+    echo "  ⚠️ 未发现 GUI App 主进程（可能 App 未运行；CLI/服务进程不计）"; warn=$((warn+1))
+  fi
+  # 2) 无限期监听（--duration 0 会把 App 拖常驻）
+  #    ⚠️ 判据必须区分「**受控**子进程」与「**野生**进程」（2026-10-12 修，用户指出）：
+  #       原实现只 grep `--duration 0`，不分宿主 → 常驻服务（launchd → 服务 → dws）也报错 ✗，
+  #       属**假阳性**（狼来了：真出问题时会被忽略）。
+  #       实情：`--duration 0` 的危害是「**无人管生命周期**的野生进程泄漏」——
+  #         进程被 launchd 托管、PPID=1、关窗杀不到、旧实例继续用旧代码应答（2026-10-10 事故）。
+  #         而**服务托管的**监听是服务子进程：服务重启 → 随之重建，**不存在泄漏**。
+  #       ⇒ 判据改为：**PPID 能追到 launchd 已加载任务的** = 受控（不报）；
+  #                  其余（尤其 PPID=1 或父进程已消失）= 野生 → 报警。
+  #   实现：`--duration 0` 的监听进程，逐个查其父进程是否在 `launchctl list` 的存活 pid 里。
+  local inf zero_pids
+  inf="$(ps -eo pid,command 2>/dev/null | grep -E "dws event \+listen-im" | grep -v grep | wc -l | tr -d ' ')"
+  if [ "${inf:-0}" -gt 0 ]; then
+    # 取所有 --duration 0 的监听 pid
+    zero_pids="$(ps -eo pid,command 2>/dev/null | grep -E "dws event \+listen-im" | grep -v grep \
+      | grep -E "\-\-duration 0\b" | awk '{print $1}')"
+    if [ -z "$zero_pids" ]; then
+      echo "  ⚠️ 有 $inf 个钉钉监听进程（有界则正常）"; warn=$((warn+1))
+    else
+      # launchd 已加载任务的全部存活 pid（受控进程的锚点）
+      local live_pids; live_pids="$(launchctl list 2>/dev/null | awk '$1 ~ /^[0-9]+$/ {print $1}')"
+      local wild="" wp ppid_ok
+      for wp in $zero_pids; do
+        local pp; pp="$(ps -o ppid= -p "$wp" 2>/dev/null | tr -d ' ')"
+        ppid_ok=0
+        # 父进程是 launchd 托管的存活任务 → 受控
+        if [ -n "$pp" ] && printf '%s\n' "$live_pids" | grep -qx "$pp"; then ppid_ok=1; fi
+        # 退化判断：父进程链也允许「父进程是某个存活任务的子进程」（如 run-service.sh → dsh）
+        if [ "$ppid_ok" = 0 ] && [ -n "$pp" ] && [ "$pp" != "1" ]; then
+          local gp; gp="$(ps -o ppid= -p "$pp" 2>/dev/null | tr -d ' ')"
+          if [ -n "$gp" ] && printf '%s\n' "$live_pids" | grep -qx "$gp"; then ppid_ok=1; fi
+        fi
+        [ "$ppid_ok" = 0 ] && wild="$wild $wp"
+      done
+      if [ -n "$wild" ]; then
+        echo "  ✗ 存在**无人托管**的无限期监听（--duration 0）：${wild}"
+        echo "      → 危害：进程泄漏 / 旧实例继续用旧代码应答（2026-10-10 事故）。先退干净再启。"
+        bad=$((bad+1))
+      else
+        echo "  ✓ --duration 0 监听均**由 launchd 托管**（服务子进程随服务重建，无泄漏风险）"
+      fi
+    fi
+  else
+    echo "  ✓ 无后台钉钉监听进程"
+  fi
+
+  # 3) plist 体检（坑 1：注释里不能有 `--`；plutil 校验语法）
+  if [ "$PLATFORM" = macos ]; then
+    local p badplist=0
+    for p in "$HOME/Library/LaunchAgents"/local.dia-job.*.plist; do
+      [ -f "$p" ] || continue
+      plutil -lint "$p" >/dev/null 2>&1 || { echo "  ✗ plist 语法错误：$(basename "$p")"; bad=$((bad+1)); badplist=1; }
+      grep -nE '^\s*<!--.*--.*-->' "$p" >/dev/null 2>&1 && { echo "  ✗ plist 注释含 '--'（坑 1，高危）：$(basename "$p")"; bad=$((bad+1)); badplist=1; }
+    done
+    [ "$badplist" = 0 ] && echo "  ✓ launchd plist 语法与注释检查通过"
+  fi
+
+  # 4) cron 的显式 PATH（cron 是最小环境；wrapper 必须自带 PATH）
+  if [ "$PLATFORM" = linux ] || [ "$PLATFORM" = wsl ]; then
+    if crontab -l 2>/dev/null | grep -vE '^\s*#' | grep -qvE 'PATH=|^\s*$'; then
+      echo "  ⚠️ crontab 有条目未显式设置 PATH（cron 是最小环境，易静默失败）"; warn=$((warn+1))
+    else
+      echo "  ✓ crontab PATH 检查通过（或无条目）"
+    fi
+  fi
+
+  # 5) 心跳过期（判活着看心跳，不扫日志全文 —— 坑 6）
+  if [ -d "$TASKS_DIR" ]; then
+    local f age stale=0
+    for f in "$TASKS_DIR"/*.heartbeat; do
+      [ -f "$f" ] || continue
+      age=$(( $(date +%s) - $(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f") ))
+      [ "$age" -gt 600 ] && { echo "  ⚠️ 心跳过期 $((age/60)) 分钟：$(basename "$f" .heartbeat)"; warn=$((warn+1)); stale=1; }
+    done
+    [ "$stale" = 0 ] && echo "  ✓ 心跳检查通过（或暂无任务）"
+  else
+    echo "  · 尚无 ${TASKS_DIR}（任务 state/心跳目录，随 install 建立）"
+  fi
+
+  # 6) registry ↔ 实际载体 一致性（2026-10-12 加：防止两个事实源再次漂移）
+  #    背景：`discover` 曾用正则扫目录「发现」任务，与 registry 形成两个事实源 →
+  #    登记了却看不见 / 目录有却查不到。现已改 registry 优先，此处再加体检项兜底。
+  if [ -f "$REG" ]; then
+    local reglabels loadlabels
+    reglabels="$(python3 -c "
+import json,sys
+try: d=json.load(open('$REG'))
+except Exception: sys.exit(0)
+for k,v in (d.get('tasks') or {}).items():
+    print(v.get('label') or ('$DIA_JOB_LABEL_PREFIX' + k.lstrip('yan-')))
+" 2>/dev/null | sort)"
+    loadlabels="$(launchctl list 2>/dev/null | awk '{print $3}' | grep -E '^com\.' | sort)"
+    local onlyreg onlyload
+    onlyreg="$(comm -23 <(printf '%s\n' "$reglabels") <(printf '%s\n' "$loadlabels") 2>/dev/null | grep -v '^$')"
+    # 只报**我们前缀**的（local.dia-job.* / com.example.*）—— 第三方 App（ssh-agent/Oray/深信服…）
+    # 未登记属正常，不该告警（2026-10-12 实测：不加范围会刷一堆无关项）。
+    local pfx_re
+    pfx_re="$(printf '%s' "$DIA_JOB_LABEL_PREFIX" | sed 's/\./\\./g')"
+    onlyload="$(comm -13 <(printf '%s\n' "$reglabels") <(printf '%s\n' "$loadlabels") 2>/dev/null | grep -v '^$' | grep -E "^${pfx_re}" | head -10)"
+    if [ -n "$onlyreg" ]; then
+      echo "  ⚠️ 已登记但未加载（selfcheck 会重建）："; printf '%s\n' "$onlyreg" | sed 's/^/      /'; warn=$((warn+1))
+    fi
+    if [ -n "$onlyload" ]; then
+      echo "  ⚠️ 已加载但未登记（不纳管 → list 看不见）："; printf '%s\n' "$onlyload" | sed 's/^/      /'; warn=$((warn+1))
+    fi
+    [ -z "$onlyreg$onlyload" ] && echo "  ✓ registry 与已加载任务一致"
+  fi
+
+  # 6) 注册命令的**目标可解析性**（T3 核心，INV-5）
+  #    为什么不能只比 registry.cmd 与 plist.ProgramArguments（设计修正 2，实测）：
+  #      `install` 会生成 `tasks/<name>.sh` 包装脚本 —— plist 指向**包装脚本**，
+  #      registry 存**原始 cmd** ⇒ 二者**天然不同**，逐字比对必然误报。
+  #    真判据 = 「**沿调用链能否解析到实际存在的执行体**」。
+  if [ -f "$REG" ]; then
+    local missing_n=0 cls_bad=0 name c
+    while IFS=$'\t' read -r name c; do
+      [ -n "$name" ] || continue
+      dia_job_cmd_path_class "$c"
+      # 空 cmd（adopt 的任务）→ 无可判，跳过（设计 E16/第 5 态）
+      [ "$YP_CLASS" = "none" ] && continue
+      if [ -z "$YP_CMD_TARGET" ]; then
+        echo "  ⚠️ 任务「${name}」的命令中未提取到绝对路径：$c"; warn=$((warn+1)); continue
+      fi
+      # 逐段复核最内层目标是否存在（含包装脚本链路：plist → tasks/<name>.sh → 真实 cmd）
+      if [ ! -e "$YP_CMD_TARGET" ]; then
+        echo "  ✗ 任务「${name}」的命令目标不存在：${YP_CMD_TARGET}（服务会 exit=127）"
+        missing_n=$((missing_n+1))
+      fi
+      # 7) path_class 一致性 + 「登记了安装器」语义可疑（E5）
+      local rec; rec="$(python3 -c "
+import json,sys
+try: d=json.load(open('$REG'))
+except Exception: sys.exit(0)
+print((d.get('tasks') or {}).get(sys.argv[1],{}).get('path_class',''))" "$name" 2>/dev/null)"
+      if [ -n "$rec" ] && [ "$rec" != "$YP_CLASS" ]; then
+        echo "  ⚠️ 任务「${name}」path_class 漂移：记录=$rec 实况=$YP_CLASS"
+        warn=$((warn+1)); cls_bad=$((cls_bad+1))
+      elif [ -z "$rec" ]; then
+        echo "  · 任务「${name}」尚无 path_class（跑 'yan-task backfill' 补判）"
+      fi
+      case "$(basename "$YP_CMD_TARGET")" in
+        *install*|*setup*) echo "  ⚠️ 任务「${name}」的命令像**安装器**而非服务本体：$YP_CMD_TARGET"; warn=$((warn+1)) ;;
+      esac
+    done < <(python3 - "$REG" <<'PYCHK'
+import json, sys
+d = json.load(open(sys.argv[1]))
+for k, v in (d.get("tasks") or {}).items():
+    print(f"{k}\t{v.get('cmd','') or ''}")
+PYCHK
+)
+    [ "$missing_n" = 0 ] && [ "$cls_bad" = 0 ] && echo "  ✓ 各任务命令目标均存在且 path_class 一致"
+    bad=$((bad+missing_n))
+  fi
+
+  # 8) **失败可见性**（T3，INV-6/7）—— 只读 verdict，**不扫日志**（设计 D3 ⚠️）
+  #    判据：最近一轮 exit=0 但 verdict != ok ⇒ 「**假成功**」。
+  #    ⚠️ **绝不用 grep 扫日志**：launchd 的 StandardOutPath 是追加式的 →
+  #       历史错误行永久留存 ⇒ 已修好的任务**永久误报**（坑 6 假阳性）。
+  #       这正是 state.jsonl 要扩 verdict 字段的原因（T2b）。
+  if [ -d "$TASKS_DIR" ]; then
+    local fake=0 legacy=0 sf last
+    for sf in "$TASKS_DIR"/*.state.jsonl; do
+      [ -f "$sf" ] || continue
+      [ -s "$sf" ] || continue
+      last="$(tail -1 "$sf")"
+      case "$last" in
+        *'"verdict"'*)
+          local vex vvd
+          vex="$(printf '%s' "$last" | sed -n 's/.*"exit"[[:space:]]*:[[:space:]]*\([0-9-]*\).*/\1/p')"
+          vvd="$(printf '%s' "$last" | sed -n 's/.*"verdict"[[:space:]]*:[[:space:]]*"\([a-z]*\)".*/\1/p')"
+          if [ "$vex" = "0" ] && [ -n "$vvd" ] && [ "$vvd" != "ok" ]; then
+            echo "  ✗ 「$(basename "$sf" .state.jsonl)」最近一轮 exit=0 但 verdict=$vvd ⇒ **假成功**（没干成活却报成功）"
+            fake=$((fake+1))
+          fi ;;
+        *) legacy=$((legacy+1)) ;;   # 旧 schema：跳过（E6b 向后兼容，不误报）
+      esac
+    done
+    if [ "$fake" = 0 ]; then
+      echo "  ✓ 无「假成功」"
+      [ "$legacy" -gt 0 ] && echo "  · $legacy 个任务仍为旧 state schema（待下次运行产生 verdict，非故障）"
+    fi
+    bad=$((bad+fake))
+  fi
+
+  # 9) **生效指针（active-ref）**（2026-10-16 加，规则 R56）
+  #    背景：yan-agent 主 worktree 是**实际生效配置 ≈ 生产**；2026-10-16 事故是"另一会话用
+  #      mixed reset 把 27 个交付文件在它视角里变成已删除，再走一步 git add -A 就会回退生产"。
+  #    判据：调 `yan-ref check`（0 干净 / 1 警告 / 2 阻断）；**未部署该工具时优雅跳过**（不误报）。
+  local yref=""
+  for c in "${YAN_DATA_ROOT:-$HOME/.yan-agent}/bin/yan-ref" "$SELF_DIR/yan-ref"; do
+    [ -x "$c" ] && yref="$c" && break
+  done
+  if [ -z "$yref" ]; then
+    echo "  · 生效指针（active-ref）：未部署 yan-ref，跳过（部署：core/dws-hub/service/install.sh 或 scripts/yan-ref）"
+  else
+    local refout refcode=0
+    refout="$("$yref" check 2>&1)" || refcode=$?
+    refout="$(printf '%s' "$refout" | tail -n +2)"      # 去掉首行标题，doctor 自己排版
+    case "$refcode" in
+      0) echo "  ✓ 生效指针一致（主 checkout 干净、指针与生效对象相符）" ;;
+      1) printf '%s\n' "$refout" | sed 's/^/  /'
+         echo "  ⚠️ 生效指针有警告（见上）"; warn=$((warn+1)) ;;
+      *) printf '%s\n' "$refout" | sed 's/^/  /'
+         echo "  ✗ 生效指针阻断：主 checkout 有「已删除」等高风险在制改动 —— **提交前务必 git status 看清，别 git add -A**（规则 R56）"
+         bad=$((bad+1)) ;;
+    esac
+  fi
+
+  echo "── 结论：✗ $bad 项 · ⚠️ $warn 项 ──"
+  [ "$bad" = 0 ] || return 1
+  return 0
+}
+
+
+# ── 写入类：install / uninstall / bootstrap（macOS 后端；设计 §4/§6.1）────
+REG="$YAN_DATA_ROOT/tasks/registry.json"
+
+reg_get() { [ -f "$REG" ] && python3 -c "
+import json,sys
+d=json.load(open('$REG'))
+t=d.get('tasks',{})
+print(json.dumps(t.get(sys.argv[1],{}),ensure_ascii=False))" "$1" 2>/dev/null || echo '{}'; }
+reg_set() {  # reg_set <name> <json>
+  mkdir -p "$YAN_DATA_ROOT/tasks"
+  python3 - "$REG" "$1" "$2" <<'PYX'
+import json, pathlib, sys
+reg, name, payload = pathlib.Path(sys.argv[1]), sys.argv[2], json.loads(sys.argv[3])
+d = json.loads(reg.read_text()) if reg.exists() else {"tasks": {}}
+d.setdefault("tasks", {})[name] = payload
+reg.write_text(json.dumps(d, ensure_ascii=False, indent=2) + "\n")
+PYX
+}
+reg_del() {
+  [ -f "$REG" ] || return 0
+  python3 - "$REG" "$1" <<'PYX'
+import json, pathlib, sys
+reg, name = pathlib.Path(sys.argv[1]), sys.argv[2]
+d = json.loads(reg.read_text())
+d.get("tasks", {}).pop(name, None)
+reg.write_text(json.dumps(d, ensure_ascii=False, indent=2) + "\n")
+PYX
+}
+
+label_of() { echo "${DIA_JOB_LABEL_PREFIX}${1#yan-}"; }        # 归一化：yan-hello → local.dia-job-hello（不叠 yan）
+
+# ── T2：registry 存量补判（backfill）──────────────────────────────────────────
+# 语义（设计 S6 迁移 1/2 + E16）：存量条目**缺 path_class/layer 也能跑**（向后兼容）；
+#   本命令**就地补判并回写**，幂等（已有值不覆盖，除非 --force）。
+# 约束（设计确认）：
+#   · **保持 {"tasks": {…}} 嵌套**与既有缩进（该文件人工可读、手工维护）
+#   · `cmd` 为空 → path_class=none（**跳过路径判定**，不是 unknown）
+#   · 判出 ephemeral（存量不该有）→ **只报告、不自动改**（避免误改他人登记）
+# 用 layer 推断（D7）：按 cmd 路径所属仓判 yan-agent / personal-agent / project
+cmd_backfill() {
+  local force=0 dry=0
+  while [ $# -gt 0 ]; do case "$1" in --force) force=1; shift ;; --dry-run) dry=1; shift ;; *) shift ;; esac; done
+  [ -f "$REG" ] || { echo "无 registry（${REG}）"; return 0; }
+  local flags=""
+  [ "$dry" = 1 ] && flags="$flags · dry-run"
+  [ "$force" = 1 ] && flags="$flags · force"
+  echo "══ yan-task backfill（$PLATFORM${flags}）══"
+
+  # 逐条判定 → 输出 TSV 给 python 回写（避免在 python 里 source bash 库）
+  local rows="" name cmd cls layer changed=0 skipped=0
+  while IFS=$'\t' read -r name cmd; do
+    [ -n "$name" ] || continue
+    dia_job_cmd_path_class "$cmd"
+    cls="$YP_CLASS"
+    # layer 推断（设计 D7）：按**目标所属仓的主 checkout**判，而非 yan_repo_dir()
+    # ⚠️ **不能用 `yan_repo_dir()` 比对**（2026-10-13 实测踩坑）：
+    #    它受 `YAN_DATA_ROOT` 影响 —— 测试/非标准安装时返回 `<其他数据根>/repos/yan-agent`，
+    #    于是真实路径永远匹配不上 ⇒ 全部落到 default `external`（**静默误判**，无报错）。
+    #    改为用 `dia_job_main_checkout_of` 解析目标所属仓，再看该仓**目录名**。
+    layer=""
+    if [ "$cls" = "none" ]; then
+      layer="external"
+    elif [ -n "$YP_CMD_TARGET" ]; then
+      local tdir tmc tbase
+      tdir="$(dirname "$YP_CMD_TARGET")"
+      tmc="$(dia_job_main_checkout_of "$tdir" 2>/dev/null || true)"
+      tbase="$(basename "${tmc:-}")"
+      case "$tbase" in
+        yan-agent)      layer="yan-agent" ;;
+        personal-agent) layer="personal-agent" ;;
+        "")             layer="external" ;;   # 不在 git 仓内
+        *)              layer="project" ;;    # 其他仓（example-repo 等）= 项目层
+      esac
+    fi
+    rows="${rows}${name}"$'\t'"${cls}"$'\t'"${layer}"$'\n'
+  done < <(python3 - "$REG" <<'PYROWS'
+import json, sys
+d = json.load(open(sys.argv[1]))
+for k, v in (d.get("tasks") or {}).items():
+    print(f"{k}\t{v.get('cmd','') or ''}")
+PYROWS
+)
+
+  # ⚠️ **不能 `printf … | python3 - … <<'PY'`**（2026-10-13 实测踩坑）：
+  #    heredoc 会**覆盖该命令的 stdin**，管道送来的 TSV 被丢弃 ⇒ python 读到空输入，
+  #    表现为"补判 0 条"却**没有任何报错**（静默空跑，正是本任务要根治的失败模式）。
+  #    ⇒ 走**临时文件**传 TSV，stdin 留给 heredoc 脚本。
+  local tsv; tsv="$(mktemp "${TMPDIR:-/tmp}/yan-task-backfill.XXXXXX")"
+  printf '%s' "$rows" > "$tsv"
+
+  python3 - "$REG" "$dry" "$force" "$tsv" <<'PYX'
+import json, pathlib, sys
+reg = pathlib.Path(sys.argv[1]); dry = sys.argv[2] == "1"; force = sys.argv[3] == "1"
+tsv = pathlib.Path(sys.argv[4])
+d = json.loads(reg.read_text())
+tasks = d.get("tasks") or {}
+n_add = n_skip = n_eph = 0
+for line in tsv.read_text().splitlines():
+    if not line.strip(): continue
+    name, cls, layer = (line.split("\t") + ["", ""])[:3]
+    t = tasks.get(name)
+    if t is None: continue
+    if cls == "ephemeral":
+        print(f"  ⚠️ {name}: 存量路径被判定为 ephemeral（worktree）—— **不自动改**，请人工核对后重装")
+        n_eph += 1
+    if "path_class" in t and not force:
+        n_skip += 1
+        continue
+    t["path_class"] = cls
+    if layer: t["layer"] = layer
+    print(f"  ✚ {name}: path_class={cls}" + (f" layer={layer}" if layer else ""))
+    n_add += 1
+if n_add and not dry:
+    # **保持嵌套与既有缩进**（该文件人工维护）
+    reg.write_text(json.dumps(d, ensure_ascii=False, indent=2) + "\n")
+print(f"── 补判 {n_add} 条 · 已有值跳过 {n_skip} 条 · ephemeral 待人工 {n_eph} 条{'（dry-run 未写入）' if dry else ''} ──")
+PYX
+  rm -f "$tsv"   # R29：不留临时产物
+}
+
+# —— label 覆盖（2026-10-12 修）——
+# 为什么需要：`adopt` 登记的是**已存在的** label（可能是任意前缀，如个人仓的 com.example.*）。
+#   但 `selfcheck` 重建时走 `cmd_install <short>`，而 cmd_install 用 `label_of` **重新推导** →
+#   推成 `local.dia-job-<short>`，**与 registry 里记的 label 不符** → 重建后 selfcheck 又找不到
+#   → **死循环**（且违反「个人仓保留 com.example.*」的命名决定）。
+# 修法：install/write_plist 支持 `--label` 显式覆盖；selfcheck 重建时把 registry 的 label 传下来。
+LABEL_OVERRIDE=""
+label_for() {  # 有覆盖用覆盖，否则按默认规则推导
+  if [ -n "$LABEL_OVERRIDE" ]; then printf '%s' "$LABEL_OVERRIDE"; else label_of "$1"; fi
+}
+plist_path() { echo "$HOME/Library/LaunchAgents/$(label_for "$1").plist"; }
+
+# ── 星期限定（2026-10-21 新增，需求：工作日 18:30）───────────────────────────
+# `--weekdays 1-5`（周一~周五）或 `1,3,5`；launchd 的 Weekday 0/7=周日、1=周一。
+# 为什么必须有：`--calendar` 只产出单个 {Hour,Minute}，**表达不了「工作日」**；
+#   而 launchd 的 StartCalendarInterval 可以是**数组**，每条 dict 各带 Weekday ⇒ 命中任一条即触发。
+expand_weekdays() {  # expand_weekdays <spec> → 输出空格分隔的星期数字；非法 rc=1
+  local spec="$1" out="" part a b i
+  local -a parts
+  case "$spec" in ''|-) return 0 ;; esac
+  IFS=',' read -ra parts <<< "$spec"
+  for part in "${parts[@]}"; do
+    case "$part" in
+      [0-7]) out="$out $part" ;;
+      [0-7]-[0-7])
+        a="${part%-*}"; b="${part#*-}"
+        [ "$a" -le "$b" ] || return 1
+        for ((i=a; i<=b; i++)); do out="$out $i"; done ;;
+      *) return 1 ;;
+    esac
+  done
+  printf '%s' "${out# }"
+}
+
+# ⚠️ 坑 1：plist 里不写 XML 注释（注释中含 `--` 会让 launchd 解析失败，高危）
+write_plist() {  # write_plist <name> <cmd> <interval|-> <calendar|-> <log> [<weekdays|- >]
+  local name="$1" cmd="$2" interval="$3" calendar="$4" log="$5" weekdays="${6:--}"
+  local f; f="$(plist_path "$name")"
+  mkdir -p "$(dirname "$f")" "$(dirname "$log")"
+  {
+    printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' \
+      '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
+      '<plist version="1.0"><dict>'
+    printf '  <key>Label</key><string>%s</string>\n' "$(label_for "$name")"
+    # 每任务一个包装脚本：执行任务 → 记 state → 透传退出码
+    #（⚠️ 不在 plist 里内联命令：XML 转义 + 引号嵌套极易写坏，实测踩过 ✗）
+    local wrapper="$YAN_DATA_ROOT/tasks/$name.sh"
+    cat > "$wrapper" <<WRAP
+#!/bin/bash
+# 数据根：由 yan-task 统一导出（唯一事实源 = platform.sh 的 yan_data_root）——
+# 任务/服务无需自行推导，避免各自写死平台默认值导致分叉（2026-10-21 灰度服务事故）。
+export DIA_JOB_ROOT="$DIA_JOB_ROOT"
+export YAN_DATA_ROOT="$YAN_DATA_ROOT"
+# yan-task 包装（由 yan-task install 生成，勿手改）：执行任务并记录 state（设计 §7 / T2b）
+#
+# state 记录 = **结构化结论**，供 doctor 检查 8 判「假成功」而**不必扫日志**：
+#   {"ts":…,"exit":N,"verdict":"ok|degraded|failed|skipped","errors":N}
+# 为什么不能靠扫日志（2026-10-13 实测，设计 D3 ⚠️）：
+#   launchd 的 StandardOutPath 是**追加**的 → 历史错误行永久留存；
+#   全文件 grep 会让**已修好的任务永久报错**（坑 6 的假阳性），
+#   而 state.jsonl 原本只有 {ts,exit} —— 无从知道某次运行对应日志的哪一段。
+#
+# verdict 的三种来源（优先级从高到低）：
+#   ① runner 主动写 \${YAN_VERDICT_FILE}（最准确：区分"真没数据"与"没拉到数据"）
+#   ② 本包装脚本按退出码兜底映射（见下）
+#   ③ 都没有 → 按 exit 判（0=ok，其余=failed）
+YAN_VERDICT_FILE="$YAN_DATA_ROOT/tasks/$name.verdict"
+export YAN_VERDICT_FILE            # ⚠️ 必须 export：runner 是子进程，未 export 时读不到（2026-10-29 实测：verdict 恒为空）
+rm -f "\$YAN_VERDICT_FILE"          # 清上一轮残留，防陈旧结论被误用
+# ⚠️ **任务本体必须在子 shell 里跑**（2026-10-13 实测修，既有潜伏缺陷）：
+#    原模板把 cmd 直接放进脚本体 —— 若 cmd 含 `exit`（如 `exit 2`），
+#    会**直接终止整个包装脚本** ⇒ 后面的 state 记录**完全没执行**（静默无记录）。
+#    现网 cmd 多为 `bash '<path>'` 形式故侥幸未爆；此处一并根治。
+( $cmd )
+ec=\$?
+verdict=""
+errors=0
+# ① runner 主动给出结构化结论
+if [ -s "\$YAN_VERDICT_FILE" ]; then
+  verdict="\$(sed -n 's/.*"verdict"[[:space:]]*:[[:space:]]*"\([a-z]*\)".*/\1/p' "\$YAN_VERDICT_FILE" | head -1)"
+  errors="\$(sed -n 's/.*"errors"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' "\$YAN_VERDICT_FILE" | head -1)"
+fi
+[ -n "\$errors" ] || errors=0
+# ② 退出码兜底映射（D4 语义：2=可重试失败，3=不可重试失败）
+if [ -z "\$verdict" ]; then
+  case "\$ec" in
+    0) verdict="ok" ;;
+    2) verdict="degraded" ;;   # 可重试类失败：本轮确实没干成活
+    3) verdict="failed" ;;
+    *) verdict="failed" ;;
+  esac
+fi
+printf '{"ts":%s,"exit":%s,"verdict":"%s","errors":%s}\\n' "\$(date +%s)" "\$ec" "\$verdict" "\$errors" >> "$YAN_DATA_ROOT/tasks/$name.state.jsonl"
+exit \$ec
+WRAP
+    chmod +x "$wrapper"
+    printf '  <key>ProgramArguments</key><array><string>/bin/bash</string><string>%s</string></array>\n' "$wrapper"
+    if [ "$interval" != "-" ]; then printf '  <key>StartInterval</key><integer>%s</integer>\n' "$interval"; fi
+    if [ "$calendar" != "-" ]; then
+      local hour="${calendar%%:*}" minute="${calendar##*:}"
+      if [ -n "${weekdays:--}" ] && [ "${weekdays:--}" != "-" ]; then
+        # 工作日/指定星期：数组形式（每条一个 Weekday），launchd 命中任一条即触发
+        printf '  <key>StartCalendarInterval</key><array>\n'
+        local wd
+        for wd in $weekdays; do
+          printf '    <dict><key>Weekday</key><integer>%s</integer><key>Hour</key><integer>%s</integer><key>Minute</key><integer>%s</integer></dict>\n' "$wd" "$hour" "$minute"
+        done
+        printf '  </array>\n'
+      else
+        printf '  <key>StartCalendarInterval</key><dict><key>Hour</key><integer>%s</integer><key>Minute</key><integer>%s</integer></dict>\n' "$hour" "$minute"
+      fi
+    fi
+    printf '  <key>RunAtLoad</key><true/>\n'
+    printf '  <key>StandardOutPath</key><string>%s</string>\n' "$log"
+    printf '  <key>StandardErrorPath</key><string>%s</string>\n' "$log"
+    printf '  <key>EnvironmentVariables</key><dict><key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:%s/.bun/bin</string></dict>\n' "$HOME"
+    printf '%s\n' '</dict></plist>'
+  } > "$f"
+  plutil -lint "$f" >/dev/null 2>&1 || { echo "  ✗ 生成的 plist 语法错误：$f" >&2; return 1; }
+  echo "$f"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# own-tasks —— **yan-agent 自身任务清单（单一事实源）**
+#
+# 为什么需要（2026-10-16 实测漏网）：
+#   install.sh 装 **4 个**任务（selfcheck / yan-update / failed-task-report / nm-check），
+#   但 uninstall.sh 只移除 2 个 —— `failed-task-report` 被**误归入「其他项目」**保留，
+#   卸载后留下**孤儿 launchd 任务**（数据根已删、registry 已没，无法再 uninstall）。
+#   根因：**清单在两处各自硬编码**，加任务时漏同步（反向工程代码才能发现）。
+#   ⇒ 清单收敛到本函数（唯一实现），install/uninstall **都调它**。
+#
+# 用法：
+#   yan-task own-tasks              # 列出（供人/脚本查阅）
+#   yan-task own-tasks --check <n>  # 判定某任务是否属本仓（退出码 0=是/1=否）
+#   yan-task own-tasks --remove     # 移除全部自身任务（uninstall.sh 调用）
+#   yan-task own-tasks --json       # 机器可读
+#
+# ⚠️ **新增 yan-agent 自身任务时，只改这里**（install.sh 装完仍自行登记，但清单以本函数为准）。
+# ═══════════════════════════════════════════════════════════════════════════
+OWN_TASKS=()
+for _t in ${DIA_JOB_OWN_TASKS:-}; do OWN_TASKS+=("$_t"); done
+
+cmd_own_tasks() {
+  case "${1:-}" in
+    ''|--list)
+      echo "本仓自身任务（卸载时应移除）："
+      for t in "${OWN_TASKS[@]}"; do echo "  · $t"; done
+      echo ""
+      echo "（其他项目的任务：卸载时**保留**并提示，归各自项目管）"
+      ;;
+    --json)
+      python3 -c "
+import json,sys
+print(json.dumps({'ownTasks': sys.argv[1:]}))" "${OWN_TASKS[@]}"
+      ;;
+    --check)
+      local n="${2:-}"
+      [ -n "$n" ] || { echo "用法：yan-task own-tasks --check <name>" >&2; return 2; }
+      for t in "${OWN_TASKS[@]}"; do [ "$t" = "$n" ] && return 0; done
+      return 1
+      ;;
+    --remove)
+      local removed=0 failed=0
+      for t in "${OWN_TASKS[@]}"; do
+        if [ -f "$(plist_path "$t")" ]; then
+          if cmd_uninstall "$t" >/dev/null 2>&1; then
+            echo "  ✓ 已移除本仓任务：$t"
+            removed=$((removed+1))
+          else
+            echo "  ⚠️ 移除 $t 失败（可手工：yan-task uninstall ${t}）" >&2
+            failed=$((failed+1))
+          fi
+        fi
+      done
+      echo "OWN_TASKS_REMOVE removed=$removed failed=$failed"
+      [ "$failed" -eq 0 ]
+      ;;
+    *)
+      echo "用法：yan-task own-tasks [--list|--json|--check <name>|--remove]" >&2
+      return 2
+      ;;
+  esac
+}
+
+cmd_install() {
+  local name="${1:-}" cmd="" interval="-" calendar="-" weekdays="-" desc="" type="periodic" allow_unstable=0 takeover=0
+  shift || true
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --cmd) cmd="$2"; shift 2 ;;
+      --interval) interval="$2"; shift 2 ;;
+      --calendar) calendar="$2"; shift 2 ;;
+      --weekdays) weekdays="$2"; shift 2 ;;
+      --desc) desc="$2"; shift 2 ;;
+      --type) type="$2"; shift 2 ;;
+      --allow-unstable) allow_unstable=1; shift ;;   # T1 逃生舱：放行非稳定路径（需 --desc 说明）
+      --takeover) takeover=1; shift ;;   # 逃生舱：接管 adopted 任务（会重写其 plist，需 --desc 说明）
+      --label) LABEL_OVERRIDE="$2"; shift 2 ;;   # 保留原 label（adopt 场景重建时用）
+      *) echo "未知参数：$1" >&2; return 2 ;;
+    esac
+  done
+  [ -n "$name" ] && [ -n "$cmd" ] || { echo "用法：yan-task install <name> --cmd '<shell>' [--interval 300 | --calendar 09:30 [--weekdays 1-5]] [--desc 说明] [--allow-unstable]" >&2; return 2; }
+  if [ "$PLATFORM" != macos ]; then echo "本增量仅实现 macOS 后端（Linux/WSL/Windows 见设计 §4.1）" >&2; return 3; fi
+
+  # ── 调度参数校验（2026-10-21 补，事故驱动）──────────────────────────────
+  # ⚠️ 此前 `--calendar 09`（漏写分钟）被**静默接受**：`${calendar##*:}` 取不到 `:` 就返回整个
+  #    "09" ⇒ 4 个反馈台账任务全变成 09:09/12:12/15:15/18:18（差 9 分钟），**跑了两周没人发现**。
+  #    ⇒ 现在强制 HH:MM，坏值直接拒绝（宁可在装的时候炸，也别在调度时静默跑错）。
+  if [ "$calendar" != "-" ]; then
+    # 兼容历史写法：`--calendar 09`（只有小时）**按 09:00 解释**并告警。
+    #   ⚠️ 曾经的实现把 "09" 同时当 Hour 和 Minute ⇒ 静默跑成 09:09（2026-10-21 发现，已跑两周）。
+    case "$calendar" in
+      [0-9]|[0-9][0-9])
+        echo "  ⚠️ --calendar '${calendar}' 未写分钟，按 ${calendar}:00 处理（历史上会被误解析为 ${calendar}:${calendar}）" >&2
+        # ⚠️ 不能用 printf '%02d' "09"：bash 把前导 0 当**八进制** ⇒ 09 非法 ⇒ 输出 00（实测踩到）。
+        calendar="$(printf '%02d:00' "$((10#$calendar))")" ;;
+      [0-9]:[0-9][0-9]|[0-9][0-9]:[0-9][0-9]) ;;
+      *) echo "  ✗ --calendar 必须为 HH:MM（收到：${calendar}）" >&2; return 2 ;;
+    esac
+    local _h="${calendar%%:*}" _m="${calendar##*:}"
+    _h=$((10#$_h)); _m=$((10#$_m))
+    { [ "$_h" -le 23 ] && [ "$_m" -le 59 ]; } || { echo "  ✗ --calendar 时间越界：${calendar}" >&2; return 2; }
+  fi
+  local wd_expanded=""
+  if [ "$weekdays" != "-" ] && [ -n "$weekdays" ]; then
+    [ "$calendar" != "-" ] || { echo "  ✗ --weekdays 必须与 --calendar 同用" >&2; return 2; }
+    wd_expanded="$(expand_weekdays "$weekdays")" || { echo "  ✗ --weekdays 非法（应为 1-5 / 1,3,5；0 或 7 = 周日）：${weekdays}" >&2; return 2; }
+    [ -n "$wd_expanded" ] || { echo "  ✗ --weekdays 为空" >&2; return 2; }
+  fi
+
+  # ── adopted 任务重建门控（2026-10-13 实测，**防毁服务**）──────────────────
+  # 为什么必须拦：`install` 会**用自己的模板重写整个 plist**，而 adopted 任务的 plist
+  #   由**对方项目自己维护**（含本模板不产出的字段）⇒ 重建 = **静默降级甚至弄坏服务**。
+  # 实测（yan-reviewer，2026-10-13）重建会丢：
+  #   · `WorkingDirectory`  —— yan-task 模板**根本不产出该键**
+  #   · `REVIEW_STATE_DIR` / `REVIEW_DRY_RUN` 等 env —— 模板只写 `PATH`
+  #   · 日志路径被改指 `tasks/<name>.log`（原为服务自己的 logs/）
+  # ⇒ 服务可能「仍 running 但行为已变」（少读配置/写错目录），且**不易察觉**。
+  # 逃生舱：确需接管 → --takeover（须同时 --desc 说明理由），与 T1 的 --allow-unstable 同风格。
+  if [ "$takeover" != 1 ] && [ -f "$REG" ]; then
+    local adopt_rec
+    adopt_rec="$(python3 -c "
+import json,sys
+try: d=json.load(open('$REG'))
+except Exception: sys.exit(0)
+t=(d.get('tasks') or {}).get('$name') or {}
+print('1' if t.get('adopted') else '0')" 2>/dev/null)"
+    if [ "$adopt_rec" = 1 ]; then
+      echo "  ✗ 拒绝重建：任务「${name}」是 **adopted**（plist 由对方项目自管，不归 yan-task 生成）" >&2
+      echo "      yan-task 会用自己的模板**整体重写** plist ⇒ 丢失本模板不产出的字段：" >&2
+      echo "        · WorkingDirectory（模板不产出）· 自定义 env（模板只写 PATH）· 原日志路径" >&2
+      echo "      → 若只想改登记信息（如 cmd 写错了）：**直接改 registry.json**（不影响运行中的服务）" >&2
+      echo "      → 若确要移交 yan-task 托管：加 --takeover --desc '<理由>'（会重写 plist，先备份）" >&2
+      return 5
+    fi
+  fi
+  # --takeover 必须写明理由（与 --allow-unstable 同规矩：逃生舱要留痕）
+  if [ "$takeover" = 1 ] && [ -z "$desc" ]; then
+    echo "  ✗ --takeover 必须同时提供 --desc 说明理由（会重写 adopted 任务的 plist，需留痕）" >&2
+    return 4
+  fi
+
+  # ── T1 路径稳定性门控（INV-4）────────────────────────────────────────────
+  # 为什么在**写时**拦（设计 D2）：一次拒绝的成本 << 一次 exit=127 静默失败。
+  # 实测事故：在 worktree 里 install → 路径写死 → 清理 worktree 后服务全线 exit=127。
+  dia_job_cmd_path_class "$cmd"
+  case "$YP_CLASS" in
+    ephemeral)
+      echo "  ✗ 拒绝注册：命令指向 **worktree（临时目录）**" >&2
+      echo "      目标：$YP_CMD_TARGET" >&2
+      local mc; mc="$(dia_job_main_checkout_of "$(dirname "$YP_CMD_TARGET")" 2>/dev/null)"
+      [ -n "$mc" ] && echo "      → 请改用主 checkout 路径（该仓主 checkout：${mc}）" >&2
+      echo "      （worktree 清理后引用必悬空 ⇒ exit=127 静默失败；见 launchd.md 坑 5b）" >&2
+      return 4 ;;
+    non-repo-abs|unknown)
+      echo "  ⚠️ 警告：命令目标不是已知 git 主 checkout（class=${YP_CLASS}）" >&2
+      echo "      目标：${YP_CMD_TARGET:-（未提取到绝对路径）}｜${YP_REASON}" >&2
+      if [ "$allow_unstable" != 1 ]; then
+        echo "      → 若确认该路径稳定（非临时/非 worktree），加 --allow-unstable 并写明 --desc" >&2
+        return 4
+      fi
+      [ -n "$desc" ] || { echo "      ✗ --allow-unstable 必须同时提供 --desc 说明理由" >&2; return 4; }
+      echo "      · 已按 --allow-unstable 放行（desc: ${desc}）" >&2 ;;
+  esac
+
+  local log="$YAN_DATA_ROOT/tasks/$name.log" f
+  f="$(write_plist "$name" "$cmd" "$interval" "$calendar" "$log" "${wd_expanded:--}")" || return 1
+  if _launchd_off; then
+    echo "  · 已跳过 launchd 加载（YAN_TASK_NO_LAUNCHD=1；测试隔离）"
+  else
+    launchctl bootout "gui/$UID_NUM/$(label_for "$name")" 2>/dev/null || true   # 幂等：先卸
+    launchctl bootstrap "gui/$UID_NUM" "$f" 2>/dev/null || { echo "  ✗ launchctl bootstrap 失败" >&2; return 1; }
+  fi
+  # ⚠️ **必须把 label 写进 registry**（2026-10-12 修）：install 此前不记 label →
+  #    selfcheck 读不到 → 回退推导（若与 label_of 不一致）→ 判「缺失」→ **重建出重复条目**
+  #    （实测：selfcheck 把自己复制成 local.dia-job-yan-task.selfcheck ⇒ 双跑）。
+  #    写入 label 后，selfcheck/status/bootstrap 一律以 registry 为准，不再推导。
+  local real_label; real_label="$(label_for "$name")"
+  # T2：同时固化 path_class（install 时判定一次，此后迭代**不需要改注册信息** —— 用户 D4）
+  reg_set "$name" "$(python3 -c "
+import json,sys
+print(json.dumps({'type':sys.argv[1],'backend':'launchd','label':sys.argv[2],'cmd':sys.argv[3],'interval':sys.argv[4],'calendar':sys.argv[5],'weekdays':sys.argv[6],'desc':sys.argv[7],'log':sys.argv[8],'path_class':sys.argv[9]},ensure_ascii=False))" "$type" "$real_label" "$cmd" "$interval" "$calendar" "$weekdays" "$desc" "$log" "$YP_CLASS")"
+  echo "INSTALLED ${name}（${f}）"
+  echo "  · path_class: $YP_CLASS"
+  if _launchd_off; then echo "  · launchd 加载已跳过（测试隔离）";
+  elif launchctl print "gui/$UID_NUM/$(label_for "$name")" >/dev/null 2>&1; then echo "  ✓ launchd 已加载";
+  else echo "  ⚠️ launchd 未确认加载"; fi
+}
+
+cmd_uninstall() {
+  local name="${1:-}"
+  [ -n "$name" ] || { echo "用法：yan-task uninstall <name>" >&2; return 2; }
+  local f; f="$(plist_path "$name")"
+  _launchd_off || launchctl bootout "gui/$UID_NUM/$(label_for "$name")" 2>/dev/null || true   # ⚠️ 守卫必须在**这一行**（先前误命中 install 的同名行 ⇒ uninstall 未隔离，实测踩到）
+  [ -f "$f" ] && rm -f "$f" && echo "  · 已删 plist"
+  [ -f "$YAN_DATA_ROOT/tasks/$name.sh" ] && rm -f "$YAN_DATA_ROOT/tasks/$name.sh" && echo "  · 已删包装脚本"
+  reg_del "$name"
+  echo "REMOVED ${name}（state/日志保留在 $YAN_DATA_ROOT/tasks/）"
+}
+
+
+cmd_adopt() {
+  local label="${1:-}"; shift || true
+  local desc="" type="periodic" cmd=""
+  while [ $# -gt 0 ]; do case "$1" in --desc) desc="$2"; shift 2 ;; --type) type="$2"; shift 2 ;; --cmd) cmd="$2"; shift 2 ;; *) shift ;; esac; done
+  [ -n "$label" ] || { echo "用法：yan-task adopt <launchd-label> [--desc 说明] [--type periodic|service]" >&2; return 2; }
+  if [ "$PLATFORM" = macos ] && ! launchctl print "gui/$UID_NUM/$label" >/dev/null 2>&1; then
+    echo "  ⚠️ $label 当前未加载（仍登记，便于 status/bootstrap 可见）"
+  fi
+  local short="${label##*.}"
+  reg_set "$short" "$(python3 -c "
+import json,sys
+print(json.dumps({'type':sys.argv[1],'backend':'launchd','label':sys.argv[2],'adopted':True,'desc':sys.argv[3],'cmd':sys.argv[4]},ensure_ascii=False))" "$type" "$label" "$desc" "$cmd")"
+  echo "ADOPTED ${short}（label=${label}）"
+}
+
+
+
+cmd_gc() {  # 清理 <数据根>/tasks 下超过 N 天的 state/日志/心跳（Q2：默认 30 天）
+  local days=30 dry=0
+  while [ $# -gt 0 ]; do case "$1" in --days) days="$2"; shift 2 ;; --dry-run) dry=1; shift ;; *) shift ;; esac; done
+  local dir="$YAN_DATA_ROOT/tasks"
+  [ -d "$dir" ] || { echo "无 $dir"; return 0; }
+  local n=0 f
+  while IFS= read -r f; do
+    n=$((n+1))
+    if [ "$dry" = 1 ]; then echo "  (dry-run) 将删 $(basename "$f")"
+    else rm -f "$f" && echo "  · 已删 $(basename "$f")"; fi
+  done < <(find "$dir" -maxdepth 1 -type f \( -name '*.log' -o -name '*.state.json' -o -name '*.heartbeat' \) -mtime "+$days" 2>/dev/null)
+  echo "GC 完成：${dry:+dry-run · }超过 ${days} 天的文件 $n 个（registry.json 永不清理 ✓）"
+}
+
+cmd_selfcheck() {  # 体检 + 自愈本边界缺失条目（设计 §6.1；--dry-run 只报不改）
+  local dry=0; [ "${1:-}" = "--dry-run" ] && dry=1
+  local _dry_banner=""; [ "$dry" = 1 ] && _dry_banner=" · dry-run"
+echo "══ yan-task selfcheck（边界=$PLATFORM${_dry_banner}）══"
+  local fixed=0 missing=0
+  if [ -f "$REG" ]; then
+    while IFS=$'\t' read -r short label adopted; do
+      [ -n "$short" ] || continue
+      # ⚠️ **adopted 任务不计入「缺失」**（2026-10-16 修）：它们的 plist 由对方项目自管，
+      #    yan-task 既不该也不该能重建它们 ⇒ 原先一律计 missing ⇒ **selfcheck 永久红**
+      #    （实测：personal-agent 的 yan-self-update 长期未加载 ⇒ 每 5 分钟一次 failed）。
+      #    正解：**提示**它未加载 + 指向其项目脚本，不进 missing 计数。
+      local _adopted=0; [ "${adopted:-}" = "1" ] && _adopted=1
+      if [ "$PLATFORM" = macos ]; then
+        if launchctl print "gui/$UID_NUM/$label" >/dev/null 2>&1; then
+          echo "  ✓ ${short}（$label 已加载）"
+        else
+          if [ "$_adopted" = 1 ]; then
+            echo "  · ${short}：未加载（**adopted**：plist 由对方项目自管 —— 不计缺失；需其项目脚本重装/启动）"
+          else
+          missing=$((missing+1))
+          if [ "$dry" = 1 ]; then echo "  ⚠️ ${short}：$label 未加载（dry-run 不修）"
+          else
+            local cmd iv cal wd
+            # ⚠️ 重建时**必须把调度字段一并带回来**（2026-10-21 修）：原先只传 --cmd，
+            #    plist 会丢 StartCalendarInterval ⇒ selfcheck 一跑，任务就变成「只在 RunAtLoad 跑一次」。
+            IFS=$'\t' read -r cmd iv cal wd < <(reg_get "$short" | python3 -c "
+import json,sys
+t=json.load(sys.stdin)
+print('\t'.join([t.get('cmd',''), t.get('interval','-') or '-', t.get('calendar','-') or '-', t.get('weekdays','-') or '-']))")
+            if [ -n "$cmd" ]; then cmd_install "$short" --cmd "$cmd" --label "$label" --interval "$iv" --calendar "$cal" --weekdays "$wd" >/dev/null && { echo "  ✚ $short 已重建"; fixed=$((fixed+1)); }
+            else echo "  ⚠️ ${short}：未加载且 registry 无 cmd（adopted 任务请按其项目脚本重装）"; fi
+          fi
+          fi
+        fi
+      fi
+    done < <(python3 -c "
+import json, os
+d=json.load(open('$REG'))
+for k,v in (d.get('tasks') or {}).items():
+    # ⚠️ 回退推导必须与 install 的 label_of 一致（去掉 yan- 前缀）——
+    #    （原注释写成反引号包裹的 shell 片段 ⇒ 在外层双引号里被当**命令替换**执行：
+    #     实测「selfcheck --dry-run」会报「--dry-run：未找到命令」——2026-10-16 修）
+    #    否则 key='yan-task.selfcheck' 会推成 local.dia-job-**yan-**task.selfcheck ✗
+    #    → 与实际 label 不符 → 判「缺失」→ 反复重建（2026-10-12 实测：selfcheck 自我复制）
+    lb = v.get('label') or (os.environ.get('DIA_JOB_LABEL_PREFIX','local.dia-job-') + (k[4:] if k.startswith('yan-') else k))
+    print(k + chr(9) + lb + chr(9) + ('1' if v.get('adopted') else '0'))")
+  else
+    echo "  · 无 registry"
+  fi
+  # 生效指针（R56/R57）——**断链类**计入缺失（消费方会硬失败：服务起不来、任务跑不了）；
+  # **污染/漂移类**只记录一行（那属"仓库卫生"，日常会真有在制改动 ⇒ 计失败会天天误报）。
+  if [ ! -f "$YAN_DATA_ROOT/active-ref.json" ]; then
+    echo "  · 生效指针：未部署（跳过）"
+  else
+    local yref=""
+    for c in "${YAN_DATA_ROOT:-$HOME/.yan-agent}/bin/yan-ref" "$SELF_DIR/yan-ref"; do
+      [ -x "$c" ] && yref="$c" && break
+    done
+    if [ -z "$yref" ]; then
+      echo "  · 生效指针：未部署 yan-ref（跳过；部署见 core/dws-hub/service/install.sh）"
+    else
+      local _refj _refbroken _refeff _refcode
+      _refj="$("$yref" check --json 2>/dev/null || true)"
+      _refbroken="$(printf '%s' "$_refj" | grep -cE '"code":[[:space:]]*"(ref_missing|ref_corrupt|ref_target_missing)"' || true)"
+      _refbroken="${_refbroken:-0}"
+      _refeff="$("$yref" resolve 2>/dev/null || true)"
+      if [ "${_refbroken:-0}" -gt 0 ]; then
+        echo "  ✗ 生效指针**断链**（ref_missing / ref_corrupt / ref_target_missing）—— 消费方会硬失败"
+        missing=$((missing+1))
+      else
+        _refcode="$(printf '%s' "$_refj" | grep -oE '"code":[[:space:]]*[0-9]+' | head -1 | grep -oE '[0-9]+' || true)"
+        echo "  ✓ 生效指针：${_refeff:-?}（check 码 ${_refcode:-0}：0 干净 / 1 警告 / 2 阻断 —— 污染/漂移类只记录不误报）"
+      fi
+    fi
+  fi
+
+  # ── 阶段1a：kb-review heartbeat（每日 06:40；>26h = 可能长期未跑）──
+  local hb="$YAN_DATA_ROOT/observability/kb-review-heartbeat.json"
+  if [ -f "$hb" ]; then
+    local _mtime _age
+    _mtime="$(stat -f %m "$hb" 2>/dev/null || stat -c %Y "$hb" 2>/dev/null || echo 0)"
+    _age=$(( $(date +%s) - _mtime ))
+    if [ "$_age" -gt $((26*3600)) ]; then
+      echo "  ✗ kb-review 心跳过期（$((_age/3600))h > 26h）—— review 可能长期未跑"
+      missing=$((missing+1))
+    else
+      echo "  ✓ kb-review 心跳（$((_age/3600))h 前）"
+    fi
+  else
+    echo "  · kb-review 心跳尚无（首次/未运行；不阻断）"
+  fi
+
+  # ── 阶段1a：expected 任务清单（repo 发布；缺失=跳过，不误报）──
+  local manifest="${DIA_JOB_EXPECTED:-}"
+  if [ -f "$manifest" ] && [ -f "$REG" ]; then
+    local _miss
+    _miss="$(python3 - "$manifest" "$REG" "$PLATFORM" <<'PY'
+import json,sys
+m,r,plat=sys.argv[1],sys.argv[2],sys.argv[3]
+try:
+    exp=json.load(open(m,encoding='utf-8')).get('tasks') or []
+    reg=json.load(open(r,encoding='utf-8')).get('tasks') or {}
+except Exception:
+    sys.exit(0)
+miss=[t['name'] for t in exp if plat in (t.get('platforms') or [plat]) and t['name'] not in reg]
+print(' '.join(miss))
+PY
+)"
+    if [ -n "$_miss" ]; then
+      echo "  ✗ registry 缺少 expected 任务：$_miss"
+      missing=$((missing+1))
+    else
+      echo "  ✓ expected 清单齐全"
+    fi
+  else
+    echo "  · expected 清单缺失（跳过）"
+  fi
+
+  echo "── 缺失 $missing · 已重建 $fixed ──"
+  [ "$missing" = 0 ] || return 1
+}
+
+cmd_bootstrap() {  # 幂等重建本边界全部条目（设计 §6.1 兜底入口）；--dry-run 只打印解析结果
+  local dry=0; [ "${1:-}" = "--dry-run" ] && dry=1
+  [ -f "$REG" ] || { echo "无 registry（${REG}）—— 没有可重建的任务"; return 0; }
+  python3 -c "
+import json,sys
+d=json.load(open('$REG'))
+for n,t in (d.get('tasks') or {}).items():
+    print('\t'.join([n, t.get('cmd',''), t.get('interval','-'), t.get('calendar','-'), (t.get('desc','') or ''), t.get('weekdays','-')]))" | \
+  while IFS=$'\t' read -r n c i cal dsc wd; do
+    [ -n "$n" ] || continue
+    if [ "$dry" = 1 ]; then printf 'DRYRUN\t%s\t%s\t%s\t%s\n' "$n" "$c" "$i" "$cal"; continue; fi
+      # ⚠️ **字段必须制表符分隔**（2026-10-16 实测修）：原先 `print(n, cmd, …)` + `IFS=' '` —— 而 cmd 里
+  #    **含空格**（macOS 数据根 `Application Support`！）+ desc 也含空格 ⇒ 字段错位 → cmd 被截断成 `bash`
+  #    ⇒ 门控判 unknown ⇒ **每个任务都 rc=4**，bootstrap（设计的兜底恢复入口）在 mac 上**完全不可用**。
+  # ⚠️ 退出码必须**显式捕获**：`if cmd …; then` 之后 `$?` 已被条件判定覆盖，
+    #   直接读会拿到 0/1 而非真实 rc（2026-10-13 自查发现）⇒ 先执行、再判 rc。
+    cmd_install "$n" --cmd "$c" --interval "$i" --calendar "$cal" --weekdays "$wd" --desc "$dsc" >/dev/null 2>&1
+    local rc=$?
+    if [ "$rc" = 0 ]; then
+      echo "  ✓ 重建 $n"
+    elif [ "$rc" = 5 ]; then
+      # ⚠️ 不再静默（2026-10-13）：adopted 任务被门控挡下（rc=5），若这里不吭声，
+      #   运维会以为「bootstrap 跑过了 = 全都重建了」⇒ 误判。
+      echo "  · 跳过 ${n}（adopted：plist 由对方项目自管，重建会丢字段；如确需接管用 install --takeover）"
+    else
+      echo "  ⚠️ 未重建 ${n}（rc=${rc}）"
+    fi
+  done
+  echo "BOOTSTRAP 完成（本边界 = ${PLATFORM}）"
+}
+
+case "${1:-list}" in
+  list)    cmd_list ;;
+  status)  cmd_status ;;
+  doctor)  cmd_doctor ;;
+  own-tasks) shift; cmd_own_tasks "$@" ;;
+  install)   shift; cmd_install "$@" ;;
+  uninstall) shift; cmd_uninstall "$@" ;;
+  bootstrap) shift; cmd_bootstrap "$@" ;;   # ⚠️ 必须 shift + 透传（2026-10-16 修：原为 `cmd_bootstrap`，导致 --dry-run 永远进不去）
+  registry)  [ -f "$REG" ] && cat "$REG" || echo "（无 registry）" ;;
+  adopt)     shift; cmd_adopt "$@" ;;
+  selfcheck) shift; cmd_selfcheck "$@" ;;
+  backfill)  shift; cmd_backfill "$@" ;;
+  gc)        shift; cmd_gc "$@" ;;
+  logs)      shift; cmd_logs "$@" ;;
+  platform) echo "$PLATFORM" ;;
+  *) echo "用法: yan-task {list|status|doctor|platform|install|uninstall|adopt|selfcheck|backfill|bootstrap|registry|gc|logs}" >&2; exit 2 ;;
+esac

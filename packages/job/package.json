@@ -1,0 +1,10 @@
+{
+  "name": "@dia/job",
+  "version": "0.1.0",
+  "private": true,
+  "description": "dia scheduler adapter: launchd / cron / schtasks",
+  "bin": { "dia-job": "bin/dia-job" },
+  "scripts": {
+    "test": "bash tests/bootstrap.test.sh && bash tests/p2.test.sh && bash tests/policy.test.sh && bash tests/install.test.sh"
+  }
+}

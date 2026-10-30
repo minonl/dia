@@ -1,0 +1,31 @@
+{
+  "name": "@minonl/dia",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "dia (嗲) — lightweight agent framework: knowledge index, audit, session ingest",
+  "bin": {
+    "dia": "bin/dia.js"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "docs",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=24",
+    "bun": ">=1.2"
+  },
+  "scripts": {
+    "dev": "bun src/cli.ts",
+    "build": "bun build src/cli.ts --target node --outfile dist/cli.js --external bun:sqlite",
+    "test": "bun test tests && bash tests/smoke.sh && bash tests/e2e.sh",
+    "compile": "bun build src/cli.ts --compile --outfile dist/dia",
+    "prepublishOnly": "bun run build",
+    "test:job": "pnpm --filter @dia/job test",
+    "test:kb": "pnpm --filter @dia/kb test"
+  },
+  "license": "MIT",
+  "packageManager": "pnpm@12.5.1"
+}

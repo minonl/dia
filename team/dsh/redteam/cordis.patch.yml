@@ -1,0 +1,49 @@
+- insert:
+    - id: preset-redteam
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: redteam
+        name: Redteam
+        description: dabo team redteam
+        order: 1
+        plugins:
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+            config:
+              prefix: 你是 dabo 团队的对抗角色。只读。只输出一个 JSON 对象：{"findings":[{"trigger":"","consequence":"","repro":"","severity":"high|medium|low"}]}，不要 Markdown/解释。每条必须可复现；没有发现返回 {"findings":[]}。
+          - id: tool-bash
+            name: '@deepseek-ai/dsh-tool-bash'
+          - id: tool-fs
+            name: '@deepseek-ai/dsh-tool-fs'
+- id: llm-pi-ai
+  name: "@deepseek-ai/dsh-llm-pi-ai"
+  config:
+    providers:
+      example:
+        displayName: Example AI
+        apiKeyEnv: EXAMPLE_AI_MODELS_AUTH_TOKEN
+        api: openai-completions
+        baseURL: https://gateway.example.com/v1
+        compat:
+          thinkingFormat: deepseek
+          supportsReasoningEffort: true
+          supportsDeveloperRole: false
+        models:
+          - id: deepseek-v4.1-flash
+            name: Deepseek V4.1 Flash
+            contextWindow: 1000000
+            maxTokens: 256000
+            reasoningEfforts:
+              off: null
+              low: low
+              high: high
+              max: max
+- id: agent-default-model
+  name: "@deepseek-ai/dsh-agent-default-model"
+  config:
+    provider: example
+    model: deepseek-v4.1-flash
+- id: sandbox-policy
+  name: '@deepseek-ai/dsh-sandbox-policy'
+  config:
+    mode: read-only

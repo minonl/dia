@@ -1,0 +1,53 @@
+- insert:
+    - id: preset-builder
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: builder
+        name: Builder
+        description: dabo team builder
+        order: 1
+        plugins:
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+            config:
+              prefix: 你是 dabo 团队的实现角色。按计划修改当前目录代码并运行测试，输出简短总结。
+          - id: tool-bash
+            name: '@deepseek-ai/dsh-tool-bash'
+          - id: tool-fs
+            name: '@deepseek-ai/dsh-tool-fs'
+- id: llm-pi-ai
+  name: "@deepseek-ai/dsh-llm-pi-ai"
+  config:
+    providers:
+      example:
+        displayName: Example AI
+        apiKeyEnv: EXAMPLE_AI_MODELS_AUTH_TOKEN
+        api: openai-completions
+        baseURL: https://gateway.example.com/v1
+        compat:
+          thinkingFormat: deepseek
+          supportsReasoningEffort: true
+          supportsDeveloperRole: false
+        models:
+          - id: deepseek-v4.1-flash
+            name: Deepseek V4.1 Flash
+            contextWindow: 1000000
+            maxTokens: 256000
+            reasoningEfforts:
+              off: null
+              low: low
+              high: high
+              max: max
+- id: agent-default-model
+  name: "@deepseek-ai/dsh-agent-default-model"
+  config:
+    provider: example
+    model: deepseek-v4.1-flash
+- id: sandbox-policy
+  name: '@deepseek-ai/dsh-sandbox-policy'
+  config:
+    mode: workspace-write
+- id: permission
+  name: '@deepseek-ai/dsh-permission-presets'
+  config:
+    defaultPreset: workspace-write

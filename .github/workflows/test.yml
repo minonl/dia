@@ -1,0 +1,26 @@
+name: test
+on: [push, pull_request]
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: '12.5.1' }
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: latest }
+      - uses: actions/setup-node@v4
+        with: { node-version: '24' }
+      - run: pnpm install --frozen-lockfile
+      - run: bun --version && node --version && pnpm --version
+      - run: bun test tests
+      - run: pnpm --filter @dia/job test
+        if: runner.os == 'macOS'
+      - run: bun run build
+      - run: bash tests/smoke.sh
+      - run: bash tests/e2e.sh
+      - run: DIA_E2E_RUNTIME=bun bash tests/e2e.sh

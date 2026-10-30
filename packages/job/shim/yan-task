@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# yan-task 兼容 shim：只转发到已安装的 dia-job；拒绝 worktree 路径（yan-ref 纪律）。
+set -u
+SELF="${BASH_SOURCE[0]:-$0}"
+while [ -L "$SELF" ]; do
+  d="$(cd -P "$(dirname "$SELF")" >/dev/null 2>&1 && pwd)"; t="$(readlink "$SELF")"
+  case "$t" in /*) SELF="$t" ;; *) SELF="$d/$t" ;; esac
+done
+case "$SELF" in
+  *-worktree--*|*/.worktrees/*) echo "yan-task shim: 拒绝从 worktree 运行（$SELF）" >&2; exit 4 ;;
+esac
+
+BIN="${DIA_JOB_BIN:-}"
+if [ -z "$BIN" ]; then
+  for c in "$HOME/.local/bin/dia-job" /opt/homebrew/bin/dia-job /usr/local/bin/dia-job; do
+    [ -x "$c" ] && BIN="$c" && break
+  done
+fi
+[ -n "$BIN" ] || BIN="$(command -v dia-job 2>/dev/null || true)"
+[ -n "$BIN" ] || { echo "yan-task shim: 未找到 dia-job；先跑 dia-job 的 install.sh" >&2; exit 3; }
+case "$BIN" in
+  *-worktree--*|*/.worktrees/*) echo "yan-task shim: 拒绝 worktree 里的 dia-job（$BIN）" >&2; exit 4 ;;
+esac
+exec "$BIN" "$@"

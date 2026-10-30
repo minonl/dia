@@ -1,0 +1,8 @@
+{
+  "name": "@dia/kb",
+  "version": "0.0.0",
+  "private": true,
+  "description": "dia knowledge engine: index / search / lint / get",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "test": "bun test tests" }
+}

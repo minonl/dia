@@ -1,0 +1,5 @@
+# ~/.config/dia-job/config（纯 KEY=value；不 source、不执行）
+DIA_JOB_ROOT=/Users/you/.local/share/dia-job
+DIA_JOB_LABEL_PREFIX=local.dia-job-
+DIA_JOB_ENTRY_DIR=/Users/you/.local/share/dia-job/bin
+# DIA_JOB_OWN_TASKS=selfcheck update

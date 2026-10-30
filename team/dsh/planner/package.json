@@ -1,0 +1,16 @@
+{
+ "name": "dabo-planner-profile",
+ "private": true,
+ "dependencies": {},
+ "dsh": {
+  "profile": {
+   "bundles": [
+    "@deepseek-ai/dsh-base",
+    "@deepseek-ai/dsh-acp-app",
+    "@deepseek-ai/dsh-deepseek-account",
+    "@deepseek-ai/dsh-llm-deepseek-account",
+    "@deepseek-ai/dsh-llm-deepseek-api-key"
+   ]
+  }
+ }
+}

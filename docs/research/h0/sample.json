@@ -1,0 +1,34 @@
+{
+  "schema": 1,
+  "seed": 11,
+  "source": "episodes.jsonl (322 rows; 140 after excluding test fixtures)",
+  "rubric": {
+    "framework": "domain-agnostic engine capability (ingest/audit/kb/team/version/render/sandbox)",
+    "domain": "one entry's content/policy (yan work, dabo personal, host entry adapters)",
+    "kit": "reusable knowledge/skill/tool content, no execution by default",
+    "fit": "task can be owned by one of the three without a fourth responsibility",
+    "framework_change": "task would require changing dia framework code/contracts"
+  },
+  "items": [
+    {"episode_id":"c1ec930868d80ceb1483033ac56edaa5b2e6265795b5746c3190984ae7aa6a20","task":"迁移 example-service 到 example-repo","primary":"domain","framework_change":false,"fits":true,"host_coupled":false,"why":"工作域项目迁移；复用现有工具，不改引擎。"},
+    {"episode_id":"754568d01fb03a2c8e4ff4b71d30ce470a480c7cd4fec7641736e48b082eac36","task":"yan 版本管理：服务/引用路径生命周期治理","primary":"framework","framework_change":true,"fits":true,"host_coupled":false,"why":"persona/kit 版本与渲染生命周期是通用能力。"},
+    {"episode_id":"da4efeeb3bd2dc6908e79b3f546f663576537f36747599a0c402de8f2e960262","task":"只读沙箱 touch 测试","primary":"framework","framework_change":false,"fits":true,"host_coupled":false,"why":"验证既有沙箱能力，不需要新层。"},
+    {"episode_id":"efd4522712124eafd887225a8f36977742d408fd26e1f920117340c31c483f64","task":"企业知识库智能体场景本地同构实现","primary":"domain","framework_change":false,"fits":true,"host_coupled":false,"why":"产品域实现；团队/工具由框架提供。"},
+    {"episode_id":"912dc3f457de50dc696eb04f50afa3ae06c6fed4a5eb5dce32ec26bebfd4b0e9","task":"GitLab MR lgtm 轮询","primary":"kit","framework_change":false,"fits":true,"host_coupled":false,"why":"轮询流程是可复用 skill；不需要引擎改动。"},
+    {"episode_id":"e2118ba3336077dc927d748f1f04434e8f29c10a2a101b6a03a950645c245c2c","task":"DSH watchdog 权限日志分析","primary":"framework","framework_change":false,"fits":true,"host_coupled":false,"why":"沙箱/权限分析，属引擎观测能力。"},
+    {"episode_id":"59f18b53f5b1e2f994552338304a75a0868dd975cb63b085da6e49e4e7935df8","task":"图片菜单项识别","primary":"framework","framework_change":false,"fits":true,"host_coupled":false,"why":"模型视觉/读图能力，框架已有。"},
+    {"episode_id":"7967c01bb3da5ffab022b6c414a55f78c773a02876b4bf1e41505e4d9af987d2","task":"图片标题文字识别","primary":"framework","framework_change":false,"fits":true,"host_coupled":false,"why":"同图片识别，框架能力覆盖。"},
+    {"episode_id":"7c1fe9510076c124b84d8ad1c58b7755160f081e83025d5dff0628b6f5321aff","task":"网络安全短信改造","primary":"domain","framework_change":false,"fits":true,"host_coupled":false,"why":"业务产品改造；域内完成。"},
+    {"episode_id":"74d470457788397d901dd984548eabae07a9bdda1a33ec15f29643c38e478a60","task":"DSH 文档预览 Mermaid 客户端插件","primary":"none","framework_change":true,"fits":false,"host_coupled":true,"why":"需要宿主 Electron 客户端插件机制；三层都没有承接处。"},
+    {"episode_id":"62d818b447ae3cc0d346b33fcde764f2487b28adbcdb4902f7a333584af4a4f9","task":"超级本 LDAP 登录跳转修复","primary":"domain","framework_change":false,"fits":true,"host_coupled":false,"why":"业务登录域问题。"},
+    {"episode_id":"f82db27c013c0012725267f48c1c1e16f22ab7525b67e2bf36e10ed8853900ab","task":"平台感知 + 并行会话收尾","primary":"framework","framework_change":true,"fits":true,"host_coupled":false,"why":"跨平台会话生命周期属框架。"},
+    {"episode_id":"2b37c73e83cb697b07b146010d4fe04d85fea6b25abbb2d664365648526c2366","task":"DSH 配置页前端能力调研","primary":"none","framework_change":true,"fits":false,"host_coupled":true,"why":"宿主配置页设计/调研，输出服务宿主插件，不属三层任一。"},
+    {"episode_id":"a92d84035c3185d62d6a66e3000034e99603adc801294b0c0de7bc3f33f21911","task":"钉钉反馈分析：商品分组升级","primary":"domain","framework_change":false,"fits":true,"host_coupled":false,"why":"工作域反馈分析；消息通道另有工具。"},
+    {"episode_id":"62ff3e9920701b6512943847b0cd4f5a72c037af2e79c274982836ca303cfc3d","task":"example-repo 知识库批量导入接口优化","primary":"domain","framework_change":false,"fits":true,"host_coupled":false,"why":"产品接口优化，域内完成。"},
+    {"episode_id":"7588f0ea35adae84defb920dfbb5b28f7cda5a4c54e49bdc30e317c7ea28aad8","task":"yan-agent 更新与生效版本机制","primary":"framework","framework_change":true,"fits":true,"host_coupled":false,"why":"自更新/生效版本是框架生命周期。"},
+    {"episode_id":"ba7540301101e3cbd98e5b3fe60d2333936bfc488b32942fea52120f758df84b","task":"企业知识库回复诊断页内置改造","primary":"domain","framework_change":false,"fits":true,"host_coupled":false,"why":"产品页面改造，域内完成。"},
+    {"episode_id":"f8d118e7c02dffb70cd72fa07a42a9bb0e2e54d740a6be3a26a03c6b6aef180b","task":"服务生命周期治理（续）","primary":"framework","framework_change":true,"fits":true,"host_coupled":false,"why":"同版本生命周期，框架能力。"},
+    {"episode_id":"05dad476c47c83981937fcb08c3f9ca7c1072a4ccc2e1fb689f87c19249d4b14","task":"iTerm2 Markdown 与浏览器插件安装","primary":"none","framework_change":false,"fits":false,"host_coupled":true,"why":"本机宿主环境安装，不属框架/域/kit 的职责。"},
+    {"episode_id":"29a32a0f00ad1287adf2b361a0eb1853e53fbb3bafaaa02387ec38b584d62994","task":"企业知识库领域知识出现商品","primary":"domain","framework_change":false,"fits":true,"host_coupled":false,"why":"业务数据/过滤规则，域内修复。"}
+  ]
+}

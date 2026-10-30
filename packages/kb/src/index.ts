@@ -202,3 +202,5 @@ export function getDoc(root: string, rel: string, section?: string): string {
   }
   return out.join("\n");
 }
+
+export * from "./path.ts";

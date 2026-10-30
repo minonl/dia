@@ -1,4 +1,5 @@
 import { buildIndex, search, lint, getDoc } from "./kb.ts";
+import { resolveKbPath } from "../packages/kb/src/path.ts";
 import { ingest, readGitUpdates } from "./ingest.ts";
 import * as audit from "./audit.ts";
 import * as freeze from "./freeze.ts";
@@ -40,6 +41,7 @@ usage:
   dia kb search <query> [--root DIR] [--db PATH] [--limit N] [--json]
   dia kb query <query> [--root DIR] [--db PATH] [--limit N] [--json] [--full] [--bytes]
   dia kb review [--root DIR] [--db PATH] [--json]
+  dia kb path <doc:...|workflow:...|skill:...|tool:...#mode> [--root DIR] [--repo DIR] [--json]
   dia kb lint [--root DIR] [--db PATH] [--stale-days N] [--json] [--strict]
   dia kb get <path> [--root DIR] [--section HEADING]
   dia ingest sessions [--source dsh|opencode|all] [--domain dabo|yan] [--since ISO]
@@ -103,6 +105,22 @@ async function kb(argv: string[]): Promise<number> {
       if (r.text !== undefined) out(r.text);
     }
     return rows.length ? 0 : 1;
+  }
+  if (sub === "path") {
+    const addr = positional(args)[0];
+    if (!addr) { err("missing address"); return 2; }
+    try {
+      const resolved = resolveKbPath(root, addr, {
+        repo: flag(args, "--repo") || process.env.DIA_REPO_ROOT,
+        skillsDir: flag(args, "--skills-dir") || process.env.DIA_KB_SKILLS_DIR,
+        runtime: flag(args, "--runtime") || process.env.DIA_KB_RUNTIME,
+      });
+      out(has(args, "--json") ? JSON.stringify(resolved, null, 1) : resolved.command);
+      return 0;
+    } catch (e: any) {
+      err(e?.message || String(e));
+      return e?.code === 4 ? 4 : 2;
+    }
   }
   if (sub === "review") {
     const res = await lint(root, db, Number(flag(args, "--stale-days") || 180));

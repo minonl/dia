@@ -61,11 +61,11 @@ dia `src/kb.ts` 现在只有：`index / search / lint / get`。
 - 记录 `path 集合 + 顺序 + exit code` 为 golden；
 - 只读，不改 yan。
 
-### K1：dia kb 补通用契约（进行中）
+### K1：dia kb 补通用契约 ✅
 
 - ✅ `dia kb query`：兼容 `search`，加 `--json/--full/--bytes`；
 - ✅ 复审队列：`dia kb review`（缺失/到期/stale）；
-- ⏳ `dia kb path`：知识地址 → 绝对路径（通用语法，不绑定 yan scene）；
+- ✅ `dia kb path`：doc/workflow/skill/tool 地址 → 绝对路径；可配 `--repo/--skills-dir`；
 - `dia kb observe/report`：可选；先定义 JSONL schema，不急着迁。
 - 判据：20 条查询路径集合一致；索引重建两次哈希一致。
 
@@ -108,6 +108,6 @@ yan-kb --scene/--rule/--auto/claims/baseline/alerts/record → 本地实现
 ## 5. 下一步
 
 1. 先做 K0：20 条真实查询 golden；
-2. 再做 K1 的 `dia kb query` parity；
+2. ✅ K1 `dia kb query/review/path` 已完成；
 3. K2 只切 `query/index/get`，`--scene` 等不动；
 4. 每次变更附命令与输出，不用“应该可以”结案。

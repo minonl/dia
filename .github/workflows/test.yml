@@ -19,8 +19,8 @@ jobs:
       - run: bun --version && node --version && pnpm --version
       - run: bun test tests
       - run: pnpm --filter @dia/kb test
+      # job 测试两端都跑（2026-10-30：Linux 后端落地，linux.test.sh 在非 Linux 上自动跳过）
       - run: pnpm --filter @dia/job test
-        if: runner.os == 'macOS'
       - run: bun run build
       - run: bash tests/install-dia.test.sh
       - run: bash tests/smoke.sh

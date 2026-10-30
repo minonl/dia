@@ -49,6 +49,7 @@ export interface KitManifest {
 }
 
 export interface ContentFields {
+  env?: { files?: string[]; keys?: string[] };
   files?: FileArtifact[];
   skills?: SkillArtifact[];
   bin?: BinArtifact[];
@@ -274,7 +275,7 @@ export function install(from: string, opts: { ref?: string; dryRun?: boolean; js
   const hash = hashTree(target);
   writeFileSync(join(target, "kit.lock"), JSON.stringify({
     id: m.id, version: m.version, commit: src.commit, root: kitRootRel, hash,
-    rendered, commands: m.commands ?? [], knowledge: m.knowledge ?? [], dataRoot: m.data_root ?? null,
+    rendered, commands: m.commands ?? [], knowledge: m.knowledge ?? [], dataRoot: m.data_root ?? null, env: m.env ?? null,
   }, null, 1));
   return { id: m.id, version: m.version, dir: target, root: kitRoot, rendered, hash, changed: true };
 }

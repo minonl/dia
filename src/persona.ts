@@ -28,6 +28,7 @@ export interface Manifest {
   commands?: { name: string; entry: string; runtime?: "bun" | "node"; env?: Record<string, string> }[];
   knowledge?: string[];
   data_root?: string;
+  env?: { files?: string[]; keys?: string[] };
   capabilities?: Record<string, unknown>;
 }
 
@@ -194,7 +195,7 @@ export function install(from: string, opts: { ref?: string; host?: string; dryRu
   const renderedHashes: Record<string, string> = {};
   for (const f of rendered) renderedHashes[f] = shaFile(f);
   writeFileSync(join(target, "dia.lock"), JSON.stringify({ id: m.id, version: m.version, commit: src.commit, hash, rendered, renderedHashes, renderedDirs, kits: kitRefs,
-    content: { knowledge: m.knowledge ?? [], commands: m.commands ?? [], dataRoot: m.data_root ?? null, rendered: inline },
+    content: { knowledge: m.knowledge ?? [], commands: m.commands ?? [], dataRoot: m.data_root ?? null, env: m.env ?? null, rendered: inline },
   }, null, 1));
   return { id: m.id, version: m.version, dir: target, rendered, hash };
 }

@@ -10,6 +10,7 @@ import * as kit from "../../../src/kit.ts";
 import * as scope from "../../../src/scope.ts";
 import * as active from "../../../src/active.ts";
 import * as doctor from "../../../src/doctor.ts";
+import * as envx from "../../../src/env.ts";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -114,6 +115,7 @@ usage:
   dia persona add <id|--from SRC> [--ref REF] [--host opencode] [--dry-run] [--json]
   dia persona list|verify|remove|show <id>|use <id>[@ver]
   dia doctor [--persona ID] [--json]
+  dia env list|check [KEY…] | env [--dry-run] [--redact] <cmd…>
   dia persona default <id>|--unset|--show [--host opencode]
   dia kit add --from SRC [--ref REF] [--dry-run] [--json]
   dia kit list|verify <id>|remove <id>
@@ -688,6 +690,58 @@ export async function main(rawArgv: string[]): Promise<number> {
   if (cmd === "persona") return personaCli(argv.slice(1));
   if (cmd === "kit") return kitCli(argv.slice(1));
   if (cmd === "wt") return wtCli(argv.slice(1));
+  if (cmd === "env") {
+    const [sub, ...rest] = argv.slice(1);
+    const sc = safeScope(flag(rest, "--persona"));
+    const personaEnv = sc?.env ? { files: sc.env.files, keys: sc.env.keys } : undefined;
+    const filesArg = flag(rest, "--files");
+    const keysArg = flag(rest, "--keys");
+    const cfg = envx.resolveConfig({
+      persona: personaEnv,
+      files: filesArg ? filesArg.split(":") : undefined,
+      keys: keysArg ? keysArg.split(",") : undefined,
+    });
+    try {
+      if (sub === "list" || (!sub && has(rest, "--list"))) {
+        const r = envx.list(cfg);
+        if (has(rest, "--json")) { out(JSON.stringify(r, null, 1)); return r.keys.every((k) => k.found) ? 0 : 1; }
+        for (const f of r.files) out(`${f.exists ? "✓" : "!"} ${f.path}${f.exists ? `（${f.keys} 个键）` : "（缺失）"}`);
+        for (const k of r.keys) out(`  ${k.found ? "✅" : "❌"} ${k.key}${k.found ? "" : "（未找到）"}`);
+        out("（不回显值）");
+        return r.keys.every((k) => k.found) ? 0 : 1;
+      }
+      if (sub === "check") {
+        const target = positional(rest);
+        const r = envx.check(cfg, target.length ? target : cfg.keys);
+        for (const k of r) out(`  ${k.found ? "✅" : "❌"} ${k.key}${k.found ? `（${k.length} 字符）` : "（未找到）"}`);
+        return r.every((k) => k.found) ? 0 : 1;
+      }
+      // run：`dia env [--dry-run] [--redact] <cmd…>`，也接受 `dia env run …`
+      const args = sub === "run" ? rest : [sub, ...rest].filter((x) => x !== undefined);
+      const dry = has(args, "--dry-run");
+      const redact = has(args, "--redact") || process.env.DIA_ENV_REDACT === "1";
+      const cmd = args.filter((a) => a !== "--dry-run" && a !== "--redact" && !a.startsWith("--files") && !a.startsWith("--keys"));
+      // 去掉 --files/--keys 的值 token
+      const cleaned: string[] = [];
+      for (let i = 0; i < cmd.length; i++) {
+        if (cmd[i] === filesArg || cmd[i] === keysArg) continue;
+        cleaned.push(cmd[i]);
+      }
+      if (!cleaned.length) { err("usage: dia env run [--dry-run] [--redact] <cmd…>"); return 2; }
+      const r = envx.run(cfg, cleaned, { dryRun: dry, redact });
+      if (dry) {
+        out(`将注入 ${r.injected.length} 个键到：${cleaned[0]}`);
+        for (const k of r.injected) out(`  · ${k}（${envx.check(cfg, [k])[0]?.length ?? 0} 字符）`);
+        if (r.missing.length) err(`未找到（不注入）：${r.missing.join(", ")}`);
+        return 0;
+      }
+      if (r.missing.length) err(`未找到（不注入）：${r.missing.join(", ")}`);
+      return r.exit;
+    } catch (e: any) {
+      err(e?.message || String(e));
+      return String(e?.message || "").startsWith("E_CMD") ? 2 : 1;
+    }
+  }
   if (cmd === "doctor") {
     const r = doctor.run({ persona: flag(argv, "--persona") });
     if (has(argv, "--json")) out(JSON.stringify(r, null, 1));

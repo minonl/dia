@@ -19,6 +19,7 @@ export interface KitScope {
   knowledge: string[];
   commands: { name: string; entry: string; runtime?: "bun" | "node"; env?: Record<string, string> }[];
   dataRoot?: string;
+  env?: { files: string[]; keys: string[] };
 }
 
 export interface Scope {
@@ -28,6 +29,7 @@ export interface Scope {
   kits: KitScope[];
   knowledgeRoot?: string;
   dataRoot?: string;
+  env?: { files: string[]; keys: string[] };
 }
 
 const expand = (p: string) => { const h = homeDir(); return p === "~" ? h : p.startsWith("~/") ? join(h, p.slice(2)) : p; };
@@ -79,6 +81,7 @@ export function current(explicit?: string): Scope | null {
       knowledge: (c.knowledge ?? []).map((k: string) => resolve(dir, k)),
       commands: c.commands ?? [],
       dataRoot: c.dataRoot ? expand(c.dataRoot) : undefined,
+      env: c.env ? { files: (c.env.files ?? []).map(expand), keys: c.env.keys ?? [] } : undefined,
     });
   }
   for (const k of lock.kits ?? []) {
@@ -90,6 +93,7 @@ export function current(explicit?: string): Scope | null {
     id, version, dir, kits,
     knowledgeRoot: knowledge[0],
     dataRoot: kits.find((k) => k.dataRoot)?.dataRoot,
+    env: kits.find((k) => k.env)?.env,
   };
 }
 

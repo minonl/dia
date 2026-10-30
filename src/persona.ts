@@ -5,10 +5,12 @@ import { basename, join, relative, resolve, sep } from "node:path";
 import { execFileSync } from "node:child_process";
 import * as kit from "./kit.ts";
 
-const DATA = process.env.DIA_DATA_DIR || join(homedir(), ".local", "share", "dia");
-const CACHE = process.env.DIA_CACHE_DIR || join(homedir(), ".cache", "dia", "src");
-const OPENCODE_AGENTS = process.env.DIA_OPENCODE_AGENTS_DIR || join(homedir(), ".config", "opencode", "agents");
-const DSH_PROFILES = process.env.DIA_DSH_PROFILES_DIR || join(homedir(), ".dsh", "profiles");
+// 目录惰性解析（测试与多 persona 场景 env 会变）
+const dataDir = () => process.env.DIA_DATA_DIR || join(homedir(), ".local", "share", "dia");
+const cacheDir = () => process.env.DIA_CACHE_DIR || join(homedir(), ".cache", "dia", "src");
+const opencodeAgents = () => process.env.DIA_OPENCODE_AGENTS_DIR || join(homedir(), ".config", "opencode", "agents");
+const dshProfiles = () => process.env.DIA_DSH_PROFILES_DIR || join(homedir(), ".dsh", "profiles");
+const opencodeConfig = () => process.env.DIA_OPENCODE_CONFIG || join(homedir(), ".config", "opencode", "opencode.json");
 
 export interface Manifest {
   schema: number;
@@ -70,10 +72,10 @@ function resolveSource(from: string, ref?: string): { dir: string; commit: strin
   if (from.startsWith("git+") || from.startsWith("http://") || from.startsWith("https://") || from.startsWith("git@")) {
     const url = from.replace(/^git\+/, "");
     const key = createHash("sha1").update(url).digest("hex").slice(0, 12);
-    const dir = join(CACHE, key);
+    const dir = join(cacheDir(), key);
     const git = (args: string[]) => execFileSync("git", ["-C", dir, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
     if (!existsSync(dir)) {
-      mkdirSync(CACHE, { recursive: true });
+      mkdirSync(cacheDir(), { recursive: true });
       try {
         execFileSync("git", ["clone", "--quiet", url, dir], { stdio: "pipe" });
       } catch {
@@ -114,8 +116,8 @@ export function install(from: string, opts: { ref?: string; host?: string; dryRu
   const src = resolveSource(from, opts.ref);
   const m = readManifest(src.dir);
   if (m.kind !== "persona") throw new Error("E_MANIFEST: not a persona");
-  const target = resolve(DATA, "personas", m.id, m.version);
-  if (!target.startsWith(resolve(DATA, "personas") + sep)) throw new Error("E_MANIFEST: version escapes install dir");
+  const target = resolve(dataDir(), "personas", m.id, m.version);
+  if (!target.startsWith(resolve(dataDir(), "personas") + sep)) throw new Error("E_MANIFEST: version escapes install dir");
   const hosts = opts.host ? [opts.host] : (m.hosts ?? ["opencode"]);
   for (const h of hosts) if (!["opencode", "dsh"].includes(h)) throw new Error("E_HOST: host not implemented: " + h);
   const rendered: string[] = [];
@@ -130,7 +132,7 @@ export function install(from: string, opts: { ref?: string; host?: string; dryRu
     const srcReal = realpathSync(src.dir);
     const entryReal = realpathSync(entryAbs);
     if (!entryReal.startsWith(srcReal + sep)) throw new Error("E_MANIFEST: entry escapes persona dir");
-    const dest = join(OPENCODE_AGENTS, `${m.id}.md`);
+    const dest = join(opencodeAgents(), `${m.id}.md`);
     if (existsSync(dest) && !readFileSync(dest).equals(readFileSync(entryAbs))) {
       throw new Error("E_CONFLICT: agent file exists and differs; remove it first");
     }
@@ -145,7 +147,7 @@ export function install(from: string, opts: { ref?: string; host?: string; dryRu
   }
 
   if (opts.dryRun) {
-    if (hosts.includes("opencode")) rendered.push(join(OPENCODE_AGENTS, `${m.id}.md`));
+    if (hosts.includes("opencode")) rendered.push(join(opencodeAgents(), `${m.id}.md`));
     return { id: m.id, version: m.version, dir: target, rendered, hash: "dry-run" };
   }
 
@@ -154,8 +156,8 @@ export function install(from: string, opts: { ref?: string; host?: string; dryRu
   cpSync(src.dir, target, { recursive: true, dereference: true, filter: (p: string) => !p.split(sep).includes(".git") && !p.split(sep).includes("node_modules") });
 
   if (hosts.includes("opencode")) {
-    mkdirSync(OPENCODE_AGENTS, { recursive: true });
-    const dest = join(OPENCODE_AGENTS, `${m.id}.md`);
+    mkdirSync(opencodeAgents(), { recursive: true });
+    const dest = join(opencodeAgents(), `${m.id}.md`);
     const entryAbs2 = resolve(target, entry!);
     if (!entryAbs2.startsWith(resolve(target) + sep)) throw new Error("E_MANIFEST: entry escapes persona dir");
     cpSync(entryAbs2, dest);
@@ -164,7 +166,7 @@ export function install(from: string, opts: { ref?: string; host?: string; dryRu
 
   const renderedDirs: { path: string; hash: string }[] = [];
   if (hosts.includes("dsh")) {
-    const dshDest = resolve(DSH_PROFILES, m.id);
+    const dshDest = resolve(dshProfiles(), m.id);
     if (existsSync(dshDest) && !existsSync(join(dshDest, ".dia-managed"))) {
       throw new Error("E_CONFLICT: dsh profile exists and is not managed by dia");
     }
@@ -198,7 +200,7 @@ export function install(from: string, opts: { ref?: string; host?: string; dryRu
 }
 
 export function list(): { id: string; versions: string[] }[] {
-  const root = join(DATA, "personas");
+  const root = join(dataDir(), "personas");
   if (!existsSync(root)) return [];
   return readdirSync(root, { withFileTypes: true })
     .filter((e) => e.isDirectory())
@@ -206,7 +208,7 @@ export function list(): { id: string; versions: string[] }[] {
 }
 
 export function verify(id: string, version?: string): { ok: boolean; dir: string; expected: string; actual: string } {
-  const idDir = join(DATA, "personas", id);
+  const idDir = join(dataDir(), "personas", id);
   if (!existsSync(idDir)) throw new Error("E_NOT_INSTALLED");
   const v = version || readdirSync(idDir).sort().pop()!;
   const dir = join(idDir, v);
@@ -227,11 +229,11 @@ export function verify(id: string, version?: string): { ok: boolean; dir: string
 }
 
 export function remove(id: string): { removed: string[]; skipped: string[] } {
-  const idDir = join(DATA, "personas", id);
+  const idDir = join(dataDir(), "personas", id);
   if (!existsSync(idDir)) throw new Error("E_NOT_INSTALLED");
   const removed: string[] = [];
   const skipped: string[] = [];
-  const allowed = resolve(OPENCODE_AGENTS, `${id}.md`);
+  const allowed = resolve(opencodeAgents(), `${id}.md`);
   for (const v of readdirSync(idDir)) {
     const dir = join(idDir, v);
     const lockFile = join(dir, "dia.lock");
@@ -239,7 +241,7 @@ export function remove(id: string): { removed: string[]; skipped: string[] } {
       const lock = JSON.parse(readFileSync(lockFile, "utf8"));
       for (const d of lock.renderedDirs || []) {
         const abs = resolve(d.path);
-        if (!abs.startsWith(resolve(DSH_PROFILES) + sep) || basename(abs) !== id) { skipped.push(abs); continue; }
+        if (!abs.startsWith(resolve(dshProfiles()) + sep) || basename(abs) !== id) { skipped.push(abs); continue; }
         if (!existsSync(abs) || hashTree(abs) !== d.hash) { skipped.push(abs); continue; }
         rmSync(abs, { recursive: true, force: true }); removed.push(abs);
       }
@@ -275,4 +277,62 @@ export function remove(id: string): { removed: string[]; skipped: string[] } {
   }
   rmSync(idDir, { recursive: true, force: true });
   return { removed, skipped };
+}
+
+
+export interface DefaultAgentResult {
+  file: string;
+  previous: string | null;
+  current: string | null;
+  backup: string | null;
+}
+
+/** 读取当前默认 agent（不改文件）。 */
+export function showDefaultAgent(opts: { host?: string } = {}): { file: string; current: string | null } {
+  const host = opts.host ?? "opencode";
+  if (host !== "opencode") throw new Error("E_HOST: only opencode has default_agent");
+  const file = opencodeConfig();
+  if (!existsSync(file)) return { file, current: null };
+  const cfg = JSON.parse(readFileSync(file, "utf8"));
+  return { file, current: typeof cfg.default_agent === "string" ? cfg.default_agent : null };
+}
+
+/**
+ * 把 persona 设为宿主的默认 agent（显式动作，不随 install 自动做）。
+ *   · 写前备份原文件到 <data>/backups/；
+ *   · 记录原值到 <data>/state/default-agent.json，供 --unset 精确还原；
+ *   · 只改 default_agent 一个键，其余内容按原格式（2 空格缩进）写回。
+ */
+export function setDefaultAgent(id: string | null, opts: { host?: string } = {}): DefaultAgentResult {
+  const host = opts.host ?? "opencode";
+  if (host !== "opencode") throw new Error("E_HOST: only opencode has default_agent");
+  const file = opencodeConfig();
+  if (!existsSync(file)) throw new Error(`E_CONFIG: ${file} 不存在（先装宿主，或设 DIA_OPENCODE_CONFIG）`);
+  const raw = readFileSync(file, "utf8");
+  let cfg: any;
+  try { cfg = JSON.parse(raw); }
+  catch (e: any) { throw new Error(`E_CONFIG: ${file} 不是严格 JSON（含注释？）：${e.message}`); }
+
+  const stateFile = join(dataDir(), "state", "default-agent.json");
+  let state: any = { file, previous: null, set_at: null };
+  if (existsSync(stateFile)) { try { state = JSON.parse(readFileSync(stateFile, "utf8")); } catch { /* 忽略坏状态 */ } }
+  const previous = typeof cfg.default_agent === "string" ? cfg.default_agent : null;
+
+  let backup: string | null = null;
+  const dir = join(dataDir(), "backups");
+  mkdirSync(dir, { recursive: true });
+  backup = join(dir, `opencode.json.${Date.now()}.bak`);
+  writeFileSync(backup, raw);
+
+  if (id === null) {
+    delete cfg.default_agent;
+    state = { file, previous: null, set_at: null, unset_at: new Date().toISOString() };
+  } else {
+    cfg.default_agent = id;
+    state = { file, previous, set_at: new Date().toISOString(), id };
+  }
+  writeFileSync(file, JSON.stringify(cfg, null, 2) + "\n");
+  mkdirSync(join(dataDir(), "state"), { recursive: true });
+  writeFileSync(stateFile, JSON.stringify(state, null, 1));
+  return { file, previous, current: id, backup };
 }

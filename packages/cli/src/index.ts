@@ -98,6 +98,7 @@ usage:
   dia resume --session S [--json]
   dia persona add <id|--from SRC> [--ref REF] [--host opencode] [--dry-run] [--json]
   dia persona list|verify|remove
+  dia persona default <id>|--unset|--show [--host opencode]
   dia kit add --from SRC [--ref REF] [--dry-run] [--json]
   dia kit list|verify <id>|remove <id>
   dia wt create|form|list|status|check|route|scope|clean|prune-merged …
@@ -485,6 +486,25 @@ async function personaCli(argv: string[]): Promise<number> {
       out(asJson ? JSON.stringify(r) : `${r.ok ? "ok" : "MISMATCH"} ${r.dir}`);
       return r.ok ? 0 : 1;
     } catch (e: any) { err(e?.message || String(e)); return 31; }
+  }
+  if (sub === "default") {
+    const id = positional(args)[0] || null;
+    try {
+      if (has(args, "--show") || (!id && !has(args, "--unset"))) {
+        const r = persona.showDefaultAgent({ host: flag(args, "--host") });
+        out(asJson ? JSON.stringify(r) : `${r.current ?? "(未设置)"}  <- ${r.file}`);
+        return 0;
+      }
+      const r = persona.setDefaultAgent(has(args, "--unset") ? null : id, { host: flag(args, "--host") });
+      out(asJson ? JSON.stringify(r) : `${has(args, "--unset") ? "unset" : `default_agent = ${r.current}`}（原 ${r.previous ?? "未设置"}；备份 ${r.backup}）`);
+      return 0;
+    } catch (e: any) {
+      const m = e?.message || String(e);
+      err(m);
+      if (m.startsWith("E_CONFIG")) return 21;
+      if (m.startsWith("E_HOST")) return 33;
+      return 31;
+    }
   }
   if (sub === "remove") {
     const id = positional(args)[0];

@@ -6,6 +6,7 @@ import { runWrapped } from "../../../src/run.ts";
 import { countCalls } from "../../../src/runtime.ts";
 import { resumeCard } from "../../../src/resume.ts";
 import * as persona from "../../../src/persona.ts";
+import * as kit from "../../../src/kit.ts";
 import * as task from "../../../src/task.ts";
 import * as team from "../../../src/team.ts";
 import { loadPrices } from "../../../src/pricing.ts";
@@ -59,6 +60,8 @@ usage:
   dia resume --session S [--json]
   dia persona add <id|--from SRC> [--ref REF] [--host opencode] [--dry-run] [--json]
   dia persona list|verify|remove
+  dia kit add --from SRC [--ref REF] [--dry-run] [--json]
+  dia kit list|verify <id>|remove <id>
   dia task add|list|status|done
   dia team run <id> --mock | --acp|--dsh --workspace DIR
   dia team gate|accept|reject|next
@@ -450,6 +453,50 @@ async function personaCli(argv: string[]): Promise<number> {
   return 2;
 }
 
+async function kitCli(argv: string[]): Promise<number> {
+  const [sub, ...args] = argv;
+  const asJson = has(args, "--json");
+  try {
+    if (sub === "add") {
+      const from = flag(args, "--from") || positional(args)[0];
+      if (!from) { err("missing --from"); return 2; }
+      const r = kit.install(from, { ref: flag(args, "--ref"), dryRun: has(args, "--dry-run") });
+      out(asJson ? JSON.stringify(r)
+        : `installed kit ${r.id}@${r.version} -> ${r.dir}${r.rendered.length ? `\n  ${r.rendered.map((e: any) => `${e.type}: ${e.path}`).join("\n  ")}` : ""}`);
+      return 0;
+    }
+    if (sub === "list") {
+      const rows = kit.list();
+      out(asJson ? JSON.stringify(rows, null, 1) : rows.map((r: any) => `${r.id}: ${r.versions.join(", ")}`).join("\n") || "(none)");
+      return 0;
+    }
+    if (sub === "verify") {
+      const id = positional(args)[0];
+      if (!id) { err("missing id"); return 2; }
+      const r = kit.verify(id, flag(args, "--version"));
+      out(asJson ? JSON.stringify(r) : `${r.ok ? "ok" : "MISMATCH"} ${id}@${r.version}` +
+        (r.drift.length ? `\n  drift: ${r.drift.join(", ")}` : ""));
+      return r.ok ? 0 : 1;
+    }
+    if (sub === "remove") {
+      const id = positional(args)[0];
+      if (!id) { err("missing id"); return 2; }
+      const r = kit.remove(id);
+      out(asJson ? JSON.stringify(r) : `removed kit ${id}${r.removed.length ? " (" + r.removed.join(", ") + ")" : ""}` +
+        (r.skipped.length ? `\nskipped (modified/not managed): ${r.skipped.join(", ")}` : ""));
+      return r.skipped.length ? 30 : 0;
+    }
+  } catch (e: any) {
+    err(e?.message || String(e));
+    const m = e?.message || "";
+    if (m.startsWith("E_CONFLICT") || m.startsWith("E_MANIFEST")) return 32;
+    if (m.startsWith("E_SOURCE")) return 34;
+    return 31;
+  }
+  err("usage: dia kit add|list|verify|remove");
+  return 2;
+}
+
 async function resumeCli(argv: string[]): Promise<number> {
   const session = flag(argv, "--session");
   if (!session) { err("missing --session"); return 2; }
@@ -511,6 +558,7 @@ export async function main(argv: string[]): Promise<number> {
   if (cmd === "run") return runCli(argv.slice(1));
   if (cmd === "resume") return resumeCli(argv.slice(1));
   if (cmd === "persona") return personaCli(argv.slice(1));
+  if (cmd === "kit") return kitCli(argv.slice(1));
   if (cmd === "task") return taskCli(argv.slice(1));
   if (cmd === "team") return teamCli(argv.slice(1));
   if (cmd === "job") return runJob(argv.slice(1));

@@ -61,6 +61,8 @@ dia kit list / verify / remove
 }
 ```
 
+kit 的完整格式、渲染规则与生命周期见 [`docs/kit-install.md`](kit-install.md)（本文只留最小形态）。
+
 kit 用同一个文件名：
 
 ```json

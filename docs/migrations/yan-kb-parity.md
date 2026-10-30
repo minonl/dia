@@ -142,3 +142,15 @@ dia packages/kb (single engine)
 - 召回 91.67%、answerable zero 0、top1 一致 86.21% → 质量门禁通过；
 - CLI p95 82.2ms（旧 114.6ms），绝对 60ms 门槛未过；**不把它偷偷改成 pass**，延迟口径需按环境改为“相对旧实现不退化”；
 - K2.4 观察期继续，K2.5 不切默认。
+
+
+## 11. K2.5 提前切换（2026-10-30）
+
+用户决定跳过 7 天观察，**仅切 `yan-agent@next`**，main/现网不动：
+
+- `yan-kb query` 默认 `dia`；`YAN_KB_ENGINE=old` 可回滚；
+- 无 `DIA_BIN` 时自动回退 old；
+- `scene/rule/auto/claims` 继续旧实现；
+- `dia kb query --auto-index`：缺/陈旧索引先重建，避免切换后首次查询直接报错；
+- 验证：next 分支 `yan-kb-engine.test.sh` 7 PASS；main 仍为旧实现；
+- 回滚：`YAN_KB_ENGINE=old yan-kb query ...` 或切回 main。

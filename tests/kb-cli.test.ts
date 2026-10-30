@@ -41,6 +41,15 @@ describe("kb query/review CLI", () => {
     expect(r.stderr).toContain("index missing");
   });
 
+  test("--auto-index rebuilds a missing index", () => {
+    const dir = mkdtempSync(join(tmpdir(), "dia-kb-auto-"));
+    writeFileSync(join(dir, "a.md"), "# A\n\n知识库预算。\n");
+    const db = join(dir, ".idx.db");
+    const r = cli(["kb", "query", "知识库", "--root", dir, "--db", db, "--auto-index", "--json"]);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout).length).toBeGreaterThan(0);
+  });
+
   test("rejects non-positive limit", () => {
     const { dir, db } = fixture();
     const r = cli(["kb", "query", "知识库", "--root", dir, "--db", db, "--limit", "abc"]);

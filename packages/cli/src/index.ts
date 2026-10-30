@@ -23,7 +23,7 @@ function has(args: string[], name: string): boolean { return args.includes(name)
 function positional(args: string[]): string[] {
   const out: string[] = [];
   for (let i = 0; i < args.length; i++) {
-    if (args[i].startsWith("--")) { if (!args[i].includes("=")) i++; continue; }
+    if (args[i].startsWith("--")) { if (!args[i].includes("=") && args[i] !== "--auto-index") i++; continue; }
     out.push(args[i]);
   }
   return out;
@@ -38,7 +38,7 @@ function help() {
 usage:
   dia kb index [--root DIR] [--db PATH] [--json]
   dia kb search <query> [--root DIR] [--db PATH] [--limit N] [--json]
-  dia kb query <query> [--root DIR] [--db PATH] [--limit N] [--json] [--full] [--bytes]
+  dia kb query <query> [--root DIR] [--db PATH] [--limit N] [--json] [--full] [--bytes] [--auto-index]
   dia kb review [--root DIR] [--db PATH] [--json]
   dia kb path <doc:...|workflow:...|skill:...|tool:...#mode> [--root DIR] [--repo DIR] [--json]
   dia kb lint [--root DIR] [--db PATH] [--stale-days N] [--json] [--strict]
@@ -82,7 +82,17 @@ async function kb(argv: string[]): Promise<number> {
     const rawLimit = flag(args, "--limit");
     const limit = rawLimit === undefined ? 10 : Number(rawLimit);
     if (!Number.isInteger(limit) || limit <= 0) { err("--limit must be a positive integer"); return 2; }
-    const rows = await search(root, q, db, limit);
+    let rows;
+    try {
+      rows = await search(root, q, db, limit);
+    } catch (e: any) {
+      if (has(args, "--auto-index") && String(e?.code || "").startsWith("E_INDEX_")) {
+        await buildIndex(root, db);
+        rows = await search(root, q, db, limit);
+      } else {
+        throw e;
+      }
+    }
     const full = sub === "query" && has(args, "--full");
     const bytes = sub === "query" && has(args, "--bytes");
     const enrich = rows.map((r) => {

@@ -1,5 +1,8 @@
 # yan-kb → dia kb：能力矩阵与迁移计划
 
+> **v2 修订（2026-10-30）**：兼容边界、质量门禁、单引擎架构见 [`yan-kb-parity.md`](yan-kb-parity.md)。
+> 本文的 K2 仅保留为历史阶段；query 切换必须先过 v2 的 K2.1–K2.3。
+
 > 日期 2026-10-30。回答：**当前 dia kb 能替代 yan-kb 的哪些工具？**
 > 结论：能替代 `index/get/lint` 的通用部分；`query` 需要补 parity；
 > `scene/rule/auto/claims/baseline/alerts/record/scene sync` 是 yan 域语义，不迁 dia，也不单独建仓。

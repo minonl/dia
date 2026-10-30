@@ -810,6 +810,14 @@ systemd_install() {  # systemd_install <name>
     "$SYSTEMCTL_BIN" --user start "$unit" >/dev/null 2>&1 || { echo "  ✗ systemctl --user start $unit 失败（systemctl --user status $unit 看原因）" >&2; return 1; }
   fi
   "$SYSTEMCTL_BIN" --user is-active --quiet "$unit" || { echo "  ✗ $unit 未处于 active（别当装好了）" >&2; return 1; }
+  # ⚠️ `activating` 期间 is-active 也返回 0 ⇒ 再等一下拿真实状态（R54：断言要运行时证据）
+  local st=""
+  for _i in $(seq 1 20); do
+    st="$("$SYSTEMCTL_BIN" --user is-active "$unit" 2>/dev/null || true)"
+    [ "$st" = active ] && break
+    sleep 0.5
+  done
+  [ "$st" = active ] || { echo "  ✗ $unit 状态=${st:-unknown}（10s 内未 active；systemctl --user status $unit 看原因）" >&2; return 1; }
 }
 
 systemd_remove() {  # systemd_remove <name>

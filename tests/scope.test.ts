@@ -32,7 +32,11 @@ beforeAll(async () => {
     knowledge: ["knowledge"],
     data_root: "~/.yan-agent",
     dirs: ["~/.yan-agent/cache"],
-    commands: [{ name: "scene", entry: "bin/scene.mjs", env: { YAN_DATA_ROOT: "~/.yan-agent" } }],
+    commands: [
+      { name: "scene", entry: "bin/scene.mjs", env: { YAN_DATA_ROOT: "~/.yan-agent" } },
+      { name: "hello", entry: "bin/scene.mjs", env: { YAN_DATA_ROOT: "~/.yan-agent" } },
+      { name: "kit", entry: "bin/scene.mjs" },
+    ],
   }));
   writeFileSync(join(src, "dia.json"), JSON.stringify({
     schema: 1, kind: "persona", id: "yan", version: "0.1.0",
@@ -75,6 +79,33 @@ describe("persona → kit 联动", () => {
     expect(r.status).toBe(0);
     expect(() => scope.current()).toThrow(/E_SCOPE/);
     expect(scope.current("yan").id).toBe("yan");
+  });
+});
+
+describe("一级委派（A）与 dia cmd（B）", () => {
+  const run = (args: string[]) => runCli(args, { DIA_PERSONA: "yan" });
+
+  test("A：未知一级命令 → persona 命令；argv 带命令名", () => {
+    const r = run(["hello", "S1"]);
+    expect(r.stdout).toContain("SUB:hello ARG:S1");
+    expect(r.status).toBe(0);
+  });
+
+  test("A：内置命令优先，persona 同名不覆盖", () => {
+    const r = run(["kit", "list"]);            // persona 声明了 kit，但内置 kit 必须赢
+    expect(r.stdout).toContain("yan-core");
+    expect(r.stdout).not.toContain("SUB:kit");
+  });
+
+  test("B：dia cmd 只查外部命令 → 同名也不回退内置", () => {
+    const r = run(["cmd", "kit", "list"]);
+    expect(r.stdout).toContain("SUB:kit ARG:list");
+  });
+
+  test("B：外部没声明 → E_CMD + 非 0", () => {
+    const r = run(["cmd", "nope"]);
+    expect(r.stderr).toContain("E_CMD");
+    expect(r.status).toBe(34);
   });
 });
 

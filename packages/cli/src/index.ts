@@ -51,23 +51,36 @@ function rootOf(args: string[]): string {
   return process.cwd();
 }
 
-/** 域命令委派：`dia kb <name> …` → kit 声明的可执行（argv 透传，exit code 原样）。 */
-function delegateKb(sub: string, args: string[]): number | null {
+/** 域命令委派：把 `<name> <args…>` 交给 persona 声明的可执行（argv 透传，exit code 原样）。 */
+function delegatePersonaCommand(name: string, args: string[], opts: { onlyExternal?: boolean } = {}): number | null {
   const sc = safeScope(flag(args, "--persona"));
   if (!sc) return null;
   for (const k of sc.kits) {
-    const c = k.commands.find((x) => x.name === sub);
+    const c = k.commands.find((x) => x.name === name);
     if (!c) continue;
     const entry = resolvePath(k.root, c.entry);
     const runtime = c.runtime === "node" ? "node" : c.runtime === "bun" ? "bun" : (typeof (globalThis as any).Bun !== "undefined" ? "bun" : "node");
-    const r = spawnSync(runtime, [entry, sub, ...args], {
+    const r = spawnSync(runtime, [entry, name, ...args], {
       stdio: "inherit",
       env: { ...process.env, ...scope.scopeEnv(sc, c.env ?? {}) },
     });
-    if (r.error) { err(`E_DELEGATE: ${sub}: ${r.error.message}`); return 31; }
+    if (r.error) { err(`E_DELEGATE: ${name}: ${r.error.message}`); return 31; }
     return r.status ?? 1;
   }
+  void opts;
   return null;
+}
+
+/** kb 子命令委派（`dia kb <sub>` 用）。 */
+function delegateKb(sub: string, args: string[]): number | null {
+  return delegatePersonaCommand(sub, args);
+}
+
+/** persona 声明的全部一级命令名（用于未知命令提示与 `dia cmd` 兜底）。 */
+function personaCommandNames(): string[] {
+  const sc = safeScope(undefined);
+  if (!sc) return [];
+  return sc.kits.flatMap((k) => k.commands.map((c) => c.name));
 }
 
 function help() {
@@ -102,6 +115,8 @@ usage:
   dia kit add --from SRC [--ref REF] [--dry-run] [--json]
   dia kit list|verify <id>|remove <id>
   dia wt create|form|list|status|check|route|scope|clean|prune-merged …
+  dia cmd <name> [args…]              # 只查 persona 声明的命令（可绕开同名内置）
+  dia <persona-cmd> [args…]           # 一级委派（内置优先）
   dia task add|list|status|done
   dia team run <id> --mock | --acp|--dsh --workspace DIR
   dia team gate|accept|reject|next
@@ -647,6 +662,18 @@ export async function main(rawArgv: string[]): Promise<number> {
   if (cmd === "persona") return personaCli(argv.slice(1));
   if (cmd === "kit") return kitCli(argv.slice(1));
   if (cmd === "wt") return wtCli(argv.slice(1));
+  // B：`dia cmd <name>` 只查 persona（外部）命令，允许与内置同名也不回退
+  if (cmd === "cmd") {
+    const [name, ...rest] = argv.slice(1);
+    if (!name) {
+      const names = personaCommandNames();
+      err(names.length ? `usage: dia cmd <name> [args…]  可用：${names.join(" | ")}` : "usage: dia cmd <name> [args…]（当前 persona 未声明任何命令）");
+      return 2;
+    }
+    const rc = delegatePersonaCommand(name, rest);
+    if (rc === null) { err(`E_CMD: persona 未声明命令 ${name}`); return 34; }
+    return rc;
+  }
   if (cmd === "task") return taskCli(argv.slice(1));
   if (cmd === "team") return teamCli(argv.slice(1));
   if (cmd === "job") return runJob(argv.slice(1));
@@ -655,6 +682,11 @@ export async function main(rawArgv: string[]): Promise<number> {
     if (has(argv.slice(1), "--json")) out(JSON.stringify(table, null, 1));
     else for (const [m, p] of Object.entries(table)) out(`${m}	${p ? `$${p.input}/$${p.output} per Mtok` : "unpriced"}`);
     return 0;
+  }
+  // A：内置命令未命中 → 查 persona 声明的一级命令（内置永远优先，不能被覆盖）
+  {
+    const rc = delegatePersonaCommand(cmd, argv.slice(1));
+    if (rc !== null) return rc;
   }
   err(`unknown command: ${cmd}`);
   help();

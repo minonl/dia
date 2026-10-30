@@ -4,7 +4,7 @@
 # 输出：dia_job_cmd_path_class 设置 YP_CLASS / YP_CMD_TARGET / YP_MAIN / YP_REASON（兼容旧调用方）。
 
 dia_job_data_root() {
-  printf '%s' "${DIA_JOB_ROOT:-${YAN_DATA_ROOT:-$HOME/.yan-agent}}"
+  printf '%s' "${DIA_JOB_ROOT:-${YAN_DATA_ROOT:-${XDG_DATA_HOME:-$HOME/.local/share}/dia-job}}"
 }
 
 # 主 checkout：git-common-dir 的父目录；裸仓/非仓明确失败。

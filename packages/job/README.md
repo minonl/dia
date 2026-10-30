@@ -29,7 +29,7 @@ Exit codes: `0/1/2/3/4/5` (same as yan-task).
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `DIA_JOB_ROOT` | `YAN_DATA_ROOT` if set, else `~/.yan-agent` (existing) / `~/.local/share/dia-job` (fresh) | 数据根 |
+| `DIA_JOB_ROOT` | `YAN_DATA_ROOT` if set, else `~/.local/share/dia-job` | 数据根（旧数据根用全局 config 显式指定） |
 | `DIA_JOB_LABEL_PREFIX` | `local.dia-job-` | launchd/cron label 前缀；新部署可用 `local.dia-job-` |
 | `DIA_JOB_OWN_TASKS` | 空 | 本仓自有任务名（空格分隔）；不再硬编码 yan 业务任务 |
 | `DIA_JOB_NO_LAUNCHD` | 继承 `YAN_TASK_NO_LAUNCHD` | 测试隔离：不写真实 launchd |

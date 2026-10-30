@@ -72,7 +72,7 @@ dabo-agent（个人域入口）
 
 | 现状 | 目标 |
 |---|---|
-| `YAN_DATA_ROOT` / `~/.yan-agent` | `--root` 或 `DIA_DATA_ROOT`；默认不绑定 yan |
+| `YAN_DATA_ROOT` / `~/.yan-agent` | `DIA_JOB_ROOT` 或 `~/.local/share/dia-job`；旧根用全局 config 显式指定 |
 | `local.dia-job-<name>` label | `--label-prefix`（默认 `local.task-`）；迁移时映射旧 label |
 | `yan_main_checkout_of` / `yan_path_stability` / `yan_cmd_path_class` | 路径策略回调/参数；默认“当前 checkout” |
 | `yan-ref` 调用 | 可选 resolver；未配置时用绝对路径 |

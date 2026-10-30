@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # install.sh：全局目录 + 稳定链接 + 拒绝项目路径依赖
 set -uo pipefail
+
+# tests must not inherit the developer global config
+export DIA_JOB_CONFIG=/dev/null
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; ROOT="$(cd "$HERE/.." && pwd)"
 TD="$(mktemp -d)"; trap 'rm -rf "$TD"' EXIT
 PASS=0; FAIL=0; ok(){ echo "  ✓ $1"; PASS=$((PASS+1)); }; bad(){ echo "  ✗ $1"; FAIL=$((FAIL+1)); }

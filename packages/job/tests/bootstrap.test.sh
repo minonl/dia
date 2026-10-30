@@ -11,6 +11,9 @@
 #   数据根**故意带空格**（复现事故现场）。用法：bash scripts/yan-task-bootstrap.test.sh
 set -uo pipefail
 
+# tests must not inherit the developer global config
+export DIA_JOB_CONFIG=/dev/null
+
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 YT="$HERE/../bin/dia-job"
 TD="$(mktemp -d)"

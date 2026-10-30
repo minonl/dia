@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # P2: DIA_JOB_ROOT / DIA_JOB_LABEL_PREFIX / OWN_TASKS 参数化回归
 set -uo pipefail
+
+# tests must not inherit the developer global config
+export DIA_JOB_CONFIG=/dev/null
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 YT="$HERE/../bin/dia-job"
 TD="$(mktemp -d)"; trap 'rm -rf "$TD"' EXIT
@@ -36,7 +39,9 @@ PY
 out="$(DIA_JOB_ROOT="$ROOT" bash "$YT" own-tasks 2>&1)"
 printf '%s' "$out" | grep -q 'failed-task-report' && bad "own-tasks 仍含 yan 业务任务" || ok "own-tasks 无 yan 默认任务"
 
-# 旧 YAN_DATA_ROOT 回退
+# 默认根不指向旧工作域；显式 YAN_DATA_ROOT 仍兼容
+out="$(env -u DIA_JOB_ROOT -u YAN_DATA_ROOT HOME="$TD/home-default" bash "$YT" list 2>&1)"
+printf '%s' "$out" | grep -q "$TD/home-default/.local/share/dia-job" && ok "默认根为 dia-job" || bad "默认根错：$out"
 out="$(YAN_DATA_ROOT="$ROOT" bash "$YT" list 2>&1)"
 printf '%s' "$out" | grep -q "$ROOT" && ok "YAN_DATA_ROOT 兼容" || bad "YAN_DATA_ROOT 未兼容"
 

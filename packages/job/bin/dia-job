@@ -48,7 +48,7 @@ ROOT_DIR="$(cd "$SELF_DIR/.." >/dev/null 2>&1 && pwd)"
 . "$SELF_DIR/../lib/config.sh"
 dia_job_load_config
 # 数据根：DIA_JOB_ROOT 优先；未显式设置时兼容旧 YAN_DATA_ROOT；最后才用新默认。
-DIA_JOB_ROOT="${DIA_JOB_ROOT:-${YAN_DATA_ROOT:-$HOME/.yan-agent}}"
+DIA_JOB_ROOT="${DIA_JOB_ROOT:-${YAN_DATA_ROOT:-${XDG_DATA_HOME:-$HOME/.local/share}/dia-job}}"
 if [ ! -d "$DIA_JOB_ROOT" ]; then DIA_JOB_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/dia-job"; fi
 YAN_DATA_ROOT="$DIA_JOB_ROOT"  # 内部兼容：旧函数/旧任务仍读这个变量
 TASKS_DIR="$DIA_JOB_ROOT/tasks"

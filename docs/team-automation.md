@@ -146,3 +146,7 @@ planner 出计划 → builder 写文件 → verifier 亲自跑判据（通过，
 产物：`plan.md / builder-0.md / verify.json / test.log / diff.patch / redteam.json / packet.md`。
 
 判据：用一个真实小任务跑完整圈，人在 acceptance 只做一次 accept/reject；全程无人工触发 verifier。
+
+**自动化回归（2026-11-01）**：`tests/team-acp.test.ts` 用假 ACP 服务器（`tests/fixtures/fake-acp.mjs`）跑通
+`team run --acp` 与 `--dsh`：planner → builder → verifier（通过/不通过两条路径）→ redteam → gate / accept，
+**不花模型钱**、结果确定；覆盖 `escalated`（退出码 30）与无判据 `E_TASK`。真实模型链路仍需人工跑一次。

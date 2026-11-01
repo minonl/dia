@@ -157,6 +157,23 @@ staged dabo@v2 (commit abc123)
 - `dsh --profile dabo` 启动正常（webserver 3090，避开被占用的 3080）；
 - yan 的 agent/profile 未改动。
 
+## 5.2 opencode 配置：`.json` 与 `.jsonc`（2026-11-01）
+
+opencode 从 **v0.3.100（2025-07-31，PR #1434）** 起支持 `opencode.jsonc`；
+从 **v1.14.49（2026-05-13，PR #26992）** 起，没有配置时默认创建 `opencode.jsonc`。
+宿主的查找顺序是 `["opencode.json", "opencode.jsonc"]`（两者都存在时先读 `.json`）。
+
+因此 `dia persona show|default` 的配置解析规则：
+
+| 优先级 | 来源 |
+|---|---|
+| 1 | `DIA_OPENCODE_CONFIG`（显式路径） |
+| 2 | `~/.config/opencode/opencode.json`（存在即用） |
+| 3 | `~/.config/opencode/opencode.jsonc`（存在即用） |
+| 4 | 都不存在 → 用默认路径 `opencode.json`（`show` 返回「未设置」，`default` 报 `E_CONFIG`） |
+
+两张表都读得懂：读 = JSONC（注释 + 尾逗号）；写 = **只改 `default_agent` 一个键，保留注释与排版**（写回前重新解析校验，坏配置不落盘）。
+
 ## 6. 当前缺口
 
 1. dabo-agent 没有 `dia.json`、`agents/dabo.md`、dsh persona bundle。

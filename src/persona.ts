@@ -5,13 +5,25 @@ import { basename, join, relative, resolve, sep } from "node:path";
 import { execFileSync } from "node:child_process";
 import * as kit from "./kit.ts";
 import * as active from "./active.ts";
+import { parseJsonc, setTopLevelKey } from "./jsonc.ts";
 
 // 目录惰性解析（测试与多 persona 场景 env 会变）
 const dataDir = () => process.env.DIA_DATA_DIR || join(homedir(), ".local", "share", "dia");
 const cacheDir = () => process.env.DIA_CACHE_DIR || join(homedir(), ".cache", "dia", "src");
 const opencodeAgents = () => process.env.DIA_OPENCODE_AGENTS_DIR || join(homedir(), ".config", "opencode", "agents");
 const dshProfiles = () => process.env.DIA_DSH_PROFILES_DIR || join(homedir(), ".dsh", "profiles");
-const opencodeConfig = () => process.env.DIA_OPENCODE_CONFIG || join(homedir(), ".config", "opencode", "opencode.json");
+// opencode 的全局配置可能有 .json / .jsonc 两种文件名。顺序与宿主一致
+// （packages/core/src/config/discovery.ts: names = ["opencode.json", "opencode.jsonc"]），
+// 两者都存在时宿主先读 .json；只有 .jsonc 时（v1.14.49+ 新装默认）读 .jsonc。
+const OPENCODE_CONFIG_NAMES = ["opencode.json", "opencode.jsonc"];
+const opencodeConfigDir = () => process.env.DIA_OPENCODE_CONFIG_DIR || join(homedir(), ".config", "opencode");
+const opencodeConfigCandidates = () =>
+  process.env.DIA_OPENCODE_CONFIG ? [process.env.DIA_OPENCODE_CONFIG] : OPENCODE_CONFIG_NAMES.map((n) => join(opencodeConfigDir(), n));
+/** 实际生效的 opencode 配置文件：env 显式指定 > 存在的 .json > 存在的 .jsonc > 默认 .json。 */
+export const opencodeConfig = (): string => {
+  const candidates = opencodeConfigCandidates();
+  return candidates.find((p) => existsSync(p)) ?? candidates[0];
+};
 
 export interface Manifest {
   schema: number;
@@ -314,21 +326,27 @@ export interface DefaultAgentResult {
   backup: string | null;
 }
 
-/** 读取当前默认 agent（不改文件）。 */
+/** 读取当前默认 agent（不改文件）。支持 opencode.json / opencode.jsonc（含注释）。 */
 export function showDefaultAgent(opts: { host?: string } = {}): { file: string; current: string | null } {
   const host = opts.host ?? "opencode";
   if (host !== "opencode") throw new Error("E_HOST: only opencode has default_agent");
   const file = opencodeConfig();
   if (!existsSync(file)) return { file, current: null };
-  const cfg = JSON.parse(readFileSync(file, "utf8"));
+  const cfg = readOpencodeConfig(file);
   return { file, current: typeof cfg.default_agent === "string" ? cfg.default_agent : null };
+}
+
+function readOpencodeConfig(file: string): any {
+  const raw = readFileSync(file, "utf8");
+  try { return parseJsonc(raw); }
+  catch (e: any) { throw new Error(`E_CONFIG: ${file} 解析失败（JSONC）：${e?.message ?? e}`); }
 }
 
 /**
  * 把 persona 设为宿主的默认 agent（显式动作，不随 install 自动做）。
  *   · 写前备份原文件到 <data>/backups/；
  *   · 记录原值到 <data>/state/default-agent.json，供 --unset 精确还原；
- *   · 只改 default_agent 一个键，其余内容按原格式（2 空格缩进）写回。
+ *   · 只改 default_agent 一个键，**保留 .jsonc 的注释与排版**（写回前重新解析校验）。
  */
 export function setDefaultAgent(id: string | null, opts: { host?: string } = {}): DefaultAgentResult {
   const host = opts.host ?? "opencode";
@@ -336,9 +354,7 @@ export function setDefaultAgent(id: string | null, opts: { host?: string } = {})
   const file = opencodeConfig();
   if (!existsSync(file)) throw new Error(`E_CONFIG: ${file} 不存在（先装宿主，或设 DIA_OPENCODE_CONFIG）`);
   const raw = readFileSync(file, "utf8");
-  let cfg: any;
-  try { cfg = JSON.parse(raw); }
-  catch (e: any) { throw new Error(`E_CONFIG: ${file} 不是严格 JSON（含注释？）：${e.message}`); }
+  const cfg = readOpencodeConfig(file);
 
   const stateFile = join(dataDir(), "state", "default-agent.json");
   let state: any = { file, previous: null, set_at: null };
@@ -348,17 +364,15 @@ export function setDefaultAgent(id: string | null, opts: { host?: string } = {})
   let backup: string | null = null;
   const dir = join(dataDir(), "backups");
   mkdirSync(dir, { recursive: true });
-  backup = join(dir, `opencode.json.${Date.now()}.bak`);
+  backup = join(dir, `${basename(file)}.${Date.now()}.bak`);
   writeFileSync(backup, raw);
 
   if (id === null) {
-    delete cfg.default_agent;
     state = { file, previous: null, set_at: null, unset_at: new Date().toISOString() };
   } else {
-    cfg.default_agent = id;
     state = { file, previous, set_at: new Date().toISOString(), id };
   }
-  writeFileSync(file, JSON.stringify(cfg, null, 2) + "\n");
+  writeFileSync(file, setTopLevelKey(raw, "default_agent", id));
   mkdirSync(join(dataDir(), "state"), { recursive: true });
   writeFileSync(stateFile, JSON.stringify(state, null, 1));
   return { file, previous, current: id, backup };

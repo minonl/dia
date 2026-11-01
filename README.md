@@ -37,6 +37,21 @@ Python 原型已完成使命（行为对齐后删除）；其基线数字保留�
 当前树脱敏、Git 历史清洁、GitHub 元数据检查、`dia-security` 独立审核 `pass`。
 未通过前不得改 visibility。
 
+## 安装
+
+```bash
+git clone https://github.com/minonl/dia ~/repos/github/dia
+cd ~/repos/github/dia
+bun install && bun run build      # 或 npm ci + npm run build（Node ≥ 24）
+bash install.sh                   # → ~/.local/share/dia + ~/.local/bin/dia
+dia version && dia doctor
+```
+
+- 依赖：Node ≥ 24 或 Bun ≥ 1.2（见 `package.json` 的 `engines`）。
+- 安装只落盘：**不启停服务、不改宿主默认 agent**。
+- 装 persona（示例 dabo）：`dia persona add dabo --from git+https://github.com/minonl/dabo-agent.git`
+- 卸载：`dia persona remove dabo`（只删带 `.dia-managed` 的产物）。
+
 ## 开发
 
 ```bash

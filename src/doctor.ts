@@ -10,6 +10,7 @@ import * as persona from "./persona.ts";
 import * as kit from "./kit.ts";
 import * as scope from "./scope.ts";
 import * as active from "./active.ts";
+import * as dsh from "./dsh.ts";
 
 export interface Check { name: string; status: "ok" | "warn" | "fail"; detail: string }
 
@@ -65,6 +66,15 @@ export function run(opts: { persona?: string } = {}): { persona: string | null; 
     if (sc.knowledgeRoot) {
       checks.push({ name: "knowledge", status: existsSync(sc.knowledgeRoot) ? "ok" : "fail", detail: sc.knowledgeRoot });
     }
+
+    // 宿主 dsh 的 preset 自检（dsh 不装 / 没渲染 profile 时跳过）
+    const profiles = process.env.DIA_DSH_PROFILES_DIR || join(home(), ".dsh", "profiles");
+    const preset = dsh.checkPreset(sc.id, join(profiles, sc.id));
+    checks.push({
+      name: "dsh.preset",
+      status: preset.issues.length ? "fail" : "ok",
+      detail: preset.issues[0] ?? preset.skipped ?? "preset 插件配置可加载",
+    });
   }
 
   const wt = join(process.env.DIA_HOME_INSTALL || join(home(), ".local", "share", "dia"), "packages/wt/bin/dia-wt");

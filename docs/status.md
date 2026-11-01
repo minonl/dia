@@ -18,7 +18,7 @@
 | `docs/ecosystem-integration.md` | 插件/ACP/包格式 | 现行 |
 | `docs/ecosystem-positioning.md` | 常驻入口与生态位（dws-hub 优先） | 现行 |
 | `docs/entrypoints.md` | 用户入口与 agent 命名（dabo ≠ dia） | 现行 |
-| `docs/persona-install.md` | persona/kit 安装：git → opencode/dsh 渲染 | 现行（未实现） |
+| `docs/persona-install.md` | persona/kit 安装：git → opencode/dsh 渲染 | 现行（add/list/verify/remove/show/use/path/update/default 已实现；create/render/activation 未实现） |
 | `docs/cli.md` | CLI 动作词表（add/remove/create/update/render/verify） | 现行 |
 | `docs/versioning.md` | 多版本、semver/双重审查、激活模式 | 现行 |
 | `docs/patching.md` | 本地 patch 设计 | 现行（未实现） |

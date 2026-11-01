@@ -1,11 +1,11 @@
-import { describe, expect, test, beforeAll } from "bun:test";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { afterAll, describe, expect, test, beforeAll } from "bun:test";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 
 // team run --acp/--dsh 的确定性测试：用假 ACP 服务器（tests/fixtures/fake-acp.mjs），不花模型钱。
-let home: string, data: string, cache: string, fakeBin: string, workspace: string;
+let home: string, data: string, cache: string, fakeBin: string, workspace: string, fakeLog: string;
 const cli = join(import.meta.dir, "..", "packages", "cli", "src", "index.ts");
 const fakeSrc = join(import.meta.dir, "fixtures", "fake-acp.mjs");
 
@@ -15,6 +15,7 @@ const run = (args: string[], env: Record<string, string> = {}) => spawnSync("bun
     ...process.env,
     DIA_HOME: home, DIA_DATA_DIR: data, DIA_CACHE_DIR: cache,
     PATH: `${fakeBin}:${process.env.PATH}`,
+    FAKE_LOG: fakeLog,
     ...env,
   },
 });
@@ -35,9 +36,18 @@ beforeAll(() => {
     copyFileSync(fakeSrc, p);
     chmodSync(p, 0o755);
   }
+  fakeLog = join(mkdtempSync(join(tmpdir(), "dia-team-log-")), "sessions.jsonl");
   workspace = mkdtempSync(join(tmpdir(), "dia-team-ws-"));
   writeFileSync(join(workspace, "a.txt"), "hello\n");
   spawnSync("git", ["init", "-q"], { cwd: workspace });
+});
+
+const taskStatus = (id: string) => JSON.parse(run(["task", "list", "--json"]).stdout).find((t: any) => t.id === id)?.status;
+
+afterAll(() => {
+  for (const d of [home, data, cache, fakeBin, workspace, dirname(fakeLog)]) {
+    try { rmSync(d, { recursive: true, force: true }); } catch {}
+  }
 });
 
 describe("team run --acp（假 ACP 服）", () => {
@@ -52,8 +62,16 @@ describe("team run --acp（假 ACP 服）", () => {
     expect(JSON.parse(readFileSync(join(dir, "redteam.json"), "utf8")).findings).toEqual([]);
     expect(existsSync(join(dir, "packet.md"))).toBe(true);
     expect(existsSync(join(dir, "usage.json"))).toBe(true);
-    // 快照用完即删
+    // 快照真被用过（verifier/redteam 在副本里跑），且用完即删
+    const log = readFileSync(fakeLog, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    const cwds = log.filter((e: any) => e.ev === "new").map((e: any) => String(e.cwd || ""));
+    expect(cwds.some((c: string) => c.includes("verify-ws-0"))).toBe(true);
+    expect(cwds.some((c: string) => c.includes("redteam-ws"))).toBe(true);
+    expect(cwds).toContain(workspace); // planner/builder 在原 workspace；verifier/redteam 在副本
     expect(existsSync(join(dir, "verify-ws-0"))).toBe(false);
+    expect(existsSync(join(dir, "redteam-ws"))).toBe(false);
+    // 状态机真落到了台账（而不是只看 CLI 打印的字面量）
+    expect(taskStatus(id)).toBe("awaiting_acceptance");
 
     expect(run(["team", "gate", id]).status).toBe(0);
     expect(run(["team", "accept", id]).status).toBe(0);
@@ -67,6 +85,7 @@ describe("team run --acp（假 ACP 服）", () => {
     expect(r.stdout).toContain("escalated");
     const packet = readFileSync(join(data, "runs", id, "packet.md"), "utf8");
     expect(packet).toContain("已升级");
+    expect(taskStatus(id)).toBe("escalated");
     expect(run(["team", "gate", id]).status).not.toBe(0);
   });
 

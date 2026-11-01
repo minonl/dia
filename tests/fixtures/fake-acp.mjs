@@ -2,6 +2,8 @@
 // fake-acp.mjs —— 最小 ACP 服务器（用于 team run --acp/--dsh 的确定性测试）
 // 以 `opencode acp` 或 `dsh --profile dabo-<role>` 的身份启动，按角色返回固定 JSON。
 // 环境变量：FAKE_VERIFY=通过|不通过|无法判定（默认 通过）
+import { appendFileSync } from "node:fs";
+const log = (o) => { if (process.env.FAKE_LOG) appendFileSync(process.env.FAKE_LOG, JSON.stringify(o) + "\n"); };
 let role = null;
 const pi = process.argv.indexOf("--profile");
 if (pi >= 0) role = String(process.argv[pi + 1] || "").replace(/^dabo-/, "") || null;
@@ -41,11 +43,14 @@ process.stdin.on("data", (chunk) => {
     if (method === "session/new") {
       const sid = "s" + (++seq);
       sessions.set(sid, role);
+      log({ ev: "new", sid, cwd: params?.cwd || null, role });
       send({ jsonrpc: "2.0", id, result: { sessionId: sid } });
       continue;
     }
     if (method === "session/set_mode") {
-      sessions.set(params?.sessionId, String(params?.modeId || "").replace(/^dabo-/, ""));
+      const mode = String(params?.modeId || "").replace(/^dabo-/, "");
+      sessions.set(params?.sessionId, mode);
+      log({ ev: "mode", sid: params?.sessionId, mode });
       send({ jsonrpc: "2.0", id, result: {} });
       continue;
     }

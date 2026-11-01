@@ -301,12 +301,17 @@ async function callDsh(role: string, cwd: string, text: string, tracker: Map<str
   try {
     await acp.init();
     const ns = await acp.newSession(cwd);
-    await acp.setConfig(ns.sessionId, "model", JSON.stringify(["example", "deepseek-v4.1-flash"]));
+    // 模型由 dsh profile / 用户配置决定；需要显式覆盖时用 DIA_DSH_MODEL=provider/model
+    const override = process.env.DIA_DSH_MODEL?.trim();
+    if (override) {
+      const value = override.startsWith("[") ? override : JSON.stringify(override.split("/"));
+      await acp.setConfig(ns.sessionId, "model", value);
+    }
     const before = tracker.get(ns.sessionId) || 0;
     const r = await acp.prompt(ns.sessionId, text);
     const file = dshSessionFile(ns.sessionId);
     let usage: any = r.usage;
-    let model: string | null = "example/deepseek-v4.1-flash";
+    let model: string | null = override && !override.startsWith("[") ? override : null;
     let all: { usage: any; model: string | null }[] = [];
     for (let i = 0; i < 6; i++) {
       const f = file || dshSessionFile(ns.sessionId);

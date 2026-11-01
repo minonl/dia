@@ -91,6 +91,10 @@ dia team run <task-id>
 ```
 
 - 角色 = persona（`dabo-planner` / `dabo-builder` / `dabo-verifier` / `dabo-redteam`）；
+  - **模型**：由对应 `dabo-<role>` profile / 用户配置决定；需要覆盖时 `DIA_DSH_MODEL=provider/model`（也接受 JSON 数组）。
+    代码不再写死模型（2026-11-01 移除 `example/*` 硬编码）。
+  - **前提**：每个角色要有对应 dsh profile（`dsh --profile dabo-planner` 等）。当前 dabo persona 只渲染 `dabo` 一个
+    profile，角色 profile 属 M5（团落地）范围；缺失时 `dsh` 会直接报 profile 不存在。
 - 每个角色独立会话，**不共享上下文**；只传文件产物（plan/diff/report）；
 - 编排器不调用模型，只调度与校验。
 

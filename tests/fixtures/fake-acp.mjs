@@ -54,7 +54,11 @@ process.stdin.on("data", (chunk) => {
       send({ jsonrpc: "2.0", id, result: {} });
       continue;
     }
-    if (method === "session/set_config_option") { send({ jsonrpc: "2.0", id, result: {} }); continue; }
+    if (method === "session/set_config_option") {
+      log({ ev: "config", sid: params?.sessionId, id: params?.configId, value: params?.value });
+      send({ jsonrpc: "2.0", id, result: {} });
+      continue;
+    }
     if (method === "session/prompt") {
       const sid = params?.sessionId;
       const r = sessions.get(sid) || role || "builder";

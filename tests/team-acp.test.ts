@@ -98,6 +98,26 @@ describe("team run --acp（假 ACP 服）", () => {
 });
 
 describe("team run --dsh（假 dsh）", () => {
+  const configLog = () => readFileSync(fakeLog, "utf8").trim().split("\n").filter(Boolean)
+    .map((l) => JSON.parse(l)).filter((e: any) => e.ev === "config");
+
+  test("默认不向 profile 写死模型（用宿主配置）", () => {
+    writeFileSync(fakeLog, "");
+    const id = newTask("a.txt 存在");
+    expect(run(["team", "run", id, "--dsh", "--workspace", workspace]).status).toBe(0);
+    expect(configLog().filter((e: any) => e.id === "model")).toEqual([]);
+  }, 30000);
+
+  test("DIA_DSH_MODEL 显式覆盖才写 model", () => {
+    writeFileSync(fakeLog, "");
+    const id = newTask("a.txt 存在");
+    const r = run(["team", "run", id, "--dsh", "--workspace", workspace], { DIA_DSH_MODEL: "example/deepseek-v4.1-flash" });
+    expect(r.status).toBe(0);
+    const models = configLog().filter((e: any) => e.id === "model");
+    expect(models.length).toBeGreaterThan(0);
+    expect(JSON.parse(models[0].value)).toEqual(["example", "deepseek-v4.1-flash"]);
+  }, 30000);
+
   test("全流程 → awaiting_acceptance", () => {
     const id = newTask("a.txt 存在");
     const r = run(["team", "run", id, "--dsh", "--workspace", workspace]);

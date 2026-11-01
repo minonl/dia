@@ -38,7 +38,7 @@ export interface Manifest {
   files?: { from: string; to: string }[];
   skills?: { from: string; name?: string; mode?: "link" | "copy"; to?: string }[];
   dirs?: string[];
-  commands?: { name: string; entry: string; runtime?: "bun" | "node"; env?: Record<string, string> }[];
+  commands?: { name: string; entry: string; runtime?: "bun" | "node" | "bash"; env?: Record<string, string> }[];
   knowledge?: string[];
   data_root?: string;
   env?: { files?: string[]; keys?: string[] };

@@ -100,7 +100,8 @@ export function current(explicit?: string): Scope | null {
 /** 环境注入：把 persona 作用域翻译成子进程可见的变量。 */
 export function scopeEnv(s: Scope, extra: Record<string, string> = {}): Record<string, string> {
   const env: Record<string, string> = { DIA_PERSONA: s.id, DIA_KITS: s.kits.map((k) => `${k.id}@${k.version}`).join(",") };
-  if (s.dataRoot) { env.DIA_DATA_ROOT_SCOPE = s.dataRoot; env.YAN_DATA_ROOT = s.dataRoot; }
+  // DIA_DATA_ROOT_SCOPE 是通用口径；YAN_DATA_ROOT 保留给既有 yan 配方（勿在新 persona 里依赖）
+  if (s.dataRoot) { env.DIA_DATA_ROOT_SCOPE = s.dataRoot; env.DIA_DATA_ROOT = s.dataRoot; env.YAN_DATA_ROOT = s.dataRoot; }
   if (s.knowledgeRoot) env.DIA_KB_ROOT = s.knowledgeRoot;
   for (const [k, v] of Object.entries(extra)) env[k] = expand(v);
   return env;

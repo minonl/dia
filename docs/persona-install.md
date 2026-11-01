@@ -209,3 +209,33 @@ header 形态（文件头写着 “Edit cordis.patch.yml, not this file”）→
 1. dabo-agent 加 `dia.json` + opencode agent + dsh bundle（纯文本，可审）；
 2. dia 实现 `persona add/update/remove/verify/list`（先 git + 两宿主）；
 3. 临时 HOME E2E：装完 `dabo` 可选中、yan 与默认不变、卸载无残留。
+
+## 5.4 persona 自带命令与知识根（2026-11-01）
+
+persona 可以在 `dia.json` 里声明（不必单独做一个 kit）：
+
+```json
+{
+  "knowledge": ["core/knowledge"],
+  "data_root": "~/.dabo-agent",
+  "commands": [
+    { "name": "todo", "entry": "scripts/dabo-task", "runtime": "bash",
+      "env": { "DABO_ROOT": "~/.dabo-agent" } }
+  ]
+}
+```
+
+调用与语义：
+
+```bash
+dia --persona dabo kb search "台账"   # 知识根 = persona 的 core/knowledge（自动索引到 cache）
+dia --persona dabo todo list          # 委派到 scripts/dabo-task；退出码原样透传
+```
+
+| 项 | 语义 |
+|---|---|
+| `knowledge` | 相对 persona 根；`kb` 命令默认用第一个作为根（`DIA_KB_ROOT`） |
+| `data_root` | 子进程注入 `DIA_DATA_ROOT_SCOPE` / `DIA_DATA_ROOT`（`YAN_DATA_ROOT` 仅保留给既有 yan 配方） |
+| `commands[].runtime` | `bun` / `node`：argv 为 `[entry, <命令名>, ...args]`；`bash`：argv 为 `[entry, ...args]`（**不注入命令名**，脚本自己解析子命令） |
+| `commands[].env` | 注入到子进程（值支持 `~` 展开） |
+| 命名冲突 | 内置命令优先（`dia task` 是内置，persona 里请用 `todo` 这类不冲突的名字） |

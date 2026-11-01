@@ -30,7 +30,7 @@ const homeDir = () => process.env.DIA_HOME || homedir();
 export interface FileArtifact { from: string; to: string }
 export interface SkillArtifact { from: string; name?: string; mode?: "link" | "copy"; to?: string }
 export interface BinArtifact { from: string; name: string }
-export interface CommandArtifact { name: string; entry: string; runtime?: "bun" | "node"; env?: Record<string, string> }
+export interface CommandArtifact { name: string; entry: string; runtime?: "bun" | "node" | "bash"; env?: Record<string, string> }
 
 export interface KitManifest {
   schema: number;

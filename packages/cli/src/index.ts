@@ -62,8 +62,14 @@ function delegatePersonaCommand(name: string, args: string[], opts: { onlyExtern
     const c = k.commands.find((x) => x.name === name);
     if (!c) continue;
     const entry = resolvePath(k.root, c.entry);
-    const runtime = c.runtime === "node" ? "node" : c.runtime === "bun" ? "bun" : (typeof (globalThis as any).Bun !== "undefined" ? "bun" : "node");
-    const r = spawnSync(runtime, [entry, name, ...args], {
+    // bash：直接把入口当可执行脚本调，**不注入命令名**（脚本自己解析子命令）。
+    const isBash = c.runtime === "bash";
+    const runtime = isBash ? "bash"
+      : c.runtime === "node" ? "node"
+      : c.runtime === "bun" ? "bun"
+      : (typeof (globalThis as any).Bun !== "undefined" ? "bun" : "node");
+    const argv = isBash ? [entry, ...args] : [entry, name, ...args];
+    const r = spawnSync(runtime, argv, {
       stdio: "inherit",
       env: { ...process.env, ...scope.scopeEnv(sc, c.env ?? {}) },
     });

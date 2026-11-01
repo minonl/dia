@@ -27,6 +27,9 @@ beforeAll(async () => {
   // argv[0] = 子命令（dia 注入），argv[1] = 首个参数
   writeFileSync(join(src, "kits", "core", "bin", "scene.mjs"),
     "const [sub,a]=process.argv.slice(2);\nconsole.log('SUB:'+sub+' ARG:'+a+' data='+(process.env.YAN_DATA_ROOT||'-'));\nprocess.exit(a==='S1'?0:5);\n");
+  // bash 运行时：入口自己解析子命令（dia 不注入命令名），并透传退出码
+  writeFileSync(join(src, "kits", "core", "bin", "echo.sh"),
+    "#!/usr/bin/env bash\nprintf 'BASH ARGS:%s DATA:%s\\n' \"$*\" \"${DIA_DATA_ROOT:-none}\"\nexit 7\n");
   writeFileSync(join(src, "kits", "core", "dia.json"), JSON.stringify({
     schema: 1, kind: "kit", id: "yan-core", version: "0.1.0", root: ".",
     knowledge: ["knowledge"],
@@ -36,6 +39,7 @@ beforeAll(async () => {
       { name: "scene", entry: "bin/scene.mjs", env: { YAN_DATA_ROOT: "~/.yan-agent" } },
       { name: "hello", entry: "bin/scene.mjs", env: { YAN_DATA_ROOT: "~/.yan-agent" } },
       { name: "kit", entry: "bin/scene.mjs" },
+      { name: "shout", entry: "bin/echo.sh", runtime: "bash" },
     ],
   }));
   writeFileSync(join(src, "dia.json"), JSON.stringify({
@@ -89,6 +93,13 @@ describe("一级委派（A）与 dia cmd（B）", () => {
     const r = run(["hello", "S1"]);
     expect(r.stdout).toContain("SUB:hello ARG:S1");
     expect(r.status).toBe(0);
+  });
+
+  test("A：bash 命令不注入命令名，退出码原样透传", () => {
+    const r = run(["shout", "a", "b"]);
+    expect(r.stdout).toContain("BASH ARGS:a b");
+    expect(r.stdout).toContain("DATA:" + join(home, ".yan-agent"));
+    expect(r.status).toBe(7);
   });
 
   test("A：内置命令优先，persona 同名不覆盖", () => {

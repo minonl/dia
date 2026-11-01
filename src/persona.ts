@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { execFileSync } from "node:child_process";
 import * as kit from "./kit.ts";
 import * as active from "./active.ts";
@@ -294,6 +294,201 @@ export function verify(id: string, version?: string): VerifyResult {
     }
   }
   return { ok: issues.length === 0, dir, expected: lock.hash, actual: real, issues };
+}
+
+// ---- 作者轴：create（生成骨架） / render（不换内容重渲染） ----
+
+const ID_RE = /^[a-z0-9][a-z0-9-]*$/;
+
+export interface CreateResult { id: string; dir: string; files: string[]; dryRun: boolean }
+
+function skeleton(id: string, hosts: string[]): Record<string, string> {
+  const manifest: any = {
+    schema: 1, kind: "persona", id, name: id, version: "0.1.0",
+    hosts,
+    entry: {},
+    capabilities: { tools: ["bash", "git"], network: false, env: [] },
+    requires: { dia: ">=0.0.1" },
+  };
+  const files: Record<string, string> = {};
+  if (hosts.includes("opencode")) {
+    manifest.entry.opencode = `agents/${id}.md`;
+    files[`agents/${id}.md`] = `---
+description: ${id}（一句话说明它是谁、服务谁）
+mode: primary
+---
+你是 **${id}**。
+
+## 身份
+
+- 服务谁：
+- 边界（不做什么）：
+
+## 工作原则
+
+1. 先证据后结论：没验证就别说"应该没问题"。
+2. 动手前说清选项与代价。
+`;
+  }
+  if (hosts.includes("dsh")) {
+    const dir = `platform/dsh/${id}-persona`;
+    manifest.entry.dsh = dir;
+    files[`${dir}/cordis.yml`] = "[]\n";
+    files[`${dir}/package.json`] = JSON.stringify({
+      name: `dsh-${id}-persona`, private: true,
+      dsh: { profile: { bundles: ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app"] } },
+    }, null, 2) + "\n";
+    // 注意：插件 insert 必须带齐必填 config（dsh 不补默认值）；webserver 若覆盖，host/port 必须同时写。
+    files[`${dir}/cordis.patch.yml`] = `# ${id} 的 dsh 覆盖层。patch 是「整体替换 config」，不是深合并——
+# 覆盖某个插件时要把它的必填项一起写上（下例：tool-fs-search 的 sampleOverCapGlobResults）。
+- insert:
+    - id: preset-${id}
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: ${id}
+        name: ${id}
+        description: TODO 一句话说明
+        order: 50
+        plugins:
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+            config:
+              prefix: >-
+                你是 ${id}。（在这里写人格 / 协议 / 边界）
+          - id: agent-instructions
+            name: '@deepseek-ai/dsh-agent-instructions'
+            config:
+              maxBytes: 65536
+          - id: tool-bash
+            name: '@deepseek-ai/dsh-tool-bash'
+          - id: tool-fs
+            name: '@deepseek-ai/dsh-tool-fs'
+          - id: tool-fs-search
+            name: '@deepseek-ai/dsh-tool-fs-search'
+            config:
+              sampleOverCapGlobResults: false
+          - id: tool-skill
+            name: '@deepseek-ai/dsh-tool-skill'
+# 需要独立端口时取消下面注释（host 和 port 必须同时写，否则 dsh 启动报 $.host missing）：
+# - id: webserver
+#   config:
+#     host: !!js ctx.webStartup.host ?? '127.0.0.1'
+#     port: !!js ctx.webStartup.port ?? 3100
+`;
+  }
+  files["dia.json"] = JSON.stringify(manifest, null, 2) + "\n";
+  return files;
+}
+
+/** 生成一个新 persona 的骨架（本地、不联网、不执行脚本）。 */
+export function create(id: string, opts: { dir?: string; hosts?: string[]; dryRun?: boolean } = {}): CreateResult {
+  if (!ID_RE.test(id)) throw new Error("E_MANIFEST: bad id（小写字母/数字/中划线）");
+  if (!opts.dir) throw new Error("E_USAGE: --dir required");
+  const dir = resolve(opts.dir);
+  const hosts = opts.hosts?.length ? opts.hosts : ["opencode", "dsh"];
+  for (const h of hosts) if (!["opencode", "dsh"].includes(h)) throw new Error("E_HOST: host not implemented: " + h);
+  if (existsSync(dir) && readdirSync(dir).length) throw new Error(`E_CONFLICT: ${dir} 非空`);
+  const files = skeleton(id, hosts);
+  if (!opts.dryRun) {
+    for (const [rel, body] of Object.entries(files)) {
+      const p = join(dir, rel);
+      mkdirSync(dirname(p), { recursive: true });
+      writeFileSync(p, body);
+    }
+  }
+  return { id, dir, files: Object.keys(files), dryRun: !!opts.dryRun };
+}
+
+export interface RenderDrift { path: string; action: "missing" | "changed" }
+export interface RenderResult { id: string; version: string; check: boolean; drift: RenderDrift[]; backups: string[] }
+
+function compareDir(expected: string, actual: string): RenderDrift[] {
+  const out: RenderDrift[] = [];
+  for (const f of walkFiles(expected)) {
+    const dest = join(actual, relative(expected, f));
+    if (!existsSync(dest)) out.push({ path: dest, action: "missing" });
+    else if (shaFile(dest) !== shaFile(f)) out.push({ path: dest, action: "changed" });
+  }
+  return out;
+}
+
+/**
+ * 用**已安装版本**重渲染到宿主（不换内容）。`check` 只报 drift、不写盘。
+ * 覆盖策略：被手改/丢失的产物先备份到 `<data>/backups/render-<ts>/`，再写回。
+ */
+export function render(id: string, opts: { host?: string; check?: boolean } = {}): RenderResult {
+  const idDir = join(dataDir(), "personas", id);
+  if (!existsSync(idDir)) throw new Error(`E_NOT_INSTALLED: persona ${id}`);
+  const version = active.effective(id)?.version ?? readdirSync(idDir).filter((v) => statSync(join(idDir, v)).isDirectory()).sort().pop()!;
+  const dir = join(idDir, version);
+  const m = readManifest(dir);
+  const hosts = opts.host ? [opts.host] : (m.hosts ?? ["opencode"]);
+  for (const h of hosts) if (!["opencode", "dsh"].includes(h)) throw new Error("E_HOST: host not implemented: " + h);
+
+  const drift: RenderDrift[] = [];
+  let agentSrc: string | null = null, agentDest: string | null = null;
+  let dshSrc: string | null = null, dshDest: string | null = null;
+
+  if (hosts.includes("opencode")) {
+    const entry = m.entry?.opencode;
+    if (!entry) throw new Error("E_MANIFEST: missing entry.opencode");
+    agentSrc = resolve(dir, entry);
+    if (!agentSrc.startsWith(dir + sep)) throw new Error("E_MANIFEST: entry escapes persona dir");
+    if (!existsSync(agentSrc)) throw new Error("E_MANIFEST: entry.opencode file missing");
+    agentDest = join(opencodeAgents(), `${id}.md`);
+    if (!existsSync(agentDest)) drift.push({ path: agentDest, action: "missing" });
+    else if (shaFile(agentDest) !== shaFile(agentSrc)) drift.push({ path: agentDest, action: "changed" });
+  }
+  if (hosts.includes("dsh")) {
+    const entry = m.entry?.dsh;
+    if (!entry) throw new Error("E_MANIFEST: missing entry.dsh");
+    dshSrc = resolve(dir, entry);
+    if (!dshSrc.startsWith(dir + sep)) throw new Error("E_MANIFEST: entry escapes persona dir");
+    if (!existsSync(dshSrc)) throw new Error("E_MANIFEST: entry.dsh dir missing");
+    dshDest = resolve(dshProfiles(), id);
+    if (!existsSync(dshDest)) drift.push({ path: dshDest, action: "missing" });
+    else {
+      drift.push(...compareDir(dshSrc, dshDest));
+      const marker = join(dshDest, ".dia-managed");
+      if (!existsSync(marker)) drift.push({ path: marker, action: "missing" });
+      else {
+        try { if (JSON.parse(readFileSync(marker, "utf8")).id !== id) drift.push({ path: marker, action: "changed" }); }
+        catch { drift.push({ path: marker, action: "changed" }); }
+      }
+    }
+  }
+  if (opts.check) return { id, version, check: true, drift, backups: [] };
+
+  const backups: string[] = [];
+  if (drift.length) {
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const bdir = join(dataDir(), "backups", `render-${stamp}`);
+    for (const d of drift) {
+      if (!existsSync(d.path)) continue;
+      mkdirSync(bdir, { recursive: true });
+      const dest = join(bdir, basename(d.path));
+      cpSync(d.path, dest, { recursive: true });
+      backups.push(dest);
+    }
+  }
+  if (agentDest && agentSrc) { mkdirSync(dirname(agentDest), { recursive: true }); cpSync(agentSrc, agentDest); }
+  if (dshDest && dshSrc) {
+    rmSync(dshDest, { recursive: true, force: true });
+    mkdirSync(dshDest, { recursive: true });
+    cpSync(dshSrc, dshDest, { recursive: true });
+    writeFileSync(join(dshDest, ".dia-managed"), JSON.stringify({ id, version }, null, 1));
+  }
+
+  // 只更新渲染产物记录；persona 内容哈希（lock.hash）不变。
+  const lockPath = join(dir, "dia.lock");
+  const lock = JSON.parse(readFileSync(lockPath, "utf8"));
+  const rendered: string[] = [...new Set([...(lock.rendered ?? []), ...(agentDest ? [agentDest] : [])])];
+  const renderedHashes: Record<string, string> = { ...(lock.renderedHashes ?? {}) };
+  if (agentDest) renderedHashes[agentDest] = shaFile(agentDest);
+  const renderedDirs = [...(lock.renderedDirs ?? []).filter((d: any) => d.path !== dshDest)];
+  if (dshDest) renderedDirs.push({ path: dshDest, hash: hashTree(dshDest) });
+  writeFileSync(lockPath, JSON.stringify({ ...lock, rendered, renderedHashes, renderedDirs }, null, 1));
+  return { id, version, check: false, drift, backups };
 }
 
 export function remove(id: string): { removed: string[]; skipped: string[] } {

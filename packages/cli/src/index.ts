@@ -113,6 +113,8 @@ usage:
   dia run --session S [--tool T] [--agent A] [--waive --risk N] [--redline] -- <cmd> [args...]
   dia resume --session S [--json]
   dia persona add <id|--from SRC> [--ref REF] [--host opencode] [--dry-run] [--json]
+  dia persona create <id> --dir DIR [--host opencode|dsh] [--dry-run] [--json]
+  dia persona render <id> [--host opencode|dsh] [--check] [--json]
   dia persona list|verify|remove|show <id>|use <id>[@ver]
   dia persona path [<id>[@<ver>]] [--json]   # 打印生效版本目录（服务/脚本取代码入口）
   dia persona check <id>|update <id> [--ref REF]
@@ -604,6 +606,41 @@ async function personaCli(argv: string[]): Promise<number> {
       return 31;
     }
   }
+  if (sub === "create") {
+    const id = positional(args)[0];
+    if (!id) { err("usage: dia persona create <id> --dir DIR [--host opencode|dsh] [--dry-run] [--json]"); return 2; }
+    try {
+      const host = flag(args, "--host");
+      const r = persona.create(id, { dir: flag(args, "--dir"), hosts: host ? [host] : undefined, dryRun: has(args, "--dry-run") });
+      out(asJson ? JSON.stringify(r) : `${r.dryRun ? "[dry-run] " : ""}created ${r.id} -> ${r.dir}\n  ${r.files.join("\n  ")}`);
+      return 0;
+    } catch (e: any) {
+      const m = e?.message || String(e);
+      err(m);
+      if (m.startsWith("E_USAGE")) return 2;
+      if (m.startsWith("E_CONFLICT") || m.startsWith("E_MANIFEST")) return 32;
+      if (m.startsWith("E_HOST")) return 33;
+      return 31;
+    }
+  }
+  if (sub === "render") {
+    const id = positional(args)[0];
+    if (!id) { err("usage: dia persona render <id> [--host opencode|dsh] [--check] [--json]"); return 2; }
+    try {
+      const r = persona.render(id, { host: flag(args, "--host"), check: has(args, "--check") });
+      if (asJson) out(JSON.stringify(r, null, 1));
+      else if (r.check) out(r.drift.length ? `drift ${r.drift.length}:\n  ${r.drift.map((d: any) => `${d.action}: ${d.path}`).join("\n  ")}` : "ok（无 drift）");
+      else out(`rendered ${r.id}@${r.version}${r.drift.length ? `（修复 ${r.drift.length} 处，备份 ${r.backups.length}）` : "（无变化）"}`);
+      return r.check && r.drift.length ? 1 : 0;
+    } catch (e: any) {
+      const m = e?.message || String(e);
+      err(m);
+      if (m.startsWith("E_NOT_INSTALLED")) return 21;
+      if (m.startsWith("E_MANIFEST")) return 32;
+      if (m.startsWith("E_HOST")) return 33;
+      return 31;
+    }
+  }
   if (sub === "remove") {
     const id = positional(args)[0];
     if (!id) { err("missing id"); return 2; }
@@ -614,7 +651,7 @@ async function personaCli(argv: string[]): Promise<number> {
       return r.skipped?.length ? 30 : 0;
     } catch (e: any) { err(e?.message || String(e)); return 31; }
   }
-  err("usage: dia persona add|list|verify|remove|show|use|path|check|update|default");
+  err("usage: dia persona add|create|render|list|verify|remove|show|use|path|check|update|default");
   return 2;
 }
 

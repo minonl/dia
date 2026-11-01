@@ -159,6 +159,10 @@ staged dabo@v2 (commit abc123)
 - `dsh --profile dabo` 启动正常（webserver 3090，避开被占用的 3080）；
 - yan 的 agent/profile 未改动。
 
+> 2026-11-01 补：`dia persona create` / `dia persona render` 已实现（此前只有文档）。
+> create 生成骨架时**已内置必填 config**（`tool-fs-search.sampleOverCapGlobResults`），
+> render 修产物时先备份到 `<data>/backups/render-<ts>/`；`--check` 只报 drift 不写盘。
+
 ## 5.2 opencode 配置：`.json` 与 `.jsonc`（2026-11-01）
 
 opencode 从 **v0.3.100（2025-07-31，PR #1434）** 起支持 `opencode.jsonc`；

@@ -64,6 +64,13 @@ bun src/cli.ts version  # 直接跑源码
 ## 命令
 
 ```bash
+# persona / kit（作者轴 + 安装轴）
+dia persona create <id> --dir DIR [--host opencode|dsh] [--dry-run]   # 生成骨架（不联网、不执行脚本）
+dia persona add <id> --from git+... | DIR [--ref REF] [--dry-run]     # 取回 + 渲染 + 记 lock
+dia persona render <id> [--host opencode|dsh] [--check]               # 用已装版本重渲染（--check 只报 drift）
+dia persona verify|list|show|remove|use|path|update
+dia kit add --from SRC [--ref REF]
+
 # 知识
 dia kb index  [--root DIR] [--db PATH] [--json]
 dia kb search <query> [--root DIR] [--db PATH] [--limit N] [--json]

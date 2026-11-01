@@ -505,7 +505,7 @@ async function personaCli(argv: string[]): Promise<number> {
     if (!id) { err("missing id"); return 2; }
     try {
       const r = persona.verify(id, flag(args, "--version"));
-      out(asJson ? JSON.stringify(r) : `${r.ok ? "ok" : "MISMATCH"} ${r.dir}`);
+      out(asJson ? JSON.stringify(r) : `${r.ok ? "ok" : "MISMATCH"} ${r.dir}${r.ok ? "" : `\n  - ${r.issues.join("\n  - ")}`}`);
       return r.ok ? 0 : 1;
     } catch (e: any) { err(e?.message || String(e)); return 31; }
   }

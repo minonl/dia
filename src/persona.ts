@@ -188,6 +188,7 @@ export function install(from: string, opts: { ref?: string; host?: string; dryRu
     mkdirSync(dshDest, { recursive: true });
     cpSync(resolve(target, dshEntry!), dshDest, { recursive: true });
     writeFileSync(join(dshDest, ".dia-managed"), JSON.stringify({ id: m.id, version: m.version }, null, 1));
+    // hash 只是安装时快照（诊断用）；校验不比对它——宿主会重写自己 profile 里的文件。
     renderedDirs.push({ path: dshDest, hash: hashTree(dshDest) });
   }
 
@@ -233,7 +234,23 @@ export function dirOf(id: string, version?: string): { dir: string; version: str
   return existsSync(dir) ? { dir, version: v } : null;
 }
 
-export function verify(id: string, version?: string): { ok: boolean; dir: string; expected: string; actual: string } {
+export interface VerifyResult {
+  ok: boolean;
+  dir: string;
+  expected: string;
+  actual: string;
+  /** 具体不一致项（空数组 = 全绿）。doctor / CLI 用它给出可读原因。 */
+  issues: string[];
+}
+
+/** 读取 `.dia-managed` 所有权标记（宿主 profile 目录）。 */
+function readMarker(dir: string): { id?: string; version?: string } | null {
+  const p = join(dir, ".dia-managed");
+  if (!existsSync(p)) return null;
+  try { return JSON.parse(readFileSync(p, "utf8")); } catch { return null; }
+}
+
+export function verify(id: string, version?: string): VerifyResult {
   const idDir = join(dataDir(), "personas", id);
   if (!existsSync(idDir)) throw new Error("E_NOT_INSTALLED");
   const v = version || readdirSync(idDir).sort().pop()!;
@@ -244,27 +261,39 @@ export function verify(id: string, version?: string): { ok: boolean; dir: string
   const h = createHash("sha256");
   for (const f of files) h.update(relative(dir, f)).update("\0").update(shaFile(f)).update("\n");
   const real = h.digest("hex");
-  let renderedOk = true;
+  const issues: string[] = [];
+
+  if (real !== lock.hash) issues.push(`内容哈希不一致（期望 ${lock.hash.slice(0, 8)} 实得 ${real.slice(0, 8)}）`);
+
+  // 逐字节校验只覆盖「dia 写入、宿主不改写」的产物（如 opencode agent md）。
   for (const [f, expectedHash] of Object.entries(lock.renderedHashes || {})) {
-    if (!existsSync(f) || shaFile(f) !== expectedHash) renderedOk = false;
+    if (!existsSync(f)) issues.push(`产物缺失：${f}`);
+    else if (shaFile(f) !== expectedHash) issues.push(`产物被改动：${f}`);
   }
+
+  // 宿主自管的 profile 目录（dsh 会在启动时重写 cordis.yml、装插件时改 package.json）：
+  // 只校验「目录还在 + .dia-managed 标记仍归本 persona」，不做字节比对——那是宿主的领地。
   for (const d of lock.renderedDirs || []) {
-    if (!existsSync(d.path) || hashTree(d.path) !== d.hash) renderedOk = false;
+    if (!existsSync(d.path)) { issues.push(`宿主 profile 缺失：${d.path}`); continue; }
+    const m = readMarker(d.path);
+    if (!m) issues.push(`宿主 profile 缺所有权标记：${d.path}`);
+    else if (m.id !== id) issues.push(`宿主 profile 归属不符（${m.id ?? "?"}）：${d.path}`);
   }
+
   // persona 自带内容的产物（files 复制 / skills 软链）也要校验
   for (const r of lock.content?.rendered ?? []) {
     if (r.type === "dir") continue;
-    if (!existsSync(r.path)) { renderedOk = false; continue; }
+    if (!existsSync(r.path)) { issues.push(`内容产物缺失：${r.path}`); continue; }
     if (r.type === "file") {
-      if (shaFile(r.path) !== r.value) renderedOk = false;
+      if (shaFile(r.path) !== r.value) issues.push(`内容产物被改动：${r.path}`);
     } else {
       let cur = "";
-      try { cur = realpathSync(r.path); } catch { renderedOk = false; continue; }
+      try { cur = realpathSync(r.path); } catch { issues.push(`内容产物不可读：${r.path}`); continue; }
       const want = resolve(dir, r.value);
-      if (!existsSync(want) || cur !== realpathSync(want)) renderedOk = false;
+      if (!existsSync(want) || cur !== realpathSync(want)) issues.push(`内容产物指向不符：${r.path}`);
     }
   }
-  return { ok: real === lock.hash && renderedOk, dir, expected: lock.hash, actual: real };
+  return { ok: issues.length === 0, dir, expected: lock.hash, actual: real, issues };
 }
 
 export function remove(id: string): { removed: string[]; skipped: string[] } {
@@ -281,7 +310,11 @@ export function remove(id: string): { removed: string[]; skipped: string[] } {
       for (const d of lock.renderedDirs || []) {
         const abs = resolve(d.path);
         if (!abs.startsWith(resolve(dshProfiles()) + sep) || basename(abs) !== id) { skipped.push(abs); continue; }
-        if (!existsSync(abs) || hashTree(abs) !== d.hash) { skipped.push(abs); continue; }
+        if (!existsSync(abs)) continue;
+        // 宿主会改写自己目录里的文件，所以按「所有权标记」判断而不是字节哈希；
+        // 标记缺失/归属不符 = 不是我们该删的东西。
+        const m = readMarker(abs);
+        if (!m || m.id !== id) { skipped.push(abs); continue; }
         rmSync(abs, { recursive: true, force: true }); removed.push(abs);
       }
       // 内容产物（persona 自带 files/skills）：按 lock 里记录的哈希/指向回收

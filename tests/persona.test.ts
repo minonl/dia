@@ -108,6 +108,57 @@ describe("persona dsh render", () => {
   });
 });
 
+describe("persona 校验边界（宿主自管文件不算 drift）", () => {
+  const make = (id: string) => {
+    const root = mkdtempSync(join(tmpdir(), `dia-${id}-`));
+    mkdirSync(join(root, "agents"), { recursive: true });
+    mkdirSync(join(root, "dsh"), { recursive: true });
+    writeFileSync(join(root, "dia.json"), JSON.stringify({
+      schema: 1, kind: "persona", id, version: "1.0.0",
+      hosts: ["opencode", "dsh"], entry: { opencode: `agents/${id}.md`, dsh: "dsh" },
+    }));
+    writeFileSync(join(root, "agents", `${id}.md`), `---\ndescription: ${id}\nmode: primary\n---\n${id}\n`);
+    writeFileSync(join(root, "dsh", "package.json"), "{}");
+    writeFileSync(join(root, "dsh", "cordis.yml"), "[]\n");
+    writeFileSync(join(root, "dsh", "cordis.patch.yml"), "[]\n");
+    return root;
+  };
+
+  test("dsh 启动时重写 cordis.yml → 仍 ok，且 remove 能删干净", () => {
+    const root = make("hostown");
+    persona.install(root);
+    const prof = join(dshProfiles, "hostown");
+    // 模拟宿主行为：dsh 把自己的文件写成带注释的形态
+    writeFileSync(join(prof, "cordis.yml"), "# dsh profile root\n[]\n");
+    expect(persona.verify("hostown").ok).toBe(true);
+    const r = persona.remove("hostown");
+    expect(r.removed).toContain(prof);
+    expect(existsSync(prof)).toBe(false);
+  });
+
+  test("profile 目录被删 → fail 且说明是哪条", () => {
+    const root = make("hostgone");
+    persona.install(root);
+    require("node:fs").rmSync(join(dshProfiles, "hostgone"), { recursive: true, force: true });
+    const v = persona.verify("hostgone");
+    expect(v.ok).toBe(false);
+    expect(v.issues.join(" ")).toContain("宿主 profile 缺失");
+  });
+
+  test("所有权标记被改成别人的 → fail；remove 不误删", () => {
+    const root = make("hostalien");
+    persona.install(root);
+    const prof = join(dshProfiles, "hostalien");
+    writeFileSync(join(prof, ".dia-managed"), JSON.stringify({ id: "someone-else", version: "1.0.0" }));
+    const v = persona.verify("hostalien");
+    expect(v.ok).toBe(false);
+    expect(v.issues.join(" ")).toContain("归属不符");
+    const r = persona.remove("hostalien");
+    expect(r.removed).not.toContain(prof);
+    expect(existsSync(prof)).toBe(true);
+  });
+});
+
 describe("persona path safety", () => {
   test("rejects path traversal in version", () => {
     const bad = mkdtempSync(join(tmpdir(), "dia-p-bad-"));

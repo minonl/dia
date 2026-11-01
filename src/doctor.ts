@@ -33,16 +33,19 @@ export function run(opts: { persona?: string } = {}): { persona: string | null; 
     });
     try {
       const v = persona.verify(sc.id, sc.version);
-      checks.push({ name: "persona.verify", status: v.ok ? "ok" : "fail", detail: v.ok ? "内容哈希一致" : `drift：期望 ${v.expected.slice(0, 8)} 实得 ${v.actual.slice(0, 8)}` });
+      checks.push({ name: "persona.verify", status: v.ok ? "ok" : "fail", detail: v.ok ? "内容哈希一致" : (v.issues[0] ?? "drift") });
     } catch (e: any) { checks.push({ name: "persona.verify", status: "fail", detail: e?.message }); }
 
-    // 默认 agent 是否指向该 persona（不自动改，只报告）
+    // 默认 agent 只是**信息项**：dia 的契约就是「只新增、不改默认」，
+    // 因此默认指向别处（或未设置）都不算不健康——不要越界替用户判红。
     try {
       const d = persona.showDefaultAgent({ host: "opencode" });
       checks.push({
         name: "default_agent",
-        status: d.current === sc.id ? "ok" : d.current ? "warn" : "warn",
-        detail: d.current ? `当前 ${d.current}` : "未设置（dia persona default <id>）",
+        status: "ok",
+        detail: d.current
+          ? `当前 ${d.current}${d.current === sc.id ? "" : "（dia 不自动切换）"}`
+          : "未设置（dia 不自动设置）",
       });
     } catch (e: any) { checks.push({ name: "default_agent", status: "warn", detail: e?.message }); }
 

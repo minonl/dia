@@ -129,11 +129,13 @@ staged dabo@v2 (commit abc123)
 
 1. 来源白名单（git host + owner），防误装。
 2. `--ref` 解析后把 **commit sha** 写进 lock。
-3. 每文件 sha256；`verify` 不一致即失败（按篡改处理）。
+3. 逐字节 sha256 只覆盖 **dia 写入且宿主不改写** 的产物（persona 内容、opencode agent md、软链）；
+   **宿主自管目录**（dsh profile）只校验「目录在 + `.dia-managed` 归属」，不比字节——dsh 启动会重写
+   `cordis.yml`、装插件会改 `package.json`。`verify` 失败时用 `issues` 逐条列出原因。
 4. **不执行安装脚本**；dsh 插件也不在安装期执行。
 5. `capabilities` 未声明的工具不授予；网络默认关。
 6. `--dry-run` 显示将写入的文件与差异。
-7. 卸载只删带 `managed-by: dia` 的产物；用户手改过的文件拒绝删除并提示。
+7. 卸载只删带 `.dia-managed`（id 匹配）的产物；用户手改/归属不符的目录拒绝删除并提示。
 
 ---
 
@@ -173,6 +175,24 @@ opencode 从 **v0.3.100（2025-07-31，PR #1434）** 起支持 `opencode.jsonc`�
 | 4 | 都不存在 → 用默认路径 `opencode.json`（`show` 返回「未设置」，`default` 报 `E_CONFIG`） |
 
 两张表都读得懂：读 = JSONC（注释 + 尾逗号）；写 = **只改 `default_agent` 一个键，保留注释与排版**（写回前重新解析校验，坏配置不落盘）。
+
+## 5.3 校验边界：dia 只管自己写的字节（2026-11-01 反思）
+
+**事故**：`dia doctor` 对 dsh profile 目录做整树哈希，而 dsh 首次启动就把 `cordis.yml` 重写成自己的
+header 形态（文件头写着 “Edit cordis.patch.yml, not this file”）→ verify 假红，且提示把原因写成
+「期望 d07d454c 实得 d07d454c」（内容哈希其实一致，真正 drift 的是宿主目录）。
+
+**结论（越界反思）**：安装器的校验职责边界是 **「自己写入的、宿主不改写的产物」**。
+
+| 对象 | 校验方式 | 理由 |
+|---|---|---|
+| persona 内容树 / 复制的 agent md / 软链 | 逐字节 sha256 | 只有 dia 会写，改动 = 真篡改 |
+| 宿主 profile 目录（dsh） | 存在性 + `.dia-managed` 归属 | 宿主自己会重写 `cordis.yml`、改 `package.json` |
+| 默认 agent | 只读、只报告 | dia 契约是「不改默认」，指向别处不算不健康 |
+
+`verify` 现在返回 `issues: string[]`（逐条可读），doctor 直接显示第一条；`remove` 也改为按归属标记判断，
+不再因为宿主改写过就拒绝卸载（否则卸载会留残）。
+
 
 ## 6. 当前缺口
 

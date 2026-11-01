@@ -198,18 +198,6 @@ header 形态（文件头写着 “Edit cordis.patch.yml, not this file”）→
 不再因为宿主改写过就拒绝卸载（否则卸载会留残）。
 
 
-## 6. 当前缺口
-
-1. dabo-agent 没有 `dia.json`、`agents/dabo.md`、dsh persona bundle。
-2. dia 没有 `persona` / `kit` 命令。
-3. 没有 lock/verify 实现。
-
-## 7. 第一刀
-
-1. dabo-agent 加 `dia.json` + opencode agent + dsh bundle（纯文本，可审）；
-2. dia 实现 `persona add/update/remove/verify/list`（先 git + 两宿主）；
-3. 临时 HOME E2E：装完 `dabo` 可选中、yan 与默认不变、卸载无残留。
-
 ## 5.4 persona 自带命令与知识根（2026-11-01）
 
 persona 可以在 `dia.json` 里声明（不必单独做一个 kit）：
@@ -239,3 +227,16 @@ dia --persona dabo todo list          # 委派到 scripts/dabo-task；退出码�
 | `commands[].runtime` | `bun` / `node`：argv 为 `[entry, <命令名>, ...args]`；`bash`：argv 为 `[entry, ...args]`（**不注入命令名**，脚本自己解析子命令） |
 | `commands[].env` | 注入到子进程（值支持 `~` 展开） |
 | 命名冲突 | 内置命令优先（`dia task` 是内置，persona 里请用 `todo` 这类不冲突的名字） |
+| 隔离 | 命令入口必须在 persona 根内（绝对路径 / `../` 穿越 → `E_DELEGATE_SCOPE`）；若 `env` 写死数据根（如 dabo 的 `DABO_ROOT`），会绕过 `DIA_DATA_DIR` 的测试隔离 |
+
+## 6. 当前缺口
+
+1. dabo-agent 没有 `dia.json`、`agents/dabo.md`、dsh persona bundle。
+2. dia 没有 `persona` / `kit` 命令。
+3. 没有 lock/verify 实现。
+
+## 7. 第一刀
+
+1. dabo-agent 加 `dia.json` + opencode agent + dsh bundle（纯文本，可审）；
+2. dia 实现 `persona add/update/remove/verify/list`（先 git + 两宿主）；
+3. 临时 HOME E2E：装完 `dabo` 可选中、yan 与默认不变、卸载无残留。

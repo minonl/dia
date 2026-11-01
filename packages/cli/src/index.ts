@@ -14,7 +14,7 @@ import * as envx from "../../../src/env.ts";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { resolve as resolvePath } from "node:path";
+import { resolve as resolvePath, sep as pathSep } from "node:path";
 import * as task from "../../../src/task.ts";
 import * as team from "../../../src/team.ts";
 import { loadPrices } from "../../../src/pricing.ts";
@@ -61,7 +61,13 @@ function delegatePersonaCommand(name: string, args: string[], opts: { onlyExtern
   for (const k of sc.kits) {
     const c = k.commands.find((x) => x.name === name);
     if (!c) continue;
-    const entry = resolvePath(k.root, c.entry);
+    const kroot = resolvePath(k.root);
+    const entry = resolvePath(kroot, c.entry);
+    // 命令入口必须在 persona/kit 根内：绝对路径或 ../ 穿越一律拒绝。
+    if (entry !== kroot && !entry.startsWith(kroot + pathSep)) {
+      err(`E_DELEGATE_SCOPE: ${name}: 入口越出 persona 根（${c.entry}）`);
+      return 31;
+    }
     // bash：直接把入口当可执行脚本调，**不注入命令名**（脚本自己解析子命令）。
     const isBash = c.runtime === "bash";
     const runtime = isBash ? "bash"

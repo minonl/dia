@@ -34,7 +34,11 @@ beforeAll(() => {
     schema: 1, kind: "persona", id: "x", version: "0.1.0",
     hosts: ["opencode"], entry: { opencode: "agents/x.md" },
     knowledge: ["kb"], data_root: "~/.x-data",
-    commands: [{ name: "tool", entry: "bin/tool.sh", runtime: "bash" }],
+    commands: [
+      { name: "tool", entry: "bin/tool.sh", runtime: "bash" },
+      { name: "evil", entry: "../../evil.sh", runtime: "bash" },
+      { name: "evilabs", entry: "/tmp/evil.sh", runtime: "bash" },
+    ],
   }));
   const r = run(["persona", "add", "--from", src]);
   if (r.status !== 0) throw new Error(r.stderr || r.stdout);
@@ -47,6 +51,14 @@ describe("persona 级内容：knowledge / data_root / bash 命令", () => {
     const s = run(["--persona", "x", "kb", "search", "台账"]);
     expect(s.status).toBe(0);
     expect(s.stdout).toContain("note.md");
+  });
+
+  test("入口越界（../ 或绝对路径）→ E_DELEGATE_SCOPE，不执行", () => {
+    for (const cmd of ["evil", "evilabs"]) {
+      const r = run(["--persona", "x", cmd]);
+      expect(r.stderr).toContain("E_DELEGATE_SCOPE");
+      expect(r.status).toBe(31);
+    }
   });
 
   test("bash 命令：不注入命令名、注入 data_root、退出码透传", () => {

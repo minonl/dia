@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { execFileSync } from "node:child_process";
 import * as kit from "./kit.ts";
+import * as config from "./config.ts";
 import * as active from "./active.ts";
 import { parseJsonc, setTopLevelKey } from "./jsonc.ts";
 
@@ -42,6 +43,7 @@ export interface Manifest {
   knowledge?: string[];
   data_root?: string;
   env?: { files?: string[]; keys?: string[] };
+  config?: { file: string; jsonc?: boolean; set: Record<string, unknown> }[];
   capabilities?: Record<string, unknown>;
 }
 
@@ -194,6 +196,7 @@ export function install(from: string, opts: { ref?: string; host?: string; dryRu
 
   // persona 自带内容（内联 kit 语义）：baseDir = target，链接指向 persona 树自身
   const inline = kit.renderContent(target, target, m) ?? [];
+  const appliedConfig = config.apply((m.config ?? []) as any);
 
   // kits：包内相对路径，装完树后逐个分发（内容归 kit，人格只引用）
   const kitRefs: { id: string; version: string }[] = [];
@@ -209,7 +212,7 @@ export function install(from: string, opts: { ref?: string; host?: string; dryRu
   const renderedHashes: Record<string, string> = {};
   for (const f of rendered) renderedHashes[f] = shaFile(f);
   writeFileSync(join(target, "dia.lock"), JSON.stringify({ id: m.id, version: m.version, commit: src.commit, source: from, ref: opts.ref ?? null, hash, rendered, renderedHashes, renderedDirs, kits: kitRefs,
-    content: { knowledge: m.knowledge ?? [], commands: m.commands ?? [], dataRoot: m.data_root ?? null, env: m.env ?? null, rendered: inline },
+    content: { knowledge: m.knowledge ?? [], commands: m.commands ?? [], dataRoot: m.data_root ?? null, env: m.env ?? null, rendered: inline, config: appliedConfig },
   }, null, 1));
   return { id: m.id, version: m.version, dir: target, rendered, hash };
 }
@@ -534,6 +537,12 @@ export function remove(id: string): { removed: string[]; skipped: string[] } {
         const expectedHash = lock.renderedHashes?.[f];
         if (!expectedHash || !existsSync(abs) || shaFile(abs) !== expectedHash) { skipped.push(abs); continue; }
         rmSync(abs); removed.push(abs);
+      }
+      // 声明式配置：按原内容回滚（文件被改过则 skip）
+      for (const r of lock.content?.config ?? []) {
+        const rv = config.revert([r]);
+        removed.push(...rv.restored);
+        skipped.push(...rv.skipped);
       }
       // kit：随 persona 一起卸载
       for (const k of lock.kits ?? []) {

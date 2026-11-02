@@ -21,6 +21,7 @@ import {
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { execFileSync } from "node:child_process";
+import * as config from "./config.ts";
 
 // 目录在调用时解析（不在模块加载时固化）：测试与多 persona 场景下 env 会变。
 const dataDir = () => process.env.DIA_DATA_DIR || join(homedir(), ".local", "share", "dia");
@@ -50,6 +51,7 @@ export interface KitManifest {
 
 export interface ContentFields {
   env?: { files?: string[]; keys?: string[] };
+  config?: { file: string; jsonc?: boolean; set: Record<string, unknown> }[];
   files?: FileArtifact[];
   skills?: SkillArtifact[];
   bin?: BinArtifact[];
@@ -271,11 +273,12 @@ export function install(from: string, opts: { ref?: string; dryRun?: boolean; js
     cpSync(src.dir, target, { recursive: true, dereference: true, filter: (p: string) => !p.split(sep).includes(".git") && !p.split(sep).includes("node_modules") });
   }
   const rendered = renderContent(src.dir, target, m) ?? planned;
+  const appliedConfig = config.apply(m.config ?? []);
 
   const hash = hashTree(target);
   writeFileSync(join(target, "kit.lock"), JSON.stringify({
     id: m.id, version: m.version, commit: src.commit, root: kitRootRel, hash,
-    rendered, commands: m.commands ?? [], knowledge: m.knowledge ?? [], dataRoot: m.data_root ?? null, env: m.env ?? null,
+    rendered, commands: m.commands ?? [], knowledge: m.knowledge ?? [], dataRoot: m.data_root ?? null, env: m.env ?? null, config: appliedConfig,
   }, null, 1));
   return { id: m.id, version: m.version, dir: target, root: kitRoot, rendered, hash, changed: true };
 }

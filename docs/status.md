@@ -9,6 +9,7 @@
 
 | 文档 | 内容 | 状态 |
 |---|---|---|
+| `HANDOFF.md`（仓库根） | **交接入口**：复验判据 / 接手须知 / 坑 / 待决策指针 | 现行（2026-11-02） |
 | `docs/evolution-process.md` | `(T,D,O)`、V 型、深度、压缩 | 现行 |
 | `docs/security-sandbox.md` | 单 seam、默认档位、fail-closed | 现行（部分未实现） |
 | `docs/host-control-surface.md` | opencode/dsh 控制面 L0/L1/L2 | 现行 |

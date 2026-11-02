@@ -53,6 +53,9 @@ export interface Installed {
   dir: string;
   rendered: string[];
   hash: string;
+  /** 来源 commit（git 源 = rev-parse HEAD；本地目录 = --short HEAD 或 "local"；dry-run = "dry-run"）。
+   *  CLI 展示与 persona check 走同一条信息，避免「undefined」。 */
+  commit: string;
 }
 
 function shaFile(p: string): string {
@@ -164,7 +167,7 @@ export function install(from: string, opts: { ref?: string; host?: string; dryRu
 
   if (opts.dryRun) {
     if (hosts.includes("opencode")) rendered.push(join(opencodeAgents(), `${m.id}.md`));
-    return { id: m.id, version: m.version, dir: target, rendered, hash: "dry-run" };
+    return { id: m.id, version: m.version, dir: target, rendered, hash: "dry-run", commit: src.commit };
   }
 
   rmSync(target, { recursive: true, force: true });
@@ -214,7 +217,7 @@ export function install(from: string, opts: { ref?: string; host?: string; dryRu
   writeFileSync(join(target, "dia.lock"), JSON.stringify({ id: m.id, version: m.version, commit: src.commit, source: from, ref: opts.ref ?? null, hash, rendered, renderedHashes, renderedDirs, kits: kitRefs,
     content: { knowledge: m.knowledge ?? [], commands: m.commands ?? [], dataRoot: m.data_root ?? null, env: m.env ?? null, rendered: inline, config: appliedConfig },
   }, null, 1));
-  return { id: m.id, version: m.version, dir: target, rendered, hash };
+  return { id: m.id, version: m.version, dir: target, rendered, hash, commit: src.commit };
 }
 
 export function list(): { id: string; versions: string[] }[] {

@@ -591,7 +591,7 @@ async function personaCli(argv: string[]): Promise<number> {
     if (!id) { err("missing id"); return 2; }
     try {
       const r = persona.update(id, { ref: flag(args, "--ref") });
-      out(asJson ? JSON.stringify(r) : `updated ${id} → ${r.installed.version}（${r.installed.commit}, 原 ${r.previous ?? "-"}）`);
+      out(asJson ? JSON.stringify(r) : `updated ${id} → ${r.installed.version}（${String(r.installed.commit || r.installed.hash || "?").slice(0, 8)}, 原 ${r.previous ?? "-"}）`);
       return 0;
     } catch (e: any) {
       const m = e?.message || String(e);

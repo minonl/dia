@@ -17,11 +17,11 @@ while [ $# -gt 0 ]; do
 done
 
 run() { if [ "$DRY" = 1 ]; then printf '[dry-run] %s\n' "$*"; else "$@"; fi; }
-for f in bin/dia-job lib/config.sh lib/policy.sh; do
+for f in bin/dia-job lib/config.sh lib/policy.sh lib/json.mjs; do
   [ -f "$SRC/$f" ] || { echo "缺文件：$SRC/$f" >&2; exit 1; }
 done
 run mkdir -p "$HOME_DIR/bin" "$HOME_DIR/lib" "$BIN_DIR" "${XDG_CONFIG_HOME:-$HOME/.config}/dia-job"
-for f in bin/dia-job lib/config.sh lib/policy.sh; do
+for f in bin/dia-job lib/config.sh lib/policy.sh lib/json.mjs; do
   run cp "$SRC/$f" "$HOME_DIR/$f"
 done
 run chmod +x "$HOME_DIR/bin/dia-job"

@@ -28,7 +28,7 @@
 | 4 | `yan-data-root` / `yan-data-sync` 仍是旧脚本 | 数据根契约未统一 | 评估是否进 dia 或保留域脚本 |
 | 5 | 本地 untracked `scripts/yan-kb|yan-task|yan-worktree` | 旧文件仍可能被误用 | 观察一轮后删除，统一走 shim |
 | 6 | 仓库 README/rules 仍写旧命令 | 文档与 AGENTS 漂移 | 批量改 `yan-kb`→`dia --persona yan kb`、`yan-worktree`→`dia wt` |
-| 7 | launchd 任务未逐条复核 | 任务命令可能仍指向旧 path | `dia job list/status` + `yan-task selfcheck --dry-run` |
+| 7 | ✅ launchd 已复核：清 `--help`/`demo-isolated`，selfcheck 指向稳定 shim | 缺失 0；`dia job list` 无测试残留 | — |
 | 8 | `dia persona check` 显示 local-only | 未跟踪上游 commit | 需要上游 ref/更新策略 |
 
 ## 本机验证命令

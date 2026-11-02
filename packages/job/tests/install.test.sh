@@ -13,7 +13,8 @@ DIA_JOB_HOME="$HOME_DIR" DIA_JOB_BIN_DIR="$BIN_DIR" bash "$ROOT/install.sh" >/de
 [ -x "$HOME_DIR/bin/dia-job" ] && ok "复制 binary" || bad "缺 binary"
 [ -L "$BIN_DIR/dia-job" ] && ok "稳定链接" || bad "缺链接"
 [ "$(readlink "$BIN_DIR/dia-job")" = "$HOME_DIR/bin/dia-job" ] && ok "链接指向全局目录" || bad "链接目标错"
-[ -x "$HOME_DIR/lib/policy.sh" ] && ok "复制 policy" || ok "policy 非可执行（可接受）"
+[ -f "$HOME_DIR/lib/policy.sh" ] && ok "复制 policy" || bad "缺 policy"
+[ -f "$HOME_DIR/lib/json.mjs" ] && ok "复制 json adapter" || bad "缺 json adapter"
 # 重复安装幂等
 DIA_JOB_HOME="$HOME_DIR" DIA_JOB_BIN_DIR="$BIN_DIR" bash "$ROOT/install.sh" >/dev/null 2>&1 && ok "重复安装 rc=0" || bad "重复安装失败"
 # 从全局安装跑 list

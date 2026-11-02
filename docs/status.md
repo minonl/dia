@@ -1,6 +1,6 @@
 # dia 状态页（单一事实源）
 
-> 更新：2026-10-28。任何"现在做到哪了"的问题，以本页为准；其他文档是细节。
+> 更新：2026-11-02（复核：`bun test tests` 175/26 全绿）。任何"现在做到哪了"的问题，以本页为准；其他文档是细节。
 > 规则：状态必须能追到**命令/测试/提交**；没有证据的写"未验证"。
 
 ---
@@ -15,14 +15,14 @@
 | `docs/host-control-surface.md` | opencode/dsh 控制面 L0/L1/L2 | 现行 |
 | `docs/model-behavior.md` | 客户端模型调控、五家对照 | 现行 |
 | `docs/model-baseline-sidecar.md` | 首次基准 + 事故 sidecar + 观察名单 | 现行 |
-| `docs/dependency-registry.md` / `deps.yaml` | 依赖登记与原始记录 | 现行（doctor 未实现） |
+| `docs/dependency-registry.md` / `deps.yaml` | 依赖登记与原始记录 | 现行（`dia doctor` 已实现，但**不校验 deps.yaml**） |
 | `docs/ecosystem-integration.md` | 插件/ACP/包格式 | 现行 |
 | `docs/ecosystem-positioning.md` | 常驻入口与生态位（dws-hub 优先） | 现行 |
 | `docs/entrypoints.md` | 用户入口与 agent 命名（dabo ≠ dia） | 现行 |
-| `docs/persona-install.md` | persona/kit 安装：git → opencode/dsh 渲染 | 现行（add/list/verify/remove/show/use/path/update/default 已实现；create/render/activation 未实现） |
-| `docs/cli.md` | CLI 动作词表（add/remove/create/update/render/verify） | 现行 |
+| `docs/persona-install.md` | persona/kit 安装：git → opencode/dsh 渲染 | 现行（add/list/verify/remove/show/use/path/check/update/default/create/render 全部已实现；仅 activation 热更新未实现） |
+| `docs/cli.md` | CLI 动作词表（add/remove/create/update/render/verify/use/path/check/default） | 现行（§4.1 状态表 2026-11-02 复核） |
 | `docs/versioning.md` | 多版本、semver/双重审查、激活模式 | 现行 |
-| `docs/patching.md` | 本地 patch 设计 | 现行（未实现） |
+| `docs/patching.md` | 本地 patch 设计 | 现行（**未实现**，`dia patch` 仍是 unknown command） |
 | `docs/research/*` | 理论、基准、生态、opencode 会话分区 | 现行 |
 | `docs/research/h0/*` | H0 三层覆盖实验：样本、标注、报告 | 留痕 |
 | `docs/migrations/yan-agent-next.md` | yan-agent@next → dia 的边界与阶段 | 现行 |
@@ -73,7 +73,12 @@
 | D0.14 | public release gate | **BLOCKED until audit** | 必须完成脱敏 + git 历史清洁 + `dia-security` pass；见 `docs/security/public-release.md` |
 | D0.15 | dia global install + CLI package (M3a/M3b) | **完成** | `install.sh` + `packages/cli`；根 `src/cli.ts` 兼容；88 tests |
 | D0.16 | Python 清理 | **完成** | experiments/TS + `packages/job/lib/json.mjs`；全仓无 python3；见 `docs/migrations/no-python.md` |
-| D1 | doctor（依赖校验 M1）+ audit 哈希链（M3） | **未开始** | — |
+| D0.17 | persona/kit 安装形态（kit + 内联内容 + scope + 委派） | **完成** | `src/{kit,scope,active,env,doctor}.ts`；`tests/{kit,scope,env,active-doctor}.test.ts` |
+| D0.18 | 生效版本指针 + 审计 | **完成** | `dia persona use/show`；`state/active.json(l)`；scope 先读指针 |
+| D0.19 | 凭据注入（白名单 → 子进程） | **完成** | `dia env list/check/run`；不回显、redact、不进 argv |
+| D0.20 | 组合自检 | **完成** | `dia doctor`（persona/kit/knowledge/dsh preset/wt；exit 0/1/2） |
+| D0.21 | worktree 抽取 `packages/wt` | **完成** | 7 处 python→node；`dia wt`；4 套测试原样迁移全绿 |
+| D1 | doctor 依赖校验（M1）+ audit 哈希链（M3） | **未开始** | doctor 已存在，但 deps.yaml 校验与哈希链未做 |
 | D2 | ModelSpec + 首次基准 + 事故 sidecar | **未开始** | 设计完成 |
 | D3 | state 事件 + `(T,D,O)` 视图 | **未开始** | 设计完成 |
 | D4 | 私有 canary（PR + episode） | **未开始** | 设计完成 |

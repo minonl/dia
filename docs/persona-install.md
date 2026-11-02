@@ -1,6 +1,6 @@
 # Persona / Kit 安装：用 dia 从 git 地址装
 
-> 日期 2026-10-28。命名已定：**persona = 可被选中的 agent 定义**，**kit = 知识/技能/工具内容**，**profile = 宿主运行环境（dsh）**。
+> 日期 2026-10-28，**2026-11-02 复核**（实现状态以 `docs/cli.md §4.1` 为准）。命名已定：**persona = 可被选中的 agent 定义**，**kit = 知识/技能/工具内容**，**profile = 宿主运行环境（dsh）**。
 > 安装入口统一为 `dia persona ...` / `dia kit ...`，不再使用 `pkg`。
 
 ---
@@ -11,18 +11,34 @@
 # 取回并注册（私有仓用现有 git 凭据）
 dia persona add dabo --from git+https://github.com/minonl/dabo-agent.git --ref <sha>
 
+# 查看 / 校验 / 卸载
 dia persona list
 dia persona verify dabo
-dia persona render dabo --host opencode|dsh
-dia persona update dabo --ref <sha>
 dia persona remove dabo
 
-# 从零创建骨架（作者轴，不是安装）
+# 生效版本（多版本并存时指定跑哪一版；有审计）
+dia persona show dabo          # 生效版本 + 最近切换记录
+dia persona use dabo@0.1.0 --reason "回滚"
+dia persona path dabo          # 生效版本目录（服务/脚本取代码用）
+
+# 与上游对比 / 升级（从 lock 记录的 source+ref 重装）
+dia persona check dabo         # same/differs/unknown/local-only，exit 0/1/2/3
+dia persona update dabo
+
+# 宿主默认 agent（显式动作，不随安装自动做）
+dia persona default dabo       # 备份原文件 + 记原值；--unset 精确还原
+
+# 作者轴
 dia persona create mybot --dir ~/repos/mybot
+dia persona render dabo --host opencode|dsh [--check]
 
 # 内容包
-dia kit add git+https://github.com/minonl/<kit>.git --ref <sha>
-dia kit list / verify / remove
+dia kit add --from git+https://github.com/minonl/<kit>.git --ref <sha>
+dia kit list / verify <id> / remove <id>
+
+# 作用域（知识根 / 数据根 / 域命令）
+dia --persona dabo kb query "…"
+dia --persona dabo doctor
 ```
 
 **渲染目标**：
@@ -33,7 +49,7 @@ dia kit list / verify / remove
 | dsh | `~/.dsh/profiles/dabo/`（独立 profile，端口 3090） | **否**（`dsh --profile dabo`） |
 | 记录 | `deps.yaml` + `dia.lock` | — |
 
-原则：**只新增，不改 yan，不改默认 agent。**
+原则：**只新增，不改 yan；默认 agent 必须显式 `persona default` 才动。**
 
 ---
 

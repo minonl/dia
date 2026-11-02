@@ -67,7 +67,7 @@
 | D0.8 | ACP TeamDriver（dsh） | **成功/失败路径均跑通** | 每角色 profile（只读沙箱）；4 次调用/34k tokens；失败→escalated |
 | D0.9 | H9/H10：角色 JSON 契约 + 修复重试 | **实现+单元测试** | 68 测试；build/smoke/e2e（node+bun）通过；真实模型修复率待测 |
 | D0.10 | H0：三层覆盖分类实验 | **推翻（严格口径）** | 20/140 抽样：17/20=85%；宿主适配缺口 3；成本未测；见 `docs/research/h0/report.md` |
-| D0.11 | yan-agent 迁移 dia | **本机已切换；剩余项见清单** | `yan` persona 生效；AGENTS/default agent 已切；旧命令 shim 化；见 `docs/migrations/yan-agent-current.md` |
+| D0.11 | yan-agent 迁移 dia | **本机已切换；dsh host 已补；剩余项见清单** | `yan` persona 生效；dsh profile 3091；AGENTS/default agent 已切；见 `docs/migrations/yan-agent-current.md` |
 | D0.12 | yan-kb → dia kb 能力矩阵 | **K2.5 next 已切；main 仍 old** | next 默认 dia + auto-index；old 可回滚；main/现网未替换；见 `docs/migrations/yan-kb-parity.md` |
 | D0.13 | dia monorepo（core/kb/job/cli） | **M3b 完成；M4 归档** | `packages/kb`、`packages/job`、`packages/cli`；独立 `dia-job` 已归档；见 `docs/monorepo.md` |
 | D0.14 | public release gate | **BLOCKED until audit** | 必须完成脱敏 + git 历史清洁 + `dia-security` pass；见 `docs/security/public-release.md` |

@@ -22,7 +22,7 @@
 
 | # | 缺口 | 影响 | 下一步 |
 |---|---|---|---|
-| 1 | `dsh` host 未渲染 | `dia.json.hosts` 只有 `opencode`；dsh profile 不生效 | 给 yan 增加 dsh host 或明确只支持 opencode |
+| 1 | ✅ dsh host 已补：`platform/dsh/yan-persona`（端口 3091），`doctor` preset 可加载 | — | — |
 | 2 | `yan-env` 仍是旧实现 | 凭据注入仍走旧脚本，未接 `dia env` | 评估 `dia env` 能力后 shim/迁移 |
 | 3 | `yan-version` / `yan-ref` 仍是旧实现 | active-ref 迁移未收口 | 按 `active-ref-design.md` 的剩余消费方迁移 |
 | 4 | `yan-data-root` / `yan-data-sync` 仍是旧脚本 | 数据根契约未统一 | 评估是否进 dia 或保留域脚本 |

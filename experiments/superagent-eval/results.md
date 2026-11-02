@@ -14,11 +14,27 @@
 
 结论：任务可解，single 基线稳定；隐藏 judge 在 base 上失败、修后通过。
 
-## dia-team
+## dia-team-cli（非 ACP）
+
+ACP 因 provider auth 不可用，改用 `opencode run --agent dabo-*` 跑 planner/builder/verifier（脚本 `run-team-cli.sh`，不冒充 ACP TeamDriver）。
+
+| 指标 | 值 |
+|---|---:|
+| Wall | 350.4s |
+| Steps | 66 |
+| Tool calls | 95 |
+| Input tok | 151,229 |
+| Output tok | 10,445 |
+| Diff | 3 files |
+| 外部隐藏 judge | ❌ 9 个断言失败 |
+
+内部 verifier 的 judge 是常量 `true`，因此它报告“通过”；外部隐藏 judge 证明它没有修到 engine 层。这个结果显示 **team 的内部验证会被弱 judge 骗过**，不是 team 的成功结果。
+
+## ACP team 阻塞
 
 - `opencode acp`：`Authentication required: provider authentication required`，未进入 planner。
-- `dsh`：默认落到 `deepseek-official`，无 `DEEPSEEK_API_KEY`；虽然 `callDsh` 设了 `example` 模型，但当前 profile/路由未生效。
-- 因此 **team 没有可比结果**，不能写成“team 更慢/更差”。
+- `dsh`：默认落到 `deepseek-official`，无 `DEEPSEEK_API_KEY`；`example` 模型设置未生效。
+- 因此 **ACP team 没有可比结果**。
 
 ## superagent
 

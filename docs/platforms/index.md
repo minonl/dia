@@ -1,9 +1,11 @@
-# AI 工具平台经验库（索引）
+# AI 工具平台经验库（规则与用法）
 
-> 2026-11-03 起。**本目录记录的是 AI 工具平台**（opencode / dsh / codex / pi / mimocode / zed …）
-> 「某平台 × 某版本怎么配、哪里会炸、怎么验」——**不记录设备/主机信息**（主机名、内网地址、机器清单一律不入本目录）。
-> 规则：**一条经验 = 版本范围 + 复现命令 + 现有判据**；没有复现命令的写「未验证」。
-> 现状地图见 `../overview.md`；长期规划见 `../vision.md` §4。
+> **单一事实源 = [`registry.json`](registry.json)**：平台支持范围、实测版本、已知坑全部只在 JSON 里。
+> 本文件**不重复**那些数据，只写规则与用法；人读视图由 `dia doctor` 派生。
+>
+> 本目录记录的是 **AI 工具平台**（opencode / dsh / codex / pi / mimocode / zed …），不是设备。
+
+---
 
 ## 0. 脱敏规则（写之前先看）
 
@@ -18,35 +20,47 @@
 
 ---
 
-## 1. 支持矩阵（2026-11-03 实测）
+## 1. 规则
 
-| 宿主 | 本机版本 | dia 渲染目标 | 状态 | 备注 |
-|---|---|---|---|---|
-| **opencode** | `v2.2.5` | `~/.config/opencode/agents/<id>.md` | **已支持** | 配置文件 `opencode.json` / `opencode.jsonc` 二选一（两者都在时宿主先读 `.json`） |
-| **dsh** | `0.2.1-rc.2` | `~/.dsh/profiles/<id>/` | **已支持** | profile 里 `cordis.patch.yml` 是声明层；`cordis.yml` 由宿主运行时重写 |
-| codex | 未安装（`~/.codex/config.toml` 存在） | — | **仅配置注入实践**（见 yan-agent skill） | 未纳入 `dia persona render` |
-| mimocode | 未安装 | — | 仅配置注入实践 | 同上 |
-| zed | 未安装 | — | 仅配置注入实践 | 同上 |
-
-> `dia persona/add` 的 `--host` 目前只接受 `opencode` / `dsh`；其余宿主会报 `E_HOST: host not implemented`。
+1. **一条经验 = 版本范围 + 复现命令 + 判据**；没有复现命令的写「未验证」。
+2. 数据只改 `registry.json`；不要在 md / README / 知识库里再抄一份（同步必然漂）。
+3. `range` 只写简单约束（`>=2.0.0 <3.0.0`）；垫脚石版本先写进 `tested[]`。
+4. `supported: false` 的平台只做记录，不参与探测判定。
 
 ---
 
-> `dia doctor` 现在会输出 `platform:opencode` / `platform:dsh` 的实测版本；缺宿主只 warn（渲染不需要宿主，运行才需要）。
+## 2. 怎么改
 
-## 2. 已知断代与坑
+```bash
+# 1) 只改数据源
+$EDITOR docs/platforms/registry.json
+# 2) 校验 JSON + 单测
+bun test tests/platforms.test.ts
+# 3) 看派生视图（本机探测 + 范围判定）
+dia doctor            # 人读
+dia doctor --json     # 机器读
+```
 
-| 宿主 | 版本范围 | 坑 | 判据 / 复现 | 出处 |
-|---|---|---|---|---|
-| opencode | V1 → V2 | **断代**：V1 实现不在 V2 运行，配置键与 hook API 全变 | `opencode --version`；按 `docs/host-control-surface.md` §1 的 v2 拓扑核对 | `docs/ecosystem-integration.md` §1 |
-| dsh | `0.2.1-rc.2` | preset 里 patch **覆写** preset 会让全部 agent 掉工具，需冷启动 | `dia doctor --persona <id>` 的 `dsh.preset` 项；对照 `Config.required()` | dabo `core/knowledge/ops/troubleshooting.md` §2 |
-| dsh | `0.2.1-rc.2` | `cordis.yml` 是宿主生成物，不要手改（改 `cordis.patch.yml`） | `dia persona render <id> --check`（已排除该文件） | `src/persona.ts` 的 `HOST_OWNED_FILES` |
-| dsh | 未知→`2026-11` | dabo 的 webserver 端口由 `?? 1111` 动态决定，**不是固定 3090** | 读 `~/.dsh/profiles/<id>/cordis.patch.yml` 的 `webserver.port` | dabo-agent `platform/dsh/dabo-persona` 提交 `0df7b64` |
+新增一个平台：在 `platforms` 下加一项，字段见下；先 `supported: false`，等 `dia persona render --host` 真的支持了再翻 true。
+
+| 字段 | 含义 |
+|---|---|
+| `supported` | dia 是否已支持渲染到该平台 |
+| `render` | 渲染目标路径（未支持时 `null`） |
+| `probe` | 探测命令参数（默认 `--version`） |
+| `range` | 支持范围（简单约束；`null` = 不判） |
+| `tested` | 实测过的版本（用来垫脚，不参与判定） |
+| `notes` | 已知坑（一行一条，能复现的写命令） |
 
 ---
 
-## 3. 待补（P0）
+## 3. 派生视图
 
-1. `hosts.yaml`：机器可读的 `version_range / checks / fallback`，供 `dia doctor --host` 消费。
-2. 每个宿主一篇 `<host>.md`：配置键全量、渲染目标、升级注意事项、验证命令。
-3. codex / mimocode / zed 接入前先补"配置注入"事实（当前只在 yan 的 skill 里有，未在本机验证）。
+`dia doctor` 每次按注册表探测本机平台，输出 `platform:<name>`：
+
+- 装了且在范围内 → `ok`
+- 没装 → `warn`（渲染不需要宿主，运行才需要；不判红）
+- 版本超出 `range` → `warn`（附支持范围）
+
+安装版从 `~/.local/share/dia/registry/platforms.json` 读（`install.sh` 分发）；开发态回退到仓库 `docs/platforms/registry.json`；
+也可用 `DIA_PLATFORMS_FILE` 显式指定。

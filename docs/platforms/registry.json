@@ -1,0 +1,54 @@
+{
+  "schema": 1,
+  "updated": "2026-11-03",
+  "note": "单一事实源：平台支持范围、实测版本、已知坑。人读视图由 dia doctor 派生，不要手抄进 md。",
+  "platforms": {
+    "opencode": {
+      "supported": true,
+      "render": "~/.config/opencode/agents/<id>.md",
+      "probe": ["--version"],
+      "range": ">=2.0.0 <3.0.0",
+      "tested": ["2.2.5"],
+      "notes": [
+        "V1 → V2 断代：V1 实现不在 V2 运行，配置键与 hook API 全变",
+        "配置文件 opencode.json / opencode.jsonc 二选一；两者都在时宿主先读 .json"
+      ]
+    },
+    "dsh": {
+      "supported": true,
+      "render": "~/.dsh/profiles/<id>/",
+      "probe": ["--version"],
+      "range": ">=0.2.0 <0.3.0",
+      "tested": ["0.2.1-rc.2"],
+      "notes": [
+        "preset 里 patch 覆写 preset 会让全部 agent 掉工具，需冷启动",
+        "cordis.yml 由宿主运行时重写；改动写 cordis.patch.yml",
+        "覆盖插件 config 是整体替换，必填项要一起写"
+      ]
+    },
+    "codex": {
+      "supported": false,
+      "render": null,
+      "probe": ["--version"],
+      "range": null,
+      "tested": [],
+      "notes": ["只有配置注入实践（~/.codex/config.toml），未纳入 dia 渲染"]
+    },
+    "mimocode": {
+      "supported": false,
+      "render": null,
+      "probe": ["--version"],
+      "range": null,
+      "tested": [],
+      "notes": ["只有配置注入实践，未纳入 dia 渲染"]
+    },
+    "zed": {
+      "supported": false,
+      "render": null,
+      "probe": ["--version"],
+      "range": null,
+      "tested": [],
+      "notes": ["只有配置注入实践（language_models.openai_compatible），未纳入 dia 渲染"]
+    }
+  }
+}

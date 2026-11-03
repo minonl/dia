@@ -89,7 +89,8 @@ persona 只声明"我是谁、我会什么"（逻辑入口、能力、策略）�
 
 ```
 docs/platforms/       # 记录 AI 工具平台，不记录设备（脱敏规则见 index.md §0）
-  index.md            # 平台 × 版本矩阵：支持到哪、哪个版本断代（已建，2026-11-03）
+  registry.json       # 单一事实源：支持范围 / 实测版本 / 已知坑（2026-11-03 起）
+  index.md            # 只写规则与用法，不复制数据
   opencode.md         # 配置键、渲染目标、已知坑、验证命令（含 v1→v2 断代）
   dsh.md              # bundle/patch 语义、preset 校验、冷启动坑
   codex.md / mimocode.md / zed.md   # 有接入才建
@@ -97,7 +98,7 @@ hosts.yaml            # 机器可读：version_range / checks / fallback（docto
 ```
 
 规则：**一条经验 = 版本范围 + 复现命令 + 现有判据**；没有复现命令的写"未验证"。
-`dia doctor --host <name>` 用 `hosts.yaml` 做校验；`deps.yaml` 仍是"装了什么"的账本，两者不混。
+`dia doctor` 按注册表探测本机并派生视图（`platform:<name>`）；`deps.yaml` 仍是"装了什么"的账本，两者不混。
 
 ---
 
@@ -154,6 +155,7 @@ P2 依赖 `patch` / `activation` 的边界先定清。
 **待定**
 
 4. **fleet 层归谁**：配置与知识归 dia、编排与隔离归 openrig——这条边界要 openrig 侧确认。
-5. **版本经验库的载体**：`docs/platforms/*.md` + `hosts.yaml` 双份（人读 + 机器读），还是只做 yaml？
+5. **版本经验库的载体**（已定 2026-11-03）：**单一事实源 = `docs/platforms/registry.json`**；
+   md 只写规则与用法，不复制数据；人读视图由 `dia doctor` 按需派生。
 6. **凭据管理的落地**：现在用 `bw` CLI 入库，但"按账号分组"约束下放行粒度粗、个人 vault 内容过多 + 风险集中；
    需要继续调研开源项目与最佳实践。现状与候选方向见 [`security/credentials.md`](security/credentials.md)。

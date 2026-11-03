@@ -107,7 +107,7 @@ $ dia --persona yan kb scene S1  → 正常出场景卡
 | **现状（可依赖）** | `overview.md`（本文）、`status.md`、`cli.md §4.1`、`persona-install.md`、`monorepo.md`、`team.md`、`pricing.md`、`migrations/yan-agent-current.md` | 与代码/本机一致 |
 | **设计（部分未实现）** | `architecture.md`、`framework-bootstrap.md`、`entrypoints.md`、`kit-install.md`、`versioning.md`、`patching.md`、`team-automation.md`、`security-sandbox.md`、`dependency-registry.md`、`acp-integration.md`、`proposals.md` | 保留意图，文首/文中标注实现范围 |
 | **方向（不是现状）** | `vision.md` | 长期定位：superagent/team 工厂、平台版本经验库、fleet（openrig）边界 |
-| **平台经验** | `platforms/index.md` | opencode/dsh 版本矩阵、已知坑、验证命令、脱敏规则（不记录设备） |
+| **平台经验** | `platforms/registry.json`（数据）+ `platforms/index.md`（规则/用法） | 单一事实源；`dia doctor` 派生人读视图；不记录设备 |
 | **理论 / 研究** | `evolution-process.md`、`model-behavior.md`、`model-baseline-sidecar.md`、`host-control-surface.md`、`ecosystem-*.md`、`research/*` | 供推导，不作为现状 |
 | **留痕** | `migrations/*`（除 current）、`review/*`、`research/h0/*` | 当时结论，可能被后续推翻 |
 

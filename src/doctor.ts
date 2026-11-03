@@ -4,7 +4,6 @@
 //   persona verify / kit verify / default_agent / kb 索引 / wt 包 / job 包
 // 退出码：0 全绿；1 有 warn；2 有 fail（便于脚本与 CI 判定）
 import { existsSync } from "node:fs";
-import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import * as persona from "./persona.ts";
@@ -12,26 +11,18 @@ import * as kit from "./kit.ts";
 import * as scope from "./scope.ts";
 import * as active from "./active.ts";
 import * as dsh from "./dsh.ts";
+import * as platforms from "./platforms.ts";
 
 export interface Check { name: string; status: "ok" | "warn" | "fail"; detail: string }
 
 const home = () => process.env.DIA_HOME || homedir();
 
-// 平台自检只报告「装没装、什么版本」，不判红：渲染不需要宿主，运行才需要。
-const PLATFORMS = ["opencode", "dsh"];
-
-function platformVersion(bin: string): string | null {
-  try {
-    const out = execFileSync(bin, ["--version"], { encoding: "utf8", timeout: 2000, stdio: ["ignore", "pipe", "ignore"] });
-    return out.trim().split("\n")[0] || null;
-  } catch { return null; }
-}
-
+// 平台自检只报告「装没装、版本在不在支持范围」，不判红：渲染不需要宿主，运行才需要。
+// 数据来自单一事实源 docs/platforms/registry.json（安装版在 <install>/registry/platforms.json）。
 function platformChecks(): Check[] {
-  return PLATFORMS.map((bin) => {
-    const v = platformVersion(bin);
-    return { name: `platform:${bin}`, status: v ? "ok" : "warn", detail: v ?? "未安装（渲染不需要，运行需要）" } as Check;
-  });
+  const reg = platforms.load();
+  if (!reg) return [{ name: "platforms", status: "warn", detail: "平台注册表未安装（docs/platforms/registry.json）" }];
+  return platforms.checks(reg).map((c) => ({ ...c, status: c.status as Check["status"] }));
 }
 const dataDir = () => process.env.DIA_DATA_DIR || join(home(), ".local", "share", "dia");
 

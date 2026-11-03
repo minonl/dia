@@ -1,6 +1,6 @@
 # dia 状态页（单一事实源）
 
-> 更新：2026-11-03（复核：`bun test tests` 189/28 全绿）。任何"现在做到哪了"的问题，以本页为准；其他文档是细节。
+> 更新：2026-11-03（复核：`bun test tests` 193/29 全绿）。任何"现在做到哪了"的问题，以本页为准；其他文档是细节。
 > 规则：状态必须能追到**命令/测试/提交**；没有证据的写"未验证"。
 
 ---
@@ -89,6 +89,7 @@
 | D0.20 | 组合自检 | **完成** | `dia doctor`（persona/kit/knowledge/dsh preset/wt；exit 0/1/2） |
 | D0.21 | worktree 抽取 `packages/wt` | **完成** | 7 处 python→node；`dia wt`；4 套测试原样迁移全绿 |
 | D0.23 | doctor 平台版本自检 | **完成** | `platform:opencode` / `platform:dsh` 报版本（缺宿主 = warn，不判红）；`tests/active-doctor.test.ts` |
+| D0.24 | 平台注册表（单一事实源） | **完成** | `docs/platforms/registry.json`（支持范围/实测版本/坑）+ `src/platforms.ts` 版本判定 + `doctor` 派生视图；`install.sh` 分发注册表；`tests/platforms.test.ts` |
 | D0.22 | 安装/自检一致性修复 | **完成** | `doctor` 多 persona 逐项自检；`scope` 旧 lock 缺 `content` 时读 `dia.json` 兜底；`render --check` 跳过宿主自写 `cordis.yml`；`persona add --force`（先备份） |
 | D1 | doctor 依赖校验（M1）+ audit 哈希链（M3） | **未开始** | doctor 已存在，但 deps.yaml 校验与哈希链未做 |
 | D2 | ModelSpec + 首次基准 + 事故 sidecar | **未开始** | 设计完成 |

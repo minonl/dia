@@ -177,7 +177,7 @@ export async function runAcp(id: string, workspace: string) {
   const t = get(id);
   if (!t.judge) throw new Error("E_TASK: judge required");
   const dir = runDir(id); mkdirSync(dir, { recursive: true });
-  const acp = new AcpClient(["opencode", "acp"], workspace, Number(process.env.DIA_ACP_TIMEOUT || 180000));
+  const acp = new AcpClient(["opencode", "acp"], workspace, Number(process.env.DIA_ACP_TIMEOUT || DEFAULT_ACP_TIMEOUT));
   const usageAcc = { rows: [] as any[], input: 0, output: 0, total: 0, cost: 0, unpriced: 0 };
   const prices = loadPrices();
   const modelOf = (ns: any) => ns?.configOptions?.find((o: any) => o.id === "model")?.currentValue || null;
@@ -297,7 +297,7 @@ function dshUsages(file: string): { usage: any; model: string | null }[] {
 }
 
 async function callDsh(role: string, cwd: string, text: string, tracker: Map<string, number>) {
-  const acp = new AcpClient(["dsh", "--profile", `dabo-${role}`], cwd, Number(process.env.DIA_ACP_TIMEOUT || 180000));
+  const acp = new AcpClient(["dsh", "--profile", `dabo-${role}`], cwd, Number(process.env.DIA_ACP_TIMEOUT || DEFAULT_ACP_TIMEOUT));
   try {
     await acp.init();
     const ns = await acp.newSession(cwd);
@@ -430,4 +430,7 @@ export function accept(id: string, note = "") {
 export function reject(id: string, reason: string) {
   if (!reason) throw new Error("E_TASK: reason required");
   setStatus(id, "rejected", reason); return get(id);
-}
+}// ACP 单次 prompt 默认超时：plan/builder 长任务实测 180s 不够（2026-11-03 builder 被掐断），抬到 10 分钟。
+export const DEFAULT_ACP_TIMEOUT = 600_000;
+
+

@@ -11,6 +11,10 @@ beforeAll(async () => {
   team = await import("../src/team.ts");
 });
 
+test("ACP 默认超时 10 分钟（180s 实测会掐断 builder）", () => {
+  expect(team.DEFAULT_ACP_TIMEOUT).toBe(600_000);
+});
+
 describe("task ledger", () => {
   test("done requires judge and evidence", () => {
     const t = task.add("write code", { judge: "" });

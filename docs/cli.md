@@ -82,7 +82,7 @@ dia persona remove dabo
 
 ## 4.1 实现状态（2026-11-03 复核）
 
-> 判定方式：命令实跑 + `bun test tests`（237 tests / 31 files 全绿）+ 代码入口。写"未实现"的项当前是 `unknown command`。
+> 判定方式：命令实跑 + `bun test tests`（248 tests / 31 files 全绿）+ 代码入口。写"未实现"的项当前是 `unknown command`。
 
 | 命令 | 状态 | 证据 / 备注 |
 |---|---|---|

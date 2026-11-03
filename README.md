@@ -139,6 +139,21 @@ dia audit verify --session S --calls 12 --chain [--json]
 # 链头锚点 audit/head.json（last_seq/last_hash/row_count）由 append 原子写入：
 # 末尾删行/回滚报 tail_truncated，锚点缺失或损坏时 fail-closed（ok=false，退出码 1）
 
+# 离箱检查点（可选但推荐）：锚点放到审计目录之外（另一个目录/文件系统/机器挂载）
+# 启用前提（2026-11-03）：检查点必须是"新开"的（文件不存在）且日志从空开始，或检查点与当前日志尾部一致；
+#   已有链的存量日志首次启用会 fail-closed 拒绝追加（防止把历史删改追认为合法）。迁移前先备份。
+# 同域攻击者能同时重写日志与 head.json，却改不到这里 → 同域伪造/回滚会被检出
+DIA_AUDIT_CHECKPOINT=/var/lib/dia-anchors/audit.json dia audit verify --session S --calls 12 --chain
+# append 是两阶段写：先把将写入的行作为 pending 公告到检查点，行落盘+head 更新后再确认。
+# 因此「追加链合法的新行 + 同步改写 head.json」会在检查点留下未被公告的行 →
+#   protection=anchored:forged_same_domain（退出码 1），且 append 拒绝把伪造行追认为 consistent。
+# 结论：protection=anchored:consistent
+#       | anchored:lagging（仅当检查点公告了那行；崩溃窗口，仅告警）
+#       | anchored:forged_same_domain / rolled_back（退出码 1）
+#       | missing / corrupt / misconfigured（fail-closed，退出码 1）
+#       | unprotected（未配置检查点，退出码不变，只是提示"仅同域保护"）
+# 检查点写入失败 → append 抛 E_AUDIT_CHECKPOINT 并回滚本次追加，不留半条链
+
 # 评分：deny+2 / waive+risk / 越界+4 / 未知工具+3 / 对账缺口+10 / 红线+10
 dia audit score --session S
 

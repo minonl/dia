@@ -1,4 +1,4 @@
-import { describe, expect, test, beforeAll, afterAll } from "bun:test";
+import { describe, expect, test, beforeAll, afterAll, afterEach } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -511,6 +511,347 @@ describe("audit hash chain", () => {
     expect(badOut.reconciled).toBe(true);
     expect(badOut.chain.ok).toBe(false);
     expect(badOut.chain.broken_at).toBe(1);
+  });
+});
+
+describe("off-box checkpoint (DIA_AUDIT_CHECKPOINT)", () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const auditPath = path.join(import.meta.dir, "..", "src", "audit.ts");
+  const auditDirNow = () => path.dirname(audit.auditFile());
+  let dir: string;
+  let cpPath: string;
+
+  const readLines = () => fs.readFileSync(audit.auditFile(), "utf8").split("\n").filter(Boolean).map((l: string) => JSON.parse(l));
+  const writeLines = (lines: any[]) => fs.writeFileSync(audit.auditFile(), lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+  const readCp = () => JSON.parse(fs.readFileSync(cpPath, "utf8"));
+  const writeCp = (cp: any) => fs.writeFileSync(cpPath, JSON.stringify(cp) + "\n");
+  /** Recompute a valid hash chain (what a same-domain attacker with the log format can do). */
+  const rechain = (lines: any[]) => {
+    let prev = audit.GENESIS;
+    lines.forEach((r, i) => {
+      r.seq = i + 1;
+      r.prev_hash = prev;
+      r.hash = audit.hashEvent(r, prev);
+      prev = r.hash;
+    });
+    return lines;
+  };
+  const writeHeadFor = (lines: any[]) => {
+    const last = lines[lines.length - 1];
+    fs.writeFileSync(audit.headFile(), JSON.stringify({
+      last_seq: last.seq, last_hash: last.hash, row_count: lines.length, updated_at: last.ts,
+    }) + "\n");
+  };
+  const reset = () => {
+    fs.mkdirSync(auditDirNow(), { recursive: true });
+    fs.writeFileSync(audit.auditFile(), "");
+    fs.rmSync(audit.headFile(), { force: true });
+    fs.rmSync(path.join(auditDirNow(), ".lock"), { recursive: true, force: true });
+    fs.rmSync(cpPath, { force: true });
+  };
+  const useCheckpoint = <T>(p: string, fn: () => T): T => {
+    const prev = process.env.DIA_AUDIT_CHECKPOINT;
+    process.env.DIA_AUDIT_CHECKPOINT = p;
+    try { return fn(); } finally {
+      if (prev === undefined) delete process.env.DIA_AUDIT_CHECKPOINT;
+      else process.env.DIA_AUDIT_CHECKPOINT = prev;
+    }
+  };
+  const cli = (args: string[]) =>
+    require("node:child_process").spawnSync(process.execPath, ["src/cli.ts", "audit", ...args], {
+      cwd: path.join(import.meta.dir, ".."),
+      env: { ...process.env, DIA_DATA_DIR: process.env.DIA_DATA_DIR, DIA_STATE_DIR: process.env.DIA_STATE_DIR },
+      encoding: "utf8",
+    });
+
+  beforeAll(() => {
+    dir = fs.mkdtempSync(join(tmpdir(), "dia-audit-offbox-"));
+    cpPath = path.join(dir, "checkpoint.json");
+    process.env.DIA_AUDIT_CHECKPOINT = cpPath;
+  });
+  afterAll(() => {
+    fs.rmSync(cpPath, { force: true });
+    delete process.env.DIA_AUDIT_CHECKPOINT;
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  afterEach(() => {
+    // restore the shared prefix for the following describes (they expect no off-box anchor)
+    delete process.env.DIA_AUDIT_CHECKPOINT;
+    reset();
+    process.env.DIA_AUDIT_CHECKPOINT = cpPath;
+  });
+
+  test("append writes the checkpoint after the head and they agree", () => {
+    reset();
+    const evs = [0, 1, 2].map(() => audit.append({ session: "cp-ok", tool: "bash", decision: "allow" }));
+    const head = JSON.parse(fs.readFileSync(audit.headFile(), "utf8"));
+    const cp = readCp();
+    expect(cp.last_seq).toBe(3);
+    expect(cp.last_hash).toBe(evs[2].hash);
+    expect(cp.row_count).toBe(3);
+    expect(cp.checkpoint_id).toBeTruthy();
+    expect(cp.last_seq).toBe(head.last_seq);
+    expect(cp.last_hash).toBe(head.last_hash);
+    expect(cp.row_count).toBe(head.row_count);
+    // atomic 0600 write, no temp residue next to the checkpoint
+    expect(fs.statSync(cpPath).mode & 0o777).toBe(0o600);
+    expect(fs.readdirSync(dir).filter((f: string) => f.endsWith(".tmp"))).toEqual([]);
+    const c = audit.verifyChain();
+    expect(c.ok).toBe(true);
+    expect(c.protection.state).toBe("anchored");
+    expect(c.protection.verdict).toBe("consistent");
+    expect(c.protection.path).toBe(cpPath);
+    expect(c.protection.fatal).toBe(false);
+    expect(audit.verify("cp-ok", 3, { chain: true }).ok).toBe(true);
+    // the slot id is stable across appends, so a copied checkpoint is distinguishable
+    audit.append({ session: "cp-ok", tool: "bash", decision: "allow" });
+    expect(readCp().checkpoint_id).toBe(cp.checkpoint_id);
+    expect(readCp().row_count).toBe(4);
+  });
+
+  test("same-domain forgery (log + head rewritten consistently) is caught", () => {
+    reset();
+    for (let i = 0; i < 3; i++) audit.append({ session: "cp-forge", tool: "bash", decision: "allow" });
+    // attacker edits the log and rebuilds a *valid* chain + head: verifyLocal alone passes
+    const lines = readLines();
+    lines[1].decision = "allow";
+    lines[1].note = "rewritten by attacker";
+    rechain(lines);
+    writeLines(lines);
+    writeHeadFor(lines);
+    const local = audit.verifyChain();
+    expect(local.head_hash).toBe(lines[2].hash);
+    // the local walk itself is happy: only the off-box anchor can see the rewrite
+    expect(local.broken_at).toBeNull();
+    expect(local.checked).toBe(3);
+    expect(local.protection.state).toBe("anchored");
+    expect(local.protection.verdict).toBe("forged_same_domain");
+    expect(local.protection.fatal).toBe(true);
+    expect(local.ok).toBe(false);
+    expect(local.reason).toContain("off-box checkpoint disagrees");
+    expect(audit.verify("cp-forge", 3, { chain: true }).ok).toBe(false);
+    // extending a chain that cannot be proven intact is refused
+    expect(() => audit.append({ session: "cp-forge", tool: "bash", decision: "allow" })).toThrow(/E_AUDIT_CHAIN/);
+  });
+
+  test("tail truncation + rewritten head is caught by the checkpoint", () => {
+    reset();
+    for (let i = 0; i < 5; i++) audit.append({ session: "cp-trunc", tool: "bash", decision: "allow" });
+    const prefix = readLines().slice(0, 3);
+    writeLines(prefix);
+    writeHeadFor(prefix); // same-domain attacker also rolls head.json back
+    const c = audit.verifyChain();
+    expect(c.protection.state).toBe("anchored");
+    expect(c.protection.verdict).toBe("rolled_back");
+    expect(c.ok).toBe(false);
+    expect(c.tail_truncated).toBe(true);
+    // the truncated log + rolled-back head are self-consistent on their own
+    expect(c.broken_at).toBeNull();
+    expect(c.head_seq).toBe(3);
+    expect(c.reason).toContain("rolled back below the off-box checkpoint");
+    expect(() => audit.append({ session: "cp-trunc", tool: "bash", decision: "allow" })).toThrow(/E_AUDIT_CHAIN/);
+  });
+
+  test("missing checkpoint degrades to unprotected-with-warning, never a silent pass", () => {
+    reset();
+    for (let i = 0; i < 3; i++) audit.append({ session: "cp-miss", tool: "bash", decision: "allow" });
+    fs.rmSync(cpPath, { force: true });
+    const c = audit.verifyChain();
+    expect(c.ok).toBe(false);
+    expect(c.protection.state).toBe("missing");
+    expect(c.protection.fatal).toBe(true);
+    expect(c.protection.reason).toContain("off-box checkpoint missing");
+    expect(() => audit.append({ session: "cp-miss", tool: "bash", decision: "allow" })).toThrow(/E_AUDIT_CHAIN/);
+    const r = cli(["verify", "--session", "cp-miss", "--calls", "3", "--chain", "--json"]);
+    expect(r.status).toBe(1);
+    const out = JSON.parse(r.stdout);
+    expect(out.chain.ok).toBe(false);
+    expect(out.chain.protection.state).toBe("missing");
+    // text mode surfaces the warning too
+    const text = cli(["verify", "--session", "cp-miss", "--calls", "3", "--chain"]);
+    expect(text.status).toBe(1);
+    expect(text.stdout).toContain("protection=missing");
+  });
+
+  test("corrupted checkpoint fails closed", () => {
+    reset();
+    for (let i = 0; i < 2; i++) audit.append({ session: "cp-bad", tool: "bash", decision: "allow" });
+    for (const bad of ["{ not json", JSON.stringify({ last_seq: 2, last_hash: "zz", row_count: 2, checkpoint_id: "x" })]) {
+      fs.writeFileSync(cpPath, bad);
+      const c = audit.verifyChain();
+      expect(c.ok).toBe(false);
+      expect(c.protection.state).toBe("corrupt");
+      expect(c.protection.reason).toContain("corrupted");
+    }
+  });
+
+  test("lagging checkpoint (announced but unconfirmed append) is a warning, not tamper", () => {
+    reset();
+    for (let i = 0; i < 3; i++) audit.append({ session: "cp-lag", tool: "bash", decision: "allow" });
+    const full = readLines();
+    // crash window: the checkpoint announced row 3 (pending) but never confirmed it
+    const lagging = JSON.parse(fs.readFileSync(cpPath, "utf8"));
+    lagging.row_count = 2;
+    lagging.last_seq = full[1].seq;
+    lagging.last_hash = full[1].hash;
+    lagging.pending = { last_seq: full[2].seq, last_hash: full[2].hash, row_count: 3 };
+    writeCp(lagging);
+    const c = audit.verifyChain();
+    expect(c.ok).toBe(true);
+    expect(c.protection.verdict).toBe("lagging");
+    expect(c.protection.fatal).toBe(false);
+    expect(c.protection.reason).toContain("lags the log");
+    // appending repairs the checkpoint instead of refusing a benign crash window
+    audit.append({ session: "cp-lag", tool: "bash", decision: "allow" });
+    const after = readCp();
+    expect(after.row_count).toBe(4);
+    expect(after.checkpoint_id).toBe(lagging.checkpoint_id);
+    expect(after.pending).toBeNull();
+    expect(audit.verifyChain().protection.verdict).toBe("consistent");
+  });
+
+  test("forged rows appended past a settled checkpoint are detected, never adopted", () => {
+    reset();
+    for (let i = 0; i < 3; i++) audit.append({ session: "cp-pad", tool: "bash", decision: "allow" });
+    // attacker pads the log with 2 chain-legal rows and rewrites head.json to match:
+    // verifyLocal alone is happy, and the checkpoint lags (3 < 5) — that lag must not
+    // be treated as a benign crash window.
+    const merged = readLines();
+    for (let i = 0; i < 2; i++) {
+      merged.push({
+        seq: 0, ts: new Date().toISOString(), session: "cp-pad", tool: "bash",
+        params_hash: String(i).repeat(16), decision: "allow", note: `forged-${i}`,
+      });
+    }
+    rechain(merged);
+    writeLines(merged);
+    writeHeadFor(merged);
+
+    const c = audit.verifyChain();
+    expect(c.broken_at).toBeNull(); // local chain walk passes: rows are chain-legal
+    expect(c.checked).toBe(5);
+    expect(c.head_seq).toBe(5);
+    expect(c.protection.state).toBe("anchored");
+    expect(c.protection.verdict).toBe("forged_same_domain");
+    expect(c.protection.fatal).toBe(true);
+    expect(c.ok).toBe(false);
+    expect(c.reason).toContain("never announced");
+    expect(audit.verify("cp-pad", 5, { chain: true }).ok).toBe(false);
+
+    const r = cli(["verify", "--session", "cp-pad", "--calls", "5", "--chain", "--json"]);
+    expect(r.status).toBe(1);
+    expect(JSON.parse(r.stdout).chain.protection.verdict).toBe("forged_same_domain");
+
+    // the padded rows must not become "consistent" by letting the next append adopt them
+    expect(() => audit.append({ session: "cp-pad", tool: "bash", decision: "allow" })).toThrow(/E_AUDIT_CHAIN/);
+    expect(readLines()).toHaveLength(5);
+    expect(readCp().row_count).toBe(3);
+    expect(readCp().last_hash).toBe(merged[2].hash);
+  });
+
+  test("a pending announcement cannot be reused to anchor a different row", () => {
+    reset();
+    for (let i = 0; i < 2; i++) audit.append({ session: "cp-pend", tool: "bash", decision: "allow" });
+    const full = readLines();
+    // aborted append left an announcement for row 3, but the log grows with a forged row 3
+    const forged = {
+      seq: 3, ts: new Date().toISOString(), session: "cp-pend", tool: "bash",
+      params_hash: "a".repeat(16), decision: "allow", note: "forged",
+    } as any;
+    forged.prev_hash = full[1].hash;
+    forged.hash = audit.hashEvent(forged, forged.prev_hash);
+    const lines = [...full, forged];
+    writeLines(lines);
+    writeHeadFor(lines);
+    const announced = JSON.parse(fs.readFileSync(cpPath, "utf8"));
+    announced.row_count = 2;
+    announced.last_seq = full[1].seq;
+    announced.last_hash = full[1].hash;
+    announced.pending = {
+      last_seq: 3,
+      last_hash: audit.hashEvent({ ...forged, params_hash: "b".repeat(16), note: "the real one" } as any, forged.prev_hash),
+      row_count: 3,
+    };
+    writeCp(announced);
+    const c = audit.verifyChain();
+    expect(c.ok).toBe(false);
+    expect(c.protection.verdict).toBe("forged_same_domain");
+    expect(() => audit.append({ session: "cp-pend", tool: "bash", decision: "allow" })).toThrow(/E_AUDIT_CHAIN/);
+  });
+
+  test("checkpoint write failure rolls the append back (no half chain)", () => {
+    reset();
+    const blocker = path.join(dir, "blocker");
+    fs.writeFileSync(blocker, "not a directory\n");
+    const brokenPath = path.join(blocker, "checkpoint.json");
+    const beforeLog = fs.existsSync(audit.auditFile()) ? fs.readFileSync(audit.auditFile(), "utf8") : "";
+    try {
+      expect(() => useCheckpoint(brokenPath, () => audit.append({ session: "cp-fail", tool: "bash", decision: "allow" })))
+        .toThrow(/E_AUDIT_CHECKPOINT/);
+    } finally {
+      fs.rmSync(blocker, { force: true });
+    }
+    expect(audit.lastCheckpointError()).not.toBeNull();
+    expect(audit.lastCheckpointError()?.path).toBe(brokenPath);
+    expect(fs.readFileSync(audit.auditFile(), "utf8")).toBe(beforeLog);
+    expect(fs.existsSync(audit.headFile())).toBe(false);
+    // the chain is untouched: a normal (configured) append then works
+    const ev = audit.append({ session: "cp-fail", tool: "bash", decision: "allow" });
+    expect(ev.seq).toBe(1);
+    expect(audit.verifyChain().ok).toBe(true);
+    expect(audit.verifyChain().protection.verdict).toBe("consistent");
+  });
+
+  test("checkpoint inside the audit dir (or relative) is rejected", () => {
+    reset();
+    audit.append({ session: "cp-cfg", tool: "bash", decision: "allow" });
+    for (const bad of [path.join(auditDirNow(), "checkpoint.json"), "relative/checkpoint.json"]) {
+      useCheckpoint(bad, () => {
+        const c = audit.verifyChain();
+        expect(c.ok).toBe(false);
+        expect(c.protection.state).toBe("misconfigured");
+        expect(c.protection.fatal).toBe(true);
+        expect(c.protection.reason).toContain("DIA_AUDIT_CHECKPOINT");
+        expect(() => audit.append({ session: "cp-cfg", tool: "bash", decision: "allow" })).toThrow(/E_AUDIT_CHECKPOINT/);
+      });
+    }
+    expect(fs.existsSync(path.join(auditDirNow(), "checkpoint.json"))).toBe(false);
+    // unchanged log + configured checkpoint stays healthy
+    expect(audit.verifyChain().ok).toBe(true);
+  });
+
+  test("concurrent appenders keep checkpoint, head and log in lockstep", async () => {
+    reset();
+    const work = fs.mkdtempSync(join(tmpdir(), "dia-audit-cp-conc-"));
+    const scriptPath = path.join(work, "writer.ts");
+    fs.writeFileSync(scriptPath, [
+      `import { append } from ${JSON.stringify(auditPath)};`,
+      "const n = Number(process.argv[2]); const tag = process.argv[3];",
+      "for (let i = 0; i < n; i++) append({ session: `cp-conc-${tag}`, tool: 'bash', decision: 'allow' });",
+    ].join("\n"));
+    const env = {
+      ...process.env, DIA_DATA_DIR: process.env.DIA_DATA_DIR,
+      DIA_STATE_DIR: process.env.DIA_STATE_DIR, DIA_AUDIT_CHECKPOINT: cpPath,
+    };
+    const codes = await Promise.all([0, 1, 2, 3].map((i) => new Promise<number | null>((resolve) => {
+      const p = require("node:child_process").spawn(process.execPath, [scriptPath, "5", String(i)], { env, stdio: "ignore" });
+      p.on("exit", (code: number | null) => resolve(code));
+    })));
+    expect(codes).toEqual([0, 0, 0, 0]);
+    const lines = readLines();
+    expect(lines).toHaveLength(20);
+    const head = JSON.parse(fs.readFileSync(audit.headFile(), "utf8"));
+    const cp = readCp();
+    expect(cp.row_count).toBe(20);
+    expect(cp.last_seq).toBe(head.last_seq);
+    expect(cp.last_hash).toBe(head.last_hash);
+    expect(cp.last_hash).toBe(lines[19].hash);
+    const c = audit.verifyChain();
+    expect(c.ok).toBe(true);
+    expect(c.protection.verdict).toBe("consistent");
+    expect(fs.existsSync(path.join(auditDirNow(), ".lock"))).toBe(false);
+    fs.rmSync(work, { recursive: true, force: true });
   });
 });
 

@@ -342,10 +342,16 @@ async function auditCli(argv: string[]): Promise<number> {
     const chained = has(args, "--chain");
     const r = audit.verify(session, calls, { chain: chained });
     const chain = r.chain;
+    const p = chain?.protection;
+    const protect = p
+      ? ` protection=${p.state}${p.verdict ? ":" + p.verdict : ""}${p.fatal ? " (failing closed)" : ""}`
+        + (p.path ? ` checkpoint=${p.path}` : "")
+      : "";
     const extra = chained && chain
       ? ` chain=${chain.ok ? "ok" : "broken" + (chain.broken_at !== null ? "@" + chain.broken_at : "") + " " + chain.reason}`
         + ` checked=${chain.checked} legacy=${chain.legacy} head=${chain.head_seq ?? "-"}`
         + (chain.tail_truncated ? " tail_truncated=true" : "")
+        + protect
       : "";
     out(asJson ? JSON.stringify({ ...r, expected_source: auto ? "runtime" : "manual" })
       : `audit_rows=${r.audit_rows} expected=${r.expected_calls} (${auto ? "runtime" : "manual"}) ok=${r.ok} gap=${r.gap}${extra}`);

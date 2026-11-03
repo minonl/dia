@@ -1,7 +1,10 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync,
+  truncateSync, writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
-import { createHash } from "node:crypto";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { createHash, randomUUID } from "node:crypto";
 import { freeze } from "./freeze.ts";
 
 const DATA = process.env.DIA_DATA_DIR || join(homedir(), ".local", "share", "dia");
@@ -70,6 +73,220 @@ type HeadRead =
   | { state: "ok"; head: ChainHead }
   | { state: "missing" }
   | { state: "corrupt"; error: string };
+
+/**
+ * Write-ahead record of an in-flight append: the row that is about to be appended.
+ *
+ * The checkpoint is updated *before* the row hits the log (`pending` = the new row) and
+ * confirmed after (`pending` = null). A crash in between therefore leaves a checkpoint
+ * that lags by exactly the announced row, which is verifiable — and a log that grows past
+ * the anchored `row_count` **without** a matching announcement is provably not ours.
+ */
+export interface ChainPending {
+  last_seq: number;
+  last_hash: string;
+  row_count: number;
+}
+
+/**
+ * Off-box checkpoint: the same tail descriptor as the local anchor plus a stable slot id.
+ *
+ * `head.json` sits next to the log, so an attacker who can rewrite the log can usually
+ * rewrite the anchor too ("same domain"). An off-box checkpoint is written to a path the
+ * operator chooses *outside* the audit dir (`DIA_AUDIT_CHECKPOINT`, typically another
+ * filesystem / user / box), so a same-domain rewrite leaves it behind and becomes visible.
+ */
+export interface ChainCheckpoint extends ChainHead {
+  /** identity of this checkpoint slot (random on creation, preserved on every update). */
+  checkpoint_id: string;
+  /** announced but not yet confirmed append (two-phase anchor; null when settled). */
+  pending?: ChainPending | null;
+}
+
+/** Env var holding the absolute path of the off-box checkpoint. Unset = protection off. */
+export const CHECKPOINT_ENV = "DIA_AUDIT_CHECKPOINT";
+
+/**
+ * Configured checkpoint path (absolute, resolved) or null when off-box anchoring is off.
+ * Path validation (must be absolute, must not live inside the audit dir) happens in
+ * checkpointTarget() so verify/append can report a misconfiguration instead of guessing.
+ */
+export function checkpointFile(): string | null {
+  const raw = (process.env[CHECKPOINT_ENV] || "").trim();
+  return raw ? resolve(raw) : null;
+}
+
+type CheckpointTarget =
+  | { ok: true; path: string }
+  | { ok: false; path: string | null; error: string };
+
+/**
+ * Resolve the deepest existing ancestor so symlinks cannot smuggle the "off-box" path
+ * back inside the audit dir (same-domain anchor = no protection at all).
+ */
+function realpathDeep(p: string): string {
+  let cur = resolve(p);
+  const rest: string[] = [];
+  for (;;) {
+    try {
+      const real = realpathSync(cur);
+      return rest.length ? join(real, ...rest.slice().reverse()) : real;
+    } catch {
+      const parent = dirname(cur);
+      if (parent === cur) return resolve(p);
+      rest.push(basename(cur));
+      cur = parent;
+    }
+  }
+}
+
+/**
+ * Validate DIA_AUDIT_CHECKPOINT. Returns null when unset (off-box anchoring disabled).
+ *
+ * Rules: absolute path only (relative paths would silently follow cwd), must not resolve
+ * inside the audit dir (that would be same-domain again), and must not be a directory.
+ */
+function checkpointTarget(): CheckpointTarget | null {
+  const file = checkpointFile();
+  if (!file) return null;
+  const raw = (process.env[CHECKPOINT_ENV] || "").trim();
+  if (!isAbsolute(raw)) {
+    return { ok: false, path: null, error: `${CHECKPOINT_ENV} must be an absolute path (got ${JSON.stringify(raw)})` };
+  }
+  const audit = realpathDeep(auditDir());
+  const target = realpathDeep(file);
+  if (target === audit || target.startsWith(audit + sep)) {
+    return {
+      ok: false, path: file,
+      error: `${CHECKPOINT_ENV} must live outside ${auditDir()} — a checkpoint inside the audit dir cannot survive a same-domain rewrite`,
+    };
+  }
+  try {
+    if (existsSync(file) && statSync(file).isDirectory()) {
+      return { ok: false, path: file, error: `${CHECKPOINT_ENV} points at a directory (${file}); expected a file path` };
+    }
+  } catch { /* unreadable stat -> let the write fail loudly */ }
+  return { ok: true, path: file };
+}
+
+type CheckpointRead =
+  | { state: "ok"; checkpoint: ChainCheckpoint; path: string }
+  | { state: "missing"; path: string }
+  | { state: "corrupt"; path: string; error: string }
+  | { state: "misconfigured"; path: string | null; error: string };
+
+function readCheckpoint(target: CheckpointTarget | null = checkpointTarget()): CheckpointRead | null {
+  if (!target) return null;
+  if (!target.ok) return { state: "misconfigured", path: target.path, error: target.error };
+  const file = target.path;
+  if (!existsSync(file)) return { state: "missing", path: file };
+  let parsed: any;
+  try {
+    parsed = JSON.parse(readFileSync(file, "utf8"));
+  } catch (e) {
+    return { state: "corrupt", path: file, error: `unreadable or invalid json: ${(e as Error).message}` };
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { state: "corrupt", path: file, error: "bad shape" };
+  }
+  const { last_seq: seq, last_hash: hash, row_count: count, checkpoint_id: id } = parsed;
+  if (!Number.isInteger(seq) || seq < 0) return { state: "corrupt", path: file, error: "bad last_seq" };
+  if (typeof hash !== "string" || !new RegExp(`^[0-9a-f]{${HASH_LEN}}$`).test(hash)) {
+    return { state: "corrupt", path: file, error: "bad last_hash" };
+  }
+  if (!Number.isInteger(count) || count < 0) return { state: "corrupt", path: file, error: "bad row_count" };
+  if (typeof id !== "string" || !id.trim()) return { state: "corrupt", path: file, error: "bad checkpoint_id" };
+  let pending: ChainPending | null = null;
+  if (parsed.pending !== undefined && parsed.pending !== null) {
+    const p = parsed.pending;
+    if (!p || typeof p !== "object" || Array.isArray(p)) return { state: "corrupt", path: file, error: "bad pending" };
+    if (!Number.isInteger(p.last_seq) || p.last_seq < 1) return { state: "corrupt", path: file, error: "bad pending.last_seq" };
+    if (typeof p.last_hash !== "string" || !new RegExp(`^[0-9a-f]{${HASH_LEN}}$`).test(p.last_hash)) {
+      return { state: "corrupt", path: file, error: "bad pending.last_hash" };
+    }
+    if (!Number.isInteger(p.row_count) || p.row_count < 1) return { state: "corrupt", path: file, error: "bad pending.row_count" };
+    pending = { last_seq: p.last_seq, last_hash: p.last_hash, row_count: p.row_count };
+  }
+  return {
+    state: "ok",
+    path: file,
+    checkpoint: {
+      last_seq: seq, last_hash: hash, row_count: count, checkpoint_id: id, pending,
+      updated_at: typeof parsed.updated_at === "string" ? parsed.updated_at : undefined,
+    },
+  };
+}
+
+let checkpointTmpCounter = 0;
+
+/**
+ * Atomic off-box checkpoint write: temp file (0600) in the target dir + rename.
+ * Never writes partial anchors; throws so append() can fail closed.
+ */
+function writeCheckpoint(cp: ChainCheckpoint, file: string): void {
+  mkdirSync(dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.${++checkpointTmpCounter}.tmp`;
+  writeFileSync(tmp, JSON.stringify(cp) + "\n", { mode: 0o600 });
+  try { chmodSync(tmp, 0o600); } catch { /* best effort on filesystems without modes */ }
+  renameSync(tmp, file);
+}
+
+export type CheckpointVerdict = "consistent" | "lagging" | "rolled_back" | "forged_same_domain";
+
+/** Last checkpoint write failure (diagnostics; append() also throws). */
+let checkpointFailure: { at: string; path: string; error: string } | null = null;
+
+export function lastCheckpointError(): { at: string; path: string; error: string } | null {
+  return checkpointFailure ? { ...checkpointFailure } : null;
+}
+
+/**
+ * Compare an off-box checkpoint against the (already parsed) local log.
+ *
+ * - `consistent`: checkpoint names exactly the last row.
+ * - `lagging`: the log has exactly the rows the checkpoint *announced* as in-flight
+ *   (`pending`), i.e. the crash window between "announced" and "confirmed". Benign, warn only.
+ * - `rolled_back`: the log ends before the checkpoint (tail deleted / prefix restored).
+ * - `forged_same_domain`: the checkpoint row exists but differs — log+head rewritten
+ *   in place — **or** the log grew past the anchored row count without the off-box
+ *   checkpoint ever announcing those rows. The latter is why `pending` exists: a
+ *   same-domain attacker can append chain-legal rows and rewrite head.json, but it
+ *   cannot add the matching write-ahead record off-box.
+ */
+function compareCheckpoint(
+  cp: ChainCheckpoint,
+  all: AuditEvent[],
+): { verdict: CheckpointVerdict; reason: string | null } {
+  const count = all.length;
+  const last = all[count - 1];
+  const logSeq = typeof last?.seq === "number" ? last.seq : count;
+  const logHash = last?.hash ?? GENESIS;
+  if (cp.row_count === count) {
+    if (cp.last_seq === logSeq && cp.last_hash === logHash) return { verdict: "consistent", reason: null };
+    return {
+      verdict: "forged_same_domain",
+      reason: `off-box checkpoint disagrees with the local head at row ${count} (checkpoint seq ${cp.last_seq} hash ${cp.last_hash} vs log seq ${logSeq} hash ${logHash})`,
+    };
+  }
+  if (cp.row_count > count) {
+    return {
+      verdict: "rolled_back",
+      reason: `log rolled back below the off-box checkpoint (checkpoint seq ${cp.last_seq} / ${cp.row_count} rows, log ends at ${logSeq} / ${count} rows)`,
+    };
+  }
+  // checkpoint behind the log: only the row the checkpoint announced may be unconfirmed
+  const p = cp.pending;
+  if (p && p.row_count === count && p.last_seq === logSeq && p.last_hash === logHash) {
+    return {
+      verdict: "lagging",
+      reason: `off-box checkpoint lags the log by ${count - cp.row_count} row(s) but announced that append (pending seq ${p.last_seq} hash ${p.last_hash}); interrupted append / in-flight writer`,
+    };
+  }
+  return {
+    verdict: "forged_same_domain",
+    reason: `log has ${count - cp.row_count} row(s) beyond the off-box checkpoint (anchored at seq ${cp.last_seq} / row ${cp.row_count}) that the checkpoint never announced (pending ${p ? `seq ${p.last_seq} hash ${p.last_hash}` : "absent"} vs log seq ${logSeq} hash ${logHash})`,
+  };
+}
 
 function envMs(name: string, fallback: number): number {
   const v = Number(process.env[name]);
@@ -214,9 +431,13 @@ export function append(ev: Omit<AuditEvent, "ts" | "params_hash"> & { params?: u
   let full: AuditEvent;
   // Reading the tail, computing seq/prev_hash, appending and recording the head anchor
   // all happen under the exclusive lock, so concurrent writers can no longer read the
-  // same last row and fork the chain.
+  // same last row and fork the chain. The off-box checkpoint is written last (head →
+  // checkpoint order) so an interrupted append leaves a *lagging* checkpoint, never a
+  // checkpoint that points at a row the log does not have.
   const release = acquireLock();
   try {
+    const target = checkpointTarget();
+    if (target && !target.ok) throw new Error(`E_AUDIT_CHECKPOINT: ${target.error}`);
     const last = lastRecord();
     const anchor = readHead();
     if (anchor.state === "corrupt") throw new Error(`E_AUDIT_CHAIN: 锚点损坏（${anchor.error}）；拒绝追加，先人工核查 ${headFile()}`);
@@ -229,11 +450,52 @@ export function append(ev: Omit<AuditEvent, "ts" | "params_hash"> & { params?: u
         throw new Error(`E_AUDIT_CHAIN: 日志尾部与锚点不一致（疑似删行/篡改：anchor ${a.row_count}/${a.last_seq} vs log ${last.count}/${tailSeq}）；拒绝追加`);
       }
     }
+    // Off-box anchor: a deleted/corrupted/mismatching checkpoint means the local log is
+    // no longer provable → refuse to append (fail-closed) instead of extending a chain
+    // that a same-domain rewrite already compromised.
+    const cpRead = target ? readCheckpoint(target) : null;
+    let checkpoint_id: string | null = null;
+    if (cpRead?.state === "misconfigured") throw new Error(`E_AUDIT_CHECKPOINT: ${cpRead.error}`);
+    if (cpRead?.state === "corrupt") {
+      throw new Error(`E_AUDIT_CHAIN: off-box 检查点损坏（${cpRead.error}）；拒绝追加，先人工核查 ${cpRead.path}`);
+    }
+    if (cpRead?.state === "ok") {
+      const cmp = compareCheckpoint(cpRead.checkpoint, last.all);
+      if (cmp.verdict === "rolled_back" || cmp.verdict === "forged_same_domain") {
+        throw new Error(`E_AUDIT_CHAIN: ${cmp.reason}；拒绝在无法证明完整的链上追加（检查点 ${cpRead.path}）`);
+      }
+      checkpoint_id = cpRead.checkpoint.checkpoint_id;
+    }
+    if (cpRead?.state === "missing" && last.hash) {
+      throw new Error(`E_AUDIT_CHAIN: off-box 检查点缺失但日志已有链；拒绝追加，先人工核查 ${cpRead.path}`);
+    }
     const prev_hash = last.hash ?? GENESIS;
     const seq = (last.seq ?? last.count) + 1;
     const base: AuditEvent = { seq, ts: new Date().toISOString(), params_hash, ...rest } as AuditEvent;
     full = { ...base, prev_hash };
     full.hash = hashEvent(full, prev_hash);
+    // remember the pre-append state: if the off-box write fails we roll back to it so a
+    // later verify() cannot see "protected" rows behind a stale checkpoint
+    const before = {
+      size: existsSync(file) ? statSync(file).size : 0,
+      head: existsSync(headFile()) ? readFileSync(headFile()) : null,
+    };
+    // Two-phase off-box anchor: announce the row *before* it exists in the log, confirm
+    // it after the head write. A crash in between leaves a checkpoint that lags by an
+    // *announced* row (recoverable, `lagging`); rows appended without an announcement are
+    // unverifiable — that is what makes "append forged rows + rewrite head.json" visible.
+    const anchored: ChainHead = { last_seq: last.seq ?? 0, last_hash: last.hash ?? GENESIS, row_count: last.count };
+    const cpId = checkpoint_id || randomUUID();
+    if (target && target.ok) {
+      try {
+        writeCheckpoint({ ...anchored, checkpoint_id: cpId, updated_at: new Date().toISOString(),
+          pending: { last_seq: seq, last_hash: full.hash, row_count: last.count + 1 } }, target.path);
+      } catch (e) {
+        const msg = `E_AUDIT_CHECKPOINT: 无法写入 off-box 检查点 ${target.path}（${(e as Error).message}）；已放弃本次追加，拒绝在无外部锚点时继续`;
+        checkpointFailure = { at: new Date().toISOString(), path: target.path, error: msg };
+        throw new Error(msg);
+      }
+    }
     appendFileSync(file, JSON.stringify(full) + "\n");
     writeHead({
       last_seq: seq,
@@ -241,6 +503,31 @@ export function append(ev: Omit<AuditEvent, "ts" | "params_hash"> & { params?: u
       row_count: last.count + 1,
       updated_at: full.ts,
     });
+    if (target && target.ok) {
+      try {
+        writeCheckpoint({
+          last_seq: seq,
+          last_hash: full.hash,
+          row_count: last.count + 1,
+          checkpoint_id: cpId,
+          updated_at: full.ts,
+          pending: null,
+        }, target.path);
+        checkpointFailure = null;
+      } catch (e) {
+        try { truncateSync(file, before.size); } catch { /* degraded: chain stays consistent */ }
+        try {
+          if (before.head === null) rmSync(headFile(), { force: true });
+          else writeFileSync(headFile(), before.head);
+        } catch { /* degraded: head may lag, verify() still detects it */ }
+        // drop the announcement too, so an aborted row cannot be replayed into a
+        // "lagging but announced" state later on (best effort: the append already failed)
+        try { writeCheckpoint({ ...anchored, checkpoint_id: cpId, pending: null }, target.path); } catch { /* stale pending stays benign */ }
+        const msg = `E_AUDIT_CHECKPOINT: 无法写入 off-box 检查点 ${target.path}（${(e as Error).message}）；已回滚本次追加，拒绝在无外部锚点时继续`;
+        checkpointFailure = { at: new Date().toISOString(), path: target.path, error: msg };
+        throw new Error(msg);
+      }
+    }
   } finally {
     release();
   }
@@ -273,10 +560,10 @@ function rows(): AuditEvent[] {
 }
 
 /** Last parsed record (its hash/seq if chained) plus the number of parsed rows. */
-function lastRecord(): { hash?: string; seq?: number; count: number } {
+function lastRecord(): { hash?: string; seq?: number; count: number; all: AuditEvent[] } {
   const all = rows();
   const last = all[all.length - 1];
-  return { hash: last?.hash, seq: last?.seq, count: all.length };
+  return { hash: last?.hash, seq: last?.seq, count: all.length, all };
 }
 
 /** Result of integrity-checking the hash chain. */
@@ -296,7 +583,35 @@ export interface ChainResult {
   head_hash: string | null;
   /** true when the log ends before the recorded chain head (tail deleted / rolled back) */
   tail_truncated: boolean;
+  /** off-box checkpoint status (see CheckpointProtection) */
+  protection: CheckpointProtection;
 }
+
+/**
+ * Cross-source check against the off-box checkpoint (DIA_AUDIT_CHECKPOINT).
+ *
+ * `state`:
+ * - `anchored`   — checkpoint configured and readable; `verdict` says whether it agrees.
+ * - `unprotected`— no checkpoint configured: the log is only protected against
+ *                  same-domain-blind tampering. A warning, not a failure (nothing promised).
+ * - `missing`    — configured but the file is gone: either an operator error or an
+ *                  attacker deleting the evidence → fail closed once the log is chained.
+ * - `corrupt`    — the file exists but is not a valid checkpoint → fail closed.
+ * - `misconfigured` — bad path (relative, inside the audit dir, a directory) → fail closed.
+ */
+export interface CheckpointProtection {
+  state: "anchored" | "unprotected" | "missing" | "corrupt" | "misconfigured";
+  /** configured path (null when unset / unresolvable) */
+  path: string | null;
+  checkpoint: ChainCheckpoint | null;
+  /** only meaningful when state === "anchored" */
+  verdict: CheckpointVerdict | null;
+  reason: string | null;
+  /** true when the state/verdict must fail the whole verification (fail closed) */
+  fatal: boolean;
+}
+
+type LocalChainResult = Omit<ChainResult, "protection">;
 
 /**
  * Walk the audit log in order and recompute prev_hash/hash for every chained row.
@@ -309,8 +624,10 @@ export interface ChainResult {
  * ends before the anchor — fewer rows, smaller seq, or a different hash at the anchored
  * row — is reported as tail truncation/rollback. A missing anchor on a chained log, or a
  * corrupt anchor, fails closed (ok=false) instead of silently passing.
+ *
+ * This is the *local* half only; verifyChain() adds the off-box checkpoint comparison.
  */
-export function verifyChain(): ChainResult {
+function verifyLocal(): LocalChainResult {
   const lines = rawLines();
   const all: AuditEvent[] = [];
   for (let i = 0; i < lines.length; i++) {
@@ -328,7 +645,7 @@ export function verifyChain(): ChainResult {
   let checked = 0;
   let legacy = 0;
   let chained = false;
-  const res: ChainResult = {
+  const res: LocalChainResult = {
     ok: true, checked: 0, legacy: 0, total: all.length, broken_at: null, reason: null,
     head_seq: null, head_hash: null, tail_truncated: false,
   };
@@ -358,7 +675,7 @@ export function verifyChain(): ChainResult {
   }
 
   const last = all[all.length - 1];
-  const base: ChainResult = {
+  const base: LocalChainResult = {
     ...res, checked, legacy,
     head_seq: typeof last?.seq === "number" ? last.seq : null,
     head_hash: last?.hash ?? null,
@@ -398,6 +715,70 @@ export function verifyChain(): ChainResult {
   // more rows than the anchor means the anchor lagged (crash between append and head
   // write) — the chain walk above already vouched for those rows, so this is not a failure.
   return base;
+}
+
+/**
+ * Full verification: local chain + local anchor (verifyLocal), then a cross-source check
+ * against the off-box checkpoint.
+ *
+ * The local anchor lives next to the log, so a same-domain attacker rewrites both and
+ * verifyLocal passes. With `DIA_AUDIT_CHECKPOINT` set, the checkpoint is compared to the
+ * (possibly forged) head:
+ * - checkpoint ahead of the log / mismatch → rolled back / forged_same_domain → ok=false
+ * - checkpoint behind by exactly the row it announced (`pending`) → `lagging` (interrupted
+ *   append), warn only; anything else beyond the anchor is forged_same_domain → ok=false
+ * - checkpoint missing or misconfigured while the log is chained → ok=false (fail closed)
+ * - checkpoint unset → `unprotected` warning; the local verdict is unchanged.
+ */
+export function verifyChain(): ChainResult {
+  const local = verifyLocal();
+  const target = checkpointTarget();
+  const protection = checkProtection(local, target);
+  const next: ChainResult = { ...local, protection };
+  if (protection.verdict === "rolled_back") next.tail_truncated = true;
+  if (protection.fatal) {
+    next.ok = false;
+    if (!next.reason) next.reason = protection.reason;
+  }
+  return next;
+}
+
+/**
+ * Compare the off-box checkpoint against the local result. Pure read: `fatal` tells the
+ * caller whether the whole verification must fail (verifyChain) or block an append.
+ */
+function checkProtection(local: LocalChainResult, target: CheckpointTarget | null): CheckpointProtection {
+  const read = readCheckpoint(target);
+  if (!read) {
+    return {
+      state: "unprotected", path: null, checkpoint: null, verdict: null, fatal: false,
+      reason: `off-box checkpoint not configured (${CHECKPOINT_ENV}); the log only detects same-domain tampering`,
+    };
+  }
+  if (read.state === "misconfigured") {
+    return { state: "misconfigured", path: read.path, checkpoint: null, verdict: null, fatal: true, reason: read.error };
+  }
+  if (read.state === "corrupt") {
+    return {
+      state: "corrupt", path: read.path, checkpoint: null, verdict: null, fatal: true,
+      reason: `off-box checkpoint corrupted (${read.error}); failing closed`,
+    };
+  }
+  if (read.state === "missing") {
+    const chained = local.head_hash !== null;
+    return {
+      state: "missing", path: read.path, checkpoint: null, verdict: null, fatal: chained,
+      reason: chained
+        ? `off-box checkpoint missing (${read.path}); the log can no longer be proven intact — failing closed`
+        : `off-box checkpoint missing (${read.path}); nothing chained yet`,
+    };
+  }
+  const cmp = compareCheckpoint(read.checkpoint, rows());
+  const fatal = cmp.verdict === "rolled_back" || cmp.verdict === "forged_same_domain";
+  return {
+    state: "anchored", path: read.path, checkpoint: read.checkpoint, verdict: cmp.verdict,
+    fatal, reason: cmp.reason,
+  };
 }
 
 export function score(session: string) {

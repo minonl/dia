@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -13,6 +13,12 @@ const dataDir = () => process.env.DIA_DATA_DIR || join(homedir(), ".local", "sha
 const cacheDir = () => process.env.DIA_CACHE_DIR || join(homedir(), ".cache", "dia", "src");
 const opencodeAgents = () => process.env.DIA_OPENCODE_AGENTS_DIR || join(homedir(), ".config", "opencode", "agents");
 const dshProfiles = () => process.env.DIA_DSH_PROFILES_DIR || join(homedir(), ".dsh", "profiles");
+// codex 没有「profile」概念，隔离单位是 HOME：codex 读 $CODEX_HOME/AGENTS.md（默认 $HOME/.codex），
+// skills 读 $HOME/.agents/skills。所以 codex host 渲染到一个**假 HOME**（默认 <data>/codex-home），
+// 由调用方把 HOME/CODEX_HOME 指过去；绝不写用户的真实 ~/.codex（否则会覆盖主 yan 身份）。
+const codexHomeDir = (home?: string) => resolve(home || process.env.DIA_CODEX_HOME || join(dataDir(), "codex-home"));
+const HOSTS = new Set(["opencode", "dsh", "codex"]);
+const assertHost = (h: string) => { if (!HOSTS.has(h)) throw new Error("E_HOST: host not implemented: " + h); };
 // opencode 的全局配置可能有 .json / .jsonc 两种文件名。顺序与宿主一致
 // （packages/core/src/config/discovery.ts: names = ["opencode.json", "opencode.jsonc"]），
 // 两者都存在时宿主先读 .json；只有 .jsonc 时（v1.14.49+ 新装默认）读 .jsonc。
@@ -133,14 +139,14 @@ function hashTree(root: string): string {
   return h.digest("hex");
 }
 
-export function install(from: string, opts: { ref?: string; host?: string; dryRun?: boolean; force?: boolean } = {}): Installed {
+export function install(from: string, opts: { ref?: string; host?: string; home?: string; dryRun?: boolean; force?: boolean } = {}): Installed {
   const src = resolveSource(from, opts.ref);
   const m = readManifest(src.dir);
   if (m.kind !== "persona") throw new Error("E_MANIFEST: not a persona");
   const target = resolve(dataDir(), "personas", m.id, m.version);
   if (!target.startsWith(resolve(dataDir(), "personas") + sep)) throw new Error("E_MANIFEST: version escapes install dir");
   const hosts = opts.host ? [opts.host] : (m.hosts ?? ["opencode"]);
-  for (const h of hosts) if (!["opencode", "dsh"].includes(h)) throw new Error("E_HOST: host not implemented: " + h);
+  for (const h of hosts) assertHost(h);
   const rendered: string[] = [];
   const overwrites: string[] = [];
 
@@ -170,8 +176,23 @@ export function install(from: string, opts: { ref?: string; host?: string; dryRu
     if (!realpathSync(dshSrc).startsWith(realpathSync(src.dir) + sep) && realpathSync(dshSrc) !== realpathSync(src.dir)) throw new Error("E_MANIFEST: entry escapes persona dir");
   }
 
+  const codexEntry = hosts.includes("codex") ? m.entry?.codex : undefined;
+  const codexHome = hosts.includes("codex") ? codexHomeDir(opts.home) : null;
+  if (hosts.includes("codex")) {
+    if (!codexEntry) throw new Error("E_MANIFEST: missing entry.codex");
+    const abs = resolve(src.dir, codexEntry);
+    if (!existsSync(abs) || !statSync(abs).isFile()) throw new Error("E_MANIFEST: entry.codex file missing");
+    if (!realpathSync(abs).startsWith(realpathSync(src.dir) + sep)) throw new Error("E_MANIFEST: entry escapes persona dir");
+    const dest = join(codexHome!, ".codex", "AGENTS.md");
+    if (existsSync(dest) && !readFileSync(dest).equals(readFileSync(abs))) {
+      if (!opts.force) throw new Error("E_CONFLICT: codex AGENTS.md exists and differs; use --force (备份后再覆盖)");
+      overwrites.push(dest);
+    }
+  }
+
   if (opts.dryRun) {
     if (hosts.includes("opencode")) rendered.push(join(opencodeAgents(), `${m.id}.md`));
+    if (hosts.includes("codex")) rendered.push(join(codexHome!, ".codex", "AGENTS.md"));
     return { id: m.id, version: m.version, dir: target, rendered, hash: "dry-run", commit: src.commit, overwrites };
   }
 
@@ -209,8 +230,36 @@ export function install(from: string, opts: { ref?: string; host?: string; dryRu
     renderedDirs.push({ path: dshDest, hash: hashTree(dshDest) });
   }
 
+  const codexLinks: any[] = [];
+  if (hosts.includes("codex")) {
+    const ch = codexHome!;
+    // codex 读 $CODEX_HOME/AGENTS.md；isolated home 下即 <home>/.codex/AGENTS.md
+    mkdirSync(join(ch, ".codex"), { recursive: true });
+    const dest = join(ch, ".codex", "AGENTS.md");
+    cpSync(resolve(target, codexEntry!), dest);
+    rendered.push(dest);
+    // skills：codex USER 级读 $HOME/.agents/skills（与 $CODEX_HOME 无关）→ 落到假 HOME 下
+    const skillRoot = join(ch, ".agents", "skills");
+    for (const sk of m.skills ?? []) {
+      const srcSkill = resolve(target, sk.from);
+      if (!srcSkill.startsWith(target + sep)) throw new Error("E_MANIFEST: skill escapes persona dir: " + sk.from);
+      if (!existsSync(srcSkill)) continue;
+      const name = sk.name || basename(srcSkill);
+      mkdirSync(skillRoot, { recursive: true });
+      const link = join(skillRoot, name);
+      rmSync(link, { recursive: true, force: true });
+      if ((sk.mode ?? "link") === "copy") cpSync(srcSkill, link, { recursive: true });
+      else {
+        symlinkSync(srcSkill, link, "dir");
+        codexLinks.push({ type: "link", path: link, value: relative(target, srcSkill) });
+      }
+    }
+  }
+
   // persona 自带内容（内联 kit 语义）：baseDir = target，链接指向 persona 树自身
-  const inline = kit.renderContent(target, target, m) ?? [];
+  // codex-only persona 的 skills 由下面的 codex 分支落到假 HOME；不要同时链到真实 ~/.agents/skills
+  const inlineManifest = hosts.some((h) => h === "opencode" || h === "dsh") ? m : { ...m, skills: [] };
+  const inline = [...(kit.renderContent(target, target, inlineManifest) ?? []), ...codexLinks];
   const appliedConfig = config.apply((m.config ?? []) as any);
 
   // kits：包内相对路径，装完树后逐个分发（内容归 kit，人格只引用）
@@ -348,6 +397,23 @@ mode: primary
 2. 动手前说清选项与代价。
 `;
   }
+  if (hosts.includes("codex")) {
+    manifest.entry.codex = "AGENTS.md";
+    files["AGENTS.md"] = `# ${id}
+
+你是 **${id}**。
+
+## 身份
+
+- 服务谁：
+- 边界（不做什么）：
+
+## 工作原则
+
+1. 先证据后结论：没验证就别说"应该没问题"。
+2. 动手前说清选项与代价。
+`;
+  }
   if (hosts.includes("dsh")) {
     const dir = `platform/dsh/${id}-persona`;
     manifest.entry.dsh = dir;
@@ -404,7 +470,7 @@ export function create(id: string, opts: { dir?: string; hosts?: string[]; dryRu
   if (!opts.dir) throw new Error("E_USAGE: --dir required");
   const dir = resolve(opts.dir);
   const hosts = opts.hosts?.length ? opts.hosts : ["opencode", "dsh"];
-  for (const h of hosts) if (!["opencode", "dsh"].includes(h)) throw new Error("E_HOST: host not implemented: " + h);
+  for (const h of hosts) assertHost(h);
   if (existsSync(dir) && readdirSync(dir).length) throw new Error(`E_CONFLICT: ${dir} 非空`);
   const files = skeleton(id, hosts);
   if (!opts.dryRun) {
@@ -450,18 +516,19 @@ function compareDir(expected: string, actual: string): RenderDrift[] {
  * 用**已安装版本**重渲染到宿主（不换内容）。`check` 只报 drift、不写盘。
  * 覆盖策略：被手改/丢失的产物先备份到 `<data>/backups/render-<ts>/`，再写回。
  */
-export function render(id: string, opts: { host?: string; check?: boolean } = {}): RenderResult {
+export function render(id: string, opts: { host?: string; home?: string; check?: boolean } = {}): RenderResult {
   const idDir = join(dataDir(), "personas", id);
   if (!existsSync(idDir)) throw new Error(`E_NOT_INSTALLED: persona ${id}`);
   const version = active.effective(id)?.version ?? readdirSync(idDir).filter((v) => statSync(join(idDir, v)).isDirectory()).sort().pop()!;
   const dir = join(idDir, version);
   const m = readManifest(dir);
   const hosts = opts.host ? [opts.host] : (m.hosts ?? ["opencode"]);
-  for (const h of hosts) if (!["opencode", "dsh"].includes(h)) throw new Error("E_HOST: host not implemented: " + h);
+  for (const h of hosts) assertHost(h);
 
   const drift: RenderDrift[] = [];
   let agentSrc: string | null = null, agentDest: string | null = null;
   let dshSrc: string | null = null, dshDest: string | null = null;
+  let codexSrc: string | null = null, codexDest: string | null = null;
 
   if (hosts.includes("opencode")) {
     const entry = m.entry?.opencode;
@@ -472,6 +539,16 @@ export function render(id: string, opts: { host?: string; check?: boolean } = {}
     agentDest = join(opencodeAgents(), `${id}.md`);
     if (!existsSync(agentDest)) drift.push({ path: agentDest, action: "missing" });
     else if (shaFile(agentDest) !== shaFile(agentSrc)) drift.push({ path: agentDest, action: "changed" });
+  }
+  if (hosts.includes("codex")) {
+    const entry = m.entry?.codex;
+    if (!entry) throw new Error("E_MANIFEST: missing entry.codex");
+    codexSrc = resolve(dir, entry);
+    if (!codexSrc.startsWith(dir + sep)) throw new Error("E_MANIFEST: entry escapes persona dir");
+    if (!existsSync(codexSrc)) throw new Error("E_MANIFEST: entry.codex file missing");
+    codexDest = join(codexHomeDir(opts.home), ".codex", "AGENTS.md");
+    if (!existsSync(codexDest)) drift.push({ path: codexDest, action: "missing" });
+    else if (shaFile(codexDest) !== shaFile(codexSrc)) drift.push({ path: codexDest, action: "changed" });
   }
   if (hosts.includes("dsh")) {
     const entry = m.entry?.dsh;
@@ -506,6 +583,7 @@ export function render(id: string, opts: { host?: string; check?: boolean } = {}
     }
   }
   if (agentDest && agentSrc) { mkdirSync(dirname(agentDest), { recursive: true }); cpSync(agentSrc, agentDest); }
+  if (codexDest && codexSrc) { mkdirSync(dirname(codexDest), { recursive: true }); cpSync(codexSrc, codexDest); }
   if (dshDest && dshSrc) {
     // 只覆盖 persona 自己写入的文件，绝不整树重建：profile 目录是宿主领地，
     // 宿主装的插件目录/改动过的 package.json 不在 drift 名单里，删掉就再也回不来。
@@ -523,9 +601,10 @@ export function render(id: string, opts: { host?: string; check?: boolean } = {}
   // 只更新渲染产物记录；persona 内容哈希（lock.hash）不变。
   const lockPath = join(dir, "dia.lock");
   const lock = JSON.parse(readFileSync(lockPath, "utf8"));
-  const rendered: string[] = [...new Set([...(lock.rendered ?? []), ...(agentDest ? [agentDest] : [])])];
+  const rendered: string[] = [...new Set([...(lock.rendered ?? []), ...(agentDest ? [agentDest] : []), ...(codexDest ? [codexDest] : [])])];
   const renderedHashes: Record<string, string> = { ...(lock.renderedHashes ?? {}) };
   if (agentDest) renderedHashes[agentDest] = shaFile(agentDest);
+  if (codexDest) renderedHashes[codexDest] = shaFile(codexDest);
   const renderedDirs = [...(lock.renderedDirs ?? []).filter((d: any) => d.path !== dshDest)];
   if (dshDest) renderedDirs.push({ path: dshDest, hash: hashTree(dshDest) });
   writeFileSync(lockPath, JSON.stringify({ ...lock, rendered, renderedHashes, renderedDirs }, null, 1));
@@ -639,7 +718,8 @@ export function remove(id: string): { removed: string[]; skipped: string[] } {
       // 宿主渲染（agent md / dsh profile）
       for (const f of lock.rendered || []) {
         const abs = resolve(f);
-        if (abs !== allowed) { skipped.push(abs); continue; }
+        const isCodexAgent = basename(abs) === "AGENTS.md" && basename(dirname(abs)) === ".codex";
+        if (abs !== allowed && !isCodexAgent) { skipped.push(abs); continue; }
         const expectedHash = lock.renderedHashes?.[f];
         if (!expectedHash || !existsSync(abs) || shaFile(abs) !== expectedHash) { skipped.push(abs); continue; }
         rmSync(abs); removed.push(abs);

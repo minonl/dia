@@ -125,9 +125,9 @@ usage:
   dia guard [--once] [--json]
   dia run --session S [--tool T] [--agent A] [--waive --risk N] [--redline] -- <cmd> [args...]
   dia resume --session S [--json]
-  dia persona add <id|--from SRC> [--ref REF] [--host opencode] [--dry-run] [--force] [--json]
-  dia persona create <id> --dir DIR [--host opencode|dsh] [--dry-run] [--json]
-  dia persona render <id> [--host opencode|dsh] [--check] [--json]
+  dia persona add <id|--from SRC> [--ref REF] [--host opencode|dsh|codex] [--home DIR] [--dry-run] [--force] [--json]
+  dia persona create <id> --dir DIR [--host opencode|dsh|codex] [--dry-run] [--json]
+  dia persona render <id> [--host opencode|dsh|codex] [--home DIR] [--check] [--json]
   dia persona list|verify|remove|show <id>|use <id>[@ver]
   dia persona path [<id>[@<ver>]] [--json]   # 打印生效版本目录（服务/脚本取代码入口）
   dia persona check <id>|update <id> [--ref REF]
@@ -514,7 +514,7 @@ async function personaCli(argv: string[]): Promise<number> {
     const from = flag(args, "--from") || id;
     if (!from) { err("missing --from"); return 2; }
     try {
-      const r = persona.install(from, { ref: flag(args, "--ref"), host: flag(args, "--host"), dryRun: has(args, "--dry-run"), force: has(args, "--force") });
+      const r = persona.install(from, { ref: flag(args, "--ref"), host: flag(args, "--host"), home: flag(args, "--home"), dryRun: has(args, "--dry-run"), force: has(args, "--force") });
       out(asJson ? JSON.stringify(r) : `installed ${r.id}@${r.version} -> ${r.rendered.join(", ") || "(dry-run)"}` +
         (r.overwrites?.length ? `\n  ⚠ 覆盖 ${r.overwrites.length} 个已存在产物（已备份）：${r.overwrites.join(", ")}` : ""));
       return 0;
@@ -637,7 +637,7 @@ async function personaCli(argv: string[]): Promise<number> {
   }
   if (sub === "create") {
     const id = positional(args)[0];
-    if (!id) { err("usage: dia persona create <id> --dir DIR [--host opencode|dsh] [--dry-run] [--json]"); return 2; }
+    if (!id) { err("usage: dia persona create <id> --dir DIR [--host opencode|dsh|codex] [--dry-run] [--json]"); return 2; }
     try {
       const host = flag(args, "--host");
       const r = persona.create(id, { dir: flag(args, "--dir"), hosts: host ? [host] : undefined, dryRun: has(args, "--dry-run") });
@@ -654,9 +654,9 @@ async function personaCli(argv: string[]): Promise<number> {
   }
   if (sub === "render") {
     const id = positional(args)[0];
-    if (!id) { err("usage: dia persona render <id> [--host opencode|dsh] [--check] [--json]"); return 2; }
+    if (!id) { err("usage: dia persona render <id> [--host opencode|dsh|codex] [--home DIR] [--check] [--json]"); return 2; }
     try {
-      const r = persona.render(id, { host: flag(args, "--host"), check: has(args, "--check") });
+      const r = persona.render(id, { host: flag(args, "--host"), home: flag(args, "--home"), check: has(args, "--check") });
       if (asJson) out(JSON.stringify(r, null, 1));
       else if (r.check) out(r.drift.length ? `drift ${r.drift.length}:\n  ${r.drift.map((d: any) => `${d.action}: ${d.path}`).join("\n  ")}` : "ok（无 drift）");
       else out(`rendered ${r.id}@${r.version}${r.drift.length ? `（修复 ${r.drift.length} 处，备份 ${r.backups.length}）` : "（无变化）"}`);

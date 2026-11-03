@@ -57,7 +57,7 @@ dia （控制面：persona / kit / kb / audit / job / wt）
 | `patch …` | `unknown command` | `docs/patching.md` |
 | `persona activation` | 无（只能 `use` / `default`，下次会话生效） | `docs/versioning.md` |
 | `kit create / update / show / gc` | 只有 `add/list/verify/remove` | `docs/kit-install.md` |
-| deps 校验（M1） | `deps.yaml` 只登记，`doctor` 不校验 | `docs/dependency-registry.md` |
+| ~~deps 校验（M1）~~ | **已完成**：`deps.jsonl` + `doctor` 的 `deps` 项（required 缺失 fail / 漂移 warn / 可选未装 note） | `docs/dependency-registry.md` |
 | audit 哈希链（M3） | 未做 | `docs/status.md` D1 |
 | ModelSpec / 基准 sidecar（D2） | 未做（已有 `price` 计价） | `docs/model-*.md` |
 | state 事件 / `(T,D,O)` 视图（D3） | 未做 | `docs/evolution-process.md` |
@@ -90,7 +90,7 @@ $ dia --persona yan kb scene S1  → 正常出场景卡
 1. **yan 安装落后来源仓 1 个提交**（`83fbaa9` vs `8d10cc5`，内容是 dsh profile 根 `cordis.yml` 修复）。
    修法：`dia persona add yan --from ~/.yan-agent/repos/yan-agent --force`（先备份）。
 2. **`dia doctor` 的 knowledge 项只查目录存在**，不校验索引新鲜度；`kb` 索引过期要等查询时才自愈。
-3. **`deps.yaml` 与真实环境脱节**：`/opt/homebrew/bin/opencode` 已不存在、`acpx` 不在 PATH，doctor 不校验（M1）。
+3. ~~`deps.jsonl` 与真实环境脱节~~ → 已改为按 `command:` 探测并接入 `doctor`；**追加动作仍手工**（`dia deps record` 未做）。
 4. **本地源 persona 不能 `update`**（`E_SOURCE`），只能用 `add --force` 刷新；`update` 尚未支持本地源。
 5. **yan 旧脚本未迁**：`yan-env`、`yan-version`、`yan-ref`、`yan-data-root`、`yan-data-sync` 仍是仓库脚本
    （`dia env` / `persona show/use` 已有等价能力，未收口）。

@@ -50,7 +50,7 @@ dia --persona dabo doctor
 |---|---|---|
 | opencode | `~/.config/opencode/agents/dabo.md` | **否**（用户自己切） |
 | dsh | `~/.dsh/profiles/dabo/`（独立 profile；webserver 端口动态，默认回退 1111） | **否**（`dsh --profile dabo`） |
-| 记录 | `deps.yaml` + `dia.lock` | — |
+| 记录 | `deps.jsonl` + `dia.lock` | — |
 
 原则：**只新增，不改 yan；默认 agent 必须显式 `persona default` 才动。**
 
@@ -102,7 +102,7 @@ git clone --depth 1 --ref <sha> → 临时目录
   → 渲染：
       opencode：复制 agents/dabo.md（当前原样复制；managed-by 头待实现）
       dsh：复制 platform/dsh/dabo-persona + 生成独立 profile
-  → 登记 deps.yaml（待实现）
+  → 登记 deps.jsonl（待实现）
   → 不启停服务、不改默认
 ```
 

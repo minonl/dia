@@ -19,8 +19,8 @@ describe("proposals", () => {
     const runDir = join(data, "runs", t.id);
     mkdirSync(runDir, { recursive: true });
     writeFileSync(join(runDir, "verify.json"), JSON.stringify({ conclusion: "不通过", evidence: ["cmd exit 1"] }));
-    const deps = join(data, "deps.yaml");
-    writeFileSync(deps, "- id: x@1\n  result: unknown\n");
+    const deps = join(data, "deps.jsonl");
+    writeFileSync(deps, JSON.stringify({ id: "x@1", kind: "host_cli", version: "1.0.0", result: "unknown", support: "unknown" }) + "\n");
     const hyp = join(data, "hyp.md");
     writeFileSync(hyp, "| **H1** | 测试假设 | exp | cost |\n| H1 / H2–H3 | 待验证 | x |\n");
     const t2 = task.add("stuck thing", { judge: "true" });
@@ -37,7 +37,7 @@ describe("proposals", () => {
 
   test("does not create tasks", () => {
     const before = task.list().length;
-    proposal.propose({ depsPath: join(data, "none.yaml"), hypothesesPath: join(data, "none.md") });
+    proposal.propose({ depsPath: join(data, "none.jsonl"), hypothesesPath: join(data, "none.md") });
     expect(task.list().length).toBe(before);
   });
 });

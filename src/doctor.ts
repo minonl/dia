@@ -12,6 +12,7 @@ import * as scope from "./scope.ts";
 import * as active from "./active.ts";
 import * as dsh from "./dsh.ts";
 import * as platforms from "./platforms.ts";
+import * as deps from "./deps.ts";
 
 export interface Check { name: string; status: "ok" | "warn" | "fail"; detail: string }
 
@@ -19,6 +20,13 @@ const home = () => process.env.DIA_HOME || homedir();
 
 // 平台自检只报告「装没装、版本在不在支持范围」，不判红：渲染不需要宿主，运行才需要。
 // 数据来自单一事实源 docs/platforms/registry.json（安装版在 <install>/registry/platforms.json）。
+function depsChecks(): Check[] {
+  const entries = deps.load();
+  if (!entries.length) return [{ name: "deps", status: "warn", detail: "依赖登记未安装（docs/deps.jsonl）" }];
+  const s = deps.summary(entries);
+  return [{ name: "deps", status: s.status, detail: s.detail }];
+}
+
 function platformChecks(): Check[] {
   const reg = platforms.load();
   if (!reg) return [{ name: "platforms", status: "warn", detail: "平台注册表未安装（docs/platforms/registry.json）" }];
@@ -121,6 +129,7 @@ export function run(opts: { persona?: string } = {}): {
     });
   } catch (e: any) { checks.push({ name: "default_agent", status: "warn", detail: e?.message }); }
 
+  checks.push(...depsChecks());
   checks.push(...platformChecks());
 
   const wt = join(process.env.DIA_HOME_INSTALL || join(home(), ".local", "share", "dia"), "packages/wt/bin/dia-wt");

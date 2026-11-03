@@ -86,7 +86,7 @@ f8c0767 feat: persona create/render   ← 本轮主功能
 
 | 缺口 | 影响 | 出处 |
 |---|---|---|
-| `deps.yaml` 里的 `resolved` 是 **macOS 路径**（`/opt/homebrew/bin/opencode`、`fnm/...`） | `dia doctor` 的依赖项校验未做，登记项与真实可执行文件可能已经不一致（2026-11-03 实测：`/opt/homebrew/bin/opencode` 不存在、`acpx` 不在 PATH，doctor 仍报 ok）；M1 落地时须按平台解析或标 `integrity: unknown` 免责 | `docs/deps.yaml` |
+| 依赖登记只追加、无 `dia deps record` | 记一条新依赖要手写 JSON 行（保证可移植写法：`command:xxx` / `~/...`，不写死绝对路径） | `docs/dependency-registry.md` |
 | **本地目录安装的 persona 无法 `update`** | `update` 拒绝 local 源（`E_SOURCE`）；旧产物与源不同时 `add` 报 `E_CONFLICT`。可用 `dia persona add … --from <dir> --force`（覆盖前备份）刷新，但 `update` 仍未支持本地源 | `src/persona.ts`；`docs/cli.md §4.1` |
 | dabo 安装树是旧版本（`dia.json` 无 `knowledge`/`commands`/`data_root`） | 修复前 `--persona dabo kb` 会回落到 cwd 索引；需用 `--force` 重装刷新（2026-11-03 已定位，未执行） | `~/.local/share/dia/personas/dabo/0.1.0/` |
 | `persona activation` 模式未实现 | 只能手动 `default`/`use`，无按会话激活 | `docs/persona-install.md` |

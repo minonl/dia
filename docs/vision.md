@@ -82,7 +82,7 @@ persona 只声明"我是谁、我会什么"（逻辑入口、能力、策略）�
 | 配置矩阵 | opencode / dsh / codex / mimocode / zed / ACP 的配置键与渲染目标 | 只有 opencode + dsh；`ecosystem-integration.md` 有对照但无矩阵 |
 | **版本经验库** | 每个宿主 × 版本的：配置键、断代点、已知坑、验证命令、降级策略 | **缺**（坑散落在知识库与提交信息里） |
 | 能力探测 | 启动前判断宿主版本支持什么（hooks / ACP / skill 目录） | 只有 `dsh.checkPreset` 一项 |
-| 依赖校验 | `deps.yaml` 与实际可执行文件/版本比对 | **缺（M1）** |
+| 依赖校验 | `deps.jsonl` 与实际可执行文件/版本比对 | **已做（M1）**：`doctor` 的 `deps` 项 |
 | 降级策略 | 宿主能力缺失时明确降级还是失败（不静默） | 设计有（`entrypoints.md` §4），未实现 |
 
 ### 4.2 版本经验库的建议形态
@@ -98,7 +98,7 @@ hosts.yaml            # 机器可读：version_range / checks / fallback（docto
 ```
 
 规则：**一条经验 = 版本范围 + 复现命令 + 现有判据**；没有复现命令的写"未验证"。
-`dia doctor` 按注册表探测本机并派生视图（`platform:<name>`）；`deps.yaml` 仍是"装了什么"的账本，两者不混。
+`dia doctor` 按注册表探测本机并派生视图（`platform:<name>`）；`deps.jsonl` 仍是"装了什么"的账本，两者不混。
 
 ---
 
@@ -121,7 +121,7 @@ dia 对 fleet 的交付物：**可导出的 persona 包 + 能力声明 + 校验�
 
 | 阶段 | 内容 | 依赖 / 判据 |
 |---|---|---|
-| **P0** | 平台经验库 + 依赖校验（M1）：`docs/platforms/` + `hosts.yaml` + `doctor --host` | 现有两台平台实测通过；`deps.yaml` 不再与真实环境脱节 |
+| **P0** | 平台经验库 + 依赖校验（M1）：`docs/platforms/` + `hosts.yaml` + `doctor --host` | 现有两台平台实测通过；`deps.jsonl` 不再与真实环境脱节 |
 | **P1** | team 生成：team spec → 多个 persona/角色 + 门禁 | `team run --mock` 已可用；需补"从 spec 生成角色" |
 | **P2** | `dia-evoler`：独立 persona（读文档、解释配置、给迁移建议） | P0 的经验库是前置（否则它只会瞎猜）；dia 仓不动 |
 | **P3** | rig 导出：persona 包 + 能力声明 → openrig | 与 openrig 的接口定稿 |

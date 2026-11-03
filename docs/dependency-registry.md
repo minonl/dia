@@ -23,57 +23,21 @@
 
 **局限（必须写进 README）**：SBOM 只回答"有什么、谁引入"，不回答"能不能跑"；lockfile 有 hash 无来源证明；`dpkg -V` 只做 md5 且依赖已有记录。
 
-### 实例：`docs/deps.yaml`
+### 单一事实源：`docs/deps.jsonl`
 
-```yaml
-- id: host_cli:opencode@2.1.3
-  kind: host_cli
-  integrity: unknown            # Homebrew 二进制未做内容哈希
-  role: required
-  verified_at: 2026-10-28
-  method: smoke                 # plugin list / acp --help 实跑
-  result: pass
-  support: active
-  evidence: docs/ecosystem-integration.md
+一行一个 JSON 对象，**只追加**；同一 `id` 以最后一行为准（升级/复核都追加新行，不改旧行）。
+字段即上表；没有的字段省略，不写占位。
 
-- id: host_cli:dsh@0.2.1-rc.2
-  kind: host_cli
-  integrity: unknown
-  role: required
-  verified_at: 2026-10-28
-  method: smoke                 # --dump-config / --version
-  result: pass
-  support: active
-
-- id: npm:acpx@0.21.1
-  kind: npm
-  integrity: pending            # 需 `npm view acpx dist.integrity`
-  role: optional
-  fallback: "shell 驱动各宿主 CLI"
-  verified_at: 2026-10-28
-  method: smoke                 # npx acpx --help
-  result: pass
-  support: active
-
-- id: bundle:@example/dsh-watchdog@0.1.0
-  kind: bundle
-  integrity: unknown
-  role: optional
-  verified_at: 2026-10-28
-  method: source-review
-  result: unknown               # 复制后测试失败；无 license
-  support: unknown
-  removal_after: 2026-11-04     # 复活判据到期
-
-- id: datastore:opencode.db
-  kind: datastore
-  integrity: unknown
-  role: optional
-  verified_at: 2026-10-28
-  method: smoke                 # 只读打开 + 计数
-  result: pass
-  support: active
+```json
+{"id":"host_cli:opencode@2.2.5","kind":"host_cli","version":"2.2.5","resolved":"command:opencode","integrity":"unknown","role":"required","verified_at":"2026-11-03","verified_by":"min","method":"smoke","result":"pass","support":"active","evidence":"docs/platforms/registry.json"}
 ```
+
+规则：
+
+1. `resolved` 用**可移植写法**（`command:opencode`、`~/...`），不写死某台机器的绝对路径。
+2. 人读视图由 `dia doctor` 派生（`deps` 项，`--json` 给机器）；**本文不抄登记数据**。
+3. `dia doctor` 判定：required 缺失 = `fail`；版本/路径漂移 = `warn`；可选未装 = note（不拉红）。
+4. 追加动作现在手工做（`dia deps record` 尚未实现）。
 
 ---
 

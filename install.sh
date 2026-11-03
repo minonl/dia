@@ -26,6 +26,7 @@ run cp -R "$SRC/packages/job/bin" "$DIA_HOME/packages/job/"
 run cp -R "$SRC/packages/job/lib" "$DIA_HOME/packages/job/"
 run cp -R "$SRC/packages/wt/bin" "$DIA_HOME/packages/wt/"
 if [ -f "$SRC/docs/platforms/registry.json" ]; then run cp "$SRC/docs/platforms/registry.json" "$DIA_HOME/registry/platforms.json"; fi
+if [ -f "$SRC/docs/deps.jsonl" ]; then run cp "$SRC/docs/deps.jsonl" "$DIA_HOME/registry/deps.jsonl"; fi
 run chmod +x "$DIA_HOME/packages/wt/bin/dia-wt"
 run chmod +x "$DIA_HOME/bin/dia.js" "$DIA_HOME/packages/job/bin/dia-job"
 run ln -sfn "$DIA_HOME/bin/dia.js" "$DIA_BIN_DIR/dia"

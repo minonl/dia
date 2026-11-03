@@ -1,6 +1,6 @@
 # dia 状态页（单一事实源）
 
-> 更新：2026-11-03（复核：`bun test tests` 193/29 全绿）。任何"现在做到哪了"的问题，以本页为准；其他文档是细节。
+> 更新：2026-11-03（复核：`bun test tests` 198/30 全绿）。任何"现在做到哪了"的问题，以本页为准；其他文档是细节。
 > 规则：状态必须能追到**命令/测试/提交**；没有证据的写"未验证"。
 
 ---
@@ -22,7 +22,7 @@
 | `monorepo.md` | core / kb / job / cli / wt 布局 | 现行 |
 | `team.md` | 开发团队 4+3 | 现行 |
 | `pricing.md` | 计价表与 `price` 命令 | 现行 |
-| `dependency-registry.md` / `deps.yaml` | 依赖登记格式 | **登记现行；校验未实现（M1）**；`deps.yaml` 的 `resolved` 已与真实环境脱节 |
+| `dependency-registry.md` / `deps.jsonl` | 依赖登记格式（只追加） | **现行**：`deps.jsonl` 是单一事实源，`dia doctor` 派生校验（M1） |
 | `versioning.md` | 多版本、semver、激活模式 | **部分**：多版本 + `use` 已实现；`activation` 未实现 |
 | `architecture.md` | 三层职责、知识存储选型、抽取顺序 | **设计**（§7 待定已全部落定，见文内 2026-11-03 注） |
 | `framework-bootstrap.md` | 早期启动与分发选型 | **过时**：实际分发是 `install.sh`，无 release tarball / `agentctl` / `framework.lock` |
@@ -89,9 +89,10 @@
 | D0.20 | 组合自检 | **完成** | `dia doctor`（persona/kit/knowledge/dsh preset/wt；exit 0/1/2） |
 | D0.21 | worktree 抽取 `packages/wt` | **完成** | 7 处 python→node；`dia wt`；4 套测试原样迁移全绿 |
 | D0.23 | doctor 平台版本自检 | **完成** | `platform:opencode` / `platform:dsh` 报版本（缺宿主 = warn，不判红）；`tests/active-doctor.test.ts` |
+| D0.25 | 依赖登记迁移 JSONL + 校验（M1） | **完成** | `docs/deps.jsonl`（只追加，同 id 取最后一行）+ `src/deps.ts`（PATH/版本/路径探测）+ `doctor` 的 `deps` 项；`tests/deps.test.ts` |
 | D0.24 | 平台注册表（单一事实源） | **完成** | `docs/platforms/registry.json`（支持范围/实测版本/坑）+ `src/platforms.ts` 版本判定 + `doctor` 派生视图；`install.sh` 分发注册表；`tests/platforms.test.ts` |
 | D0.22 | 安装/自检一致性修复 | **完成** | `doctor` 多 persona 逐项自检；`scope` 旧 lock 缺 `content` 时读 `dia.json` 兜底；`render --check` 跳过宿主自写 `cordis.yml`；`persona add --force`（先备份） |
-| D1 | doctor 依赖校验（M1）+ audit 哈希链（M3） | **未开始** | doctor 已存在，但 deps.yaml 校验与哈希链未做 |
+| D1 | doctor 依赖校验（M1）+ audit 哈希链（M3） | **M1 完成；M3 未开始** | `src/deps.ts` + `doctor` 的 `deps` 项；哈希链未做 |
 | D2 | ModelSpec + 首次基准 + 事故 sidecar | **未开始** | 设计完成 |
 | D3 | state 事件 + `(T,D,O)` 视图 | **未开始** | 设计完成 |
 | D4 | 私有 canary（PR + episode） | **未开始** | 设计完成 |

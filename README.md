@@ -199,7 +199,7 @@ broken links: 5
 | `docs/research/opencode-session-scoping.md` | opencode v2 会话分区（Project/Location/Workspace） |
 | `docs/dependency-registry.md` | 外部依赖登记与原始记录维护 |
 | `docs/research/collaboration-theory.md` | 人机协作与评估的理论依据 |
-| `docs/deps.yaml` | 当前依赖登记（可执行实例） |
+| `docs/deps.jsonl` | 当前依赖登记（可执行实例） |
 | `docs/review/reuse-review.md` | 复用裁决与 probe 记录 |
 
 ## 状态

@@ -184,7 +184,7 @@ drift_event:
 
 | 组件 | 关系 |
 |---|---|
-| `deps.yaml` | 模型作为 `kind: model` 依赖登记（version/verified_at） |
+| `deps.jsonl` | 模型作为 `kind: model` 依赖登记（version/verified_at） |
 | `runtime/calls.jsonl` | 线上成本/延迟/工具错误的来源 |
 | `audit.jsonl` | 异常动作与人工裁决留痕 |
 | `dabo-agent:docs/hypotheses.md`（外部引用） | H13/H14 的判据来自 baseline + sidecar |

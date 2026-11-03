@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { list as listTasks } from "./task.ts";
+import * as deps from "./deps.ts";
 
 const DATA = process.env.DIA_DATA_DIR || join(homedir(), ".local", "share", "dia");
 
@@ -75,15 +76,12 @@ function collectTasks(out: Proposal[]) {
 
 function collectDeps(out: Proposal[], path: string) {
   if (!existsSync(path)) return;
-  const text = readFileSync(path, "utf8");
-  const blocks = text.split(/^- id:/m).slice(1);
-  for (const b of blocks) {
-    const id = b.split("\n")[0].trim();
-    if (/result:\s*unknown|support:\s*unknown/.test(b)) {
+  for (const e of deps.load(path)) {
+    if (e.result === "unknown" || e.support === "unknown") {
       push(out, {
-        title: `复核依赖：${id}`,
+        title: `复核依赖：${e.id}`,
         why: "依赖状态为 unknown，不能作为已知可用项。",
-        evidence: [`deps.yaml: ${id}`, "result/support = unknown"],
+        evidence: [`deps.jsonl: ${e.id}`, `result=${e.result ?? "?"} support=${e.support ?? "?"}`],
         source: "deps", severity: "medium", cost: "low",
       });
     }
@@ -132,7 +130,7 @@ export function propose(opts: { depsPath?: string; hypothesesPath?: string; limi
   const out: Proposal[] = [];
   collectRuns(out);
   collectTasks(out);
-  collectDeps(out, opts.depsPath || join(process.cwd(), "docs", "deps.yaml"));
+  collectDeps(out, opts.depsPath || join(process.cwd(), "docs", "deps.jsonl"));
   collectHypotheses(out, opts.hypothesesPath || join(process.cwd(), "docs", "hypotheses.md"));
   const seen = new Set<string>();
   return out

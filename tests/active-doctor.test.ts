@@ -6,9 +6,12 @@ import { spawnSync } from "node:child_process";
 
 let home: string, data: string, src: string;
 const cli = join(import.meta.dir, "..", "packages", "cli", "src", "index.ts");
+// 依赖登记用独立夹具：CI 上没有 opencode/dsh，不能拿仓库的 deps.jsonl 判 required 缺失
 const run = (args: string[], env: Record<string, string> = {}) => spawnSync("bun", [cli, ...args], {
   encoding: "utf8",
-  env: { ...process.env, DIA_HOME: home, DIA_DATA_DIR: data, DIA_OPENCODE_AGENTS_DIR: join(home, ".config/opencode/agents"), DIA_CACHE_DIR: join(data, "cache"), DIA_OPENCODE_CONFIG: join(home, "opencode.json"), ...env },
+  env: { ...process.env, DIA_HOME: home, DIA_DATA_DIR: data, DIA_DEPS_FILE: join(data, "deps.jsonl"),
+    DIA_OPENCODE_AGENTS_DIR: join(home, ".config/opencode/agents"), DIA_CACHE_DIR: join(data, "cache"),
+    DIA_OPENCODE_CONFIG: join(home, "opencode.json"), ...env },
 });
 
 beforeAll(() => {
@@ -18,6 +21,9 @@ beforeAll(() => {
   mkdirSync(join(src, "agents"), { recursive: true });
   writeFileSync(join(src, "agents", "yan.md"), "---\ndescription: yan\nmode: primary\n---\nYou are yan.\n");
   writeFileSync(join(home, "opencode.json"), JSON.stringify({ model: "m" }, null, 2) + "\n");
+  // 可选依赖缺失 = ok（不拉红），保证 doctor 判定只受 persona 状态影响
+  writeFileSync(join(data, "deps.jsonl"),
+    JSON.stringify({ id: "host_cli:ci-noop@1.0.0", kind: "host_cli", version: "1.0.0", role: "optional" }) + "\n");
 });
 
 function writePersona(version: string) {

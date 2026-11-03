@@ -188,7 +188,7 @@ TUI / CLI / Web / SDK  ← 都是客户端
 2. **强制控制放 dsh**：opencode 的 permission hook 只能观测（实测），不要把安全承诺建在它上面。
 3. **L1 只做观测与审计**：除非有官方文档明确"可阻断"，否则一律按"观测"实现，并用一次实跑验证。
 4. **永不 L2**：patch 宿主会导致升级即坏（dsh patch 覆写 preset 已出过事故）。
-5. **每条控制面都要登记**：进 `deps.yaml` 的 `kind: host_cli` 条目，记 version + verified_at。
+5. **每条控制面都要登记**：进 `deps.jsonl` 的 `kind: host_cli` 条目，记 version + verified_at。
 
 ---
 

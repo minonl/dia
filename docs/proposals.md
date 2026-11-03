@@ -23,7 +23,7 @@
 | 升级任务 | `tasks/ledger.jsonl` 状态 `escalated` | 每个 escalated 任务一条候选 |
 | 验证失败 | `runs/<id>/verify.json` conclusion ≠ 通过 | 反复失败优先 |
 | 对抗高危 | `runs/<id>/redteam.json` findings.severity=high | 每条高危一条候选 |
-| 依赖未验证 | `docs/deps.yaml` 的 `result: unknown` / `support: unknown` | 复核依赖 |
+| 依赖未验证 | `docs/deps.jsonl` 的 `result: unknown` / `support: unknown` | 复核依赖 |
 | 待验证假设 | `docs/hypotheses.md` 表格中的 `待验证`（按 `H1 / H2–H5` 展开为单条，并映射标题） | 低成本实验优先 |
 
 **不采集**：会话原文、凭据、用户消息内容；只用 id/计数/结论。

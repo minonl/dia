@@ -37,7 +37,8 @@
 1. `resolved` 用**可移植写法**（`command:opencode`、`~/...`），不写死某台机器的绝对路径。
 2. 人读视图由 `dia doctor` 派生（`deps` 项，`--json` 给机器）；**本文不抄登记数据**。
 3. `dia doctor` 判定：required 缺失 = `fail`；版本/路径漂移 = `warn`；可选未装 = note（不拉红）。
-4. 追加动作现在手工做（`dia deps record` 尚未实现）。
+4. 追加用 `dia deps record`（`--id/--kind/--version` 必填；`verified_at` 自动填当天，`method=manual`）；
+   看现状用 `dia deps list [--json]`（登记 + 实测，required 缺失 exit 2）。
 
 ---
 

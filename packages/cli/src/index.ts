@@ -11,6 +11,7 @@ import * as scope from "../../../src/scope.ts";
 import * as active from "../../../src/active.ts";
 import * as doctor from "../../../src/doctor.ts";
 import * as envx from "../../../src/env.ts";
+import * as deps from "../../../src/deps.ts";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -131,6 +132,8 @@ usage:
   dia persona path [<id>[@<ver>]] [--json]   # 打印生效版本目录（服务/脚本取代码入口）
   dia persona check <id>|update <id> [--ref REF]
   dia doctor [--persona ID] [--json]
+  dia deps list [--json] [--file PATH]        # 派生视图：登记 + 实测
+  dia deps record --id ID --kind K --version V [--resolved R] [--role required|optional] [--result pass|fail|unknown] [--evidence P]
   dia env list|check [KEY…] | env [--dry-run] [--redact] <cmd…>
   dia persona default <id>|--unset|--show [--host opencode]
   dia kit add --from SRC [--ref REF] [--dry-run] [--json]
@@ -855,6 +858,45 @@ export async function main(rawArgv: string[]): Promise<number> {
       out(`verdict: ${r.verdict}`);
     }
     return r.verdict === "ok" ? 0 : r.verdict === "warn" ? 1 : 2;
+  }
+  if (cmd === "deps") {
+    const [sub = "list", ...rest] = argv.slice(1);
+    const asJson = has(rest, "--json");
+    const file = flag(rest, "--file");
+    if (sub === "list") {
+      const rows = deps.load(file).map((e: any) => ({ ...e, check: deps.check(e) }));
+      if (asJson) out(JSON.stringify(rows, null, 1));
+      else if (!rows.length) out("（无登记）");
+      else for (const r of rows) out(`${r.check.status === "ok" ? "✓" : r.check.status === "warn" ? "!" : "✗"} ${r.check.detail}`);
+      return rows.some((r: any) => r.check.status === "fail") ? 2 : 0;
+    }
+    if (sub === "record") {
+      const id = flag(rest, "--id"), kind = flag(rest, "--kind"), version = flag(rest, "--version");
+      if (!id || !kind || !version) {
+        err("usage: dia deps record --id <kind:name@ver> --kind <host_cli|npm|bundle|datastore|model> --version <ver> [--resolved R] [--role required|optional] [--result pass|fail|unknown] [--evidence P] [--fallback X] [--integrity I] [--removal-after DATE] [--file PATH]");
+        return 2;
+      }
+      const entry: deps.DepEntry = {
+        id, kind, version,
+        resolved: flag(rest, "--resolved"),
+        integrity: flag(rest, "--integrity") || "unknown",
+        role: flag(rest, "--role") || "optional",
+        fallback: flag(rest, "--fallback"),
+        verified_at: new Date().toISOString().slice(0, 10),
+        verified_by: process.env.USER || "cli",
+        method: "manual",
+        result: flag(rest, "--result") || "unknown",
+        support: "active",
+        removal_after: flag(rest, "--removal-after"),
+        evidence: flag(rest, "--evidence"),
+      } as deps.DepEntry;
+      for (const k of Object.keys(entry) as (keyof deps.DepEntry)[]) if (entry[k] === undefined) delete (entry as any)[k];
+      const path = deps.append(entry, file);
+      out(asJson ? JSON.stringify(entry) : `recorded ${id} -> ${path}`);
+      return 0;
+    }
+    err("usage: dia deps list|record");
+    return 2;
   }
   // B：`dia cmd <name>` 只查 persona（外部）命令，允许与内置同名也不回退
   if (cmd === "cmd") {

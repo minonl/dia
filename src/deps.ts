@@ -4,7 +4,7 @@
 // 人读视图由 dia doctor 派生，不要在 md 里再抄一份。
 import { existsSync, readFileSync, mkdirSync, writeFileSync, chmodSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { execFileSync } from "node:child_process";
 
 export interface DepEntry {
@@ -138,7 +138,7 @@ export function summary(entries: DepEntry[]): { status: "ok" | "warn" | "fail"; 
 /** 把一条登记追加到文件（只追加；供后续 `dia deps record` 用）。 */
 export function append(entry: DepEntry, p?: string): string {
   const path = p ?? join(process.cwd(), "docs", "deps.jsonl");
-  mkdirSync(join(path, ".."), { recursive: true });
+  mkdirSync(dirname(path), { recursive: true });
   const line = JSON.stringify(entry) + "\n";
   const prev = existsSync(path) ? readFileSync(path, "utf8") : "";
   writeFileSync(path, prev.endsWith("\n") || !prev ? prev + line : prev + "\n" + line);

@@ -48,7 +48,7 @@ dia （控制面：persona / kit / kb / audit / job / wt）
 | persona | `add / create / render / list / verify / remove / show / use / path / check / update / default`（含 `--force`、`--dry-run`、`--check`） |
 | 内容包 | `kit add / list / verify / remove` |
 | 自检 | `doctor`（多 persona 逐个自检；`--persona` 单查；exit 0/1/2） |
-| 运行面 | `env list/check/run`、`wt …`、`cmd` / 一级委派、`task`、`team run/gate/accept/reject/next`、`job`、`price`、`version` |
+| 运行面 | `env list/check/run`、`deps list/record`、`wt …`、`cmd` / 一级委派、`task`、`team run/gate/accept/reject/next`、`job`、`price`、`version` |
 
 **未实现（有设计、无命令）**
 

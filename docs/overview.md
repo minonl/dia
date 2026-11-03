@@ -2,6 +2,7 @@
 
 > **2026-11-03 实测**。本条是三方合起来的「现在长什么样」；`docs/status.md` 管 dia 的阶段与证据，
 > 各域仓库管自己的知识与协议。**没跑过的不写「已验证」**；结论都能用 §6 的命令复验。
+> 长期方向（不是现状）见 [`vision.md`](vision.md)。
 
 ---
 
@@ -22,7 +23,7 @@ dia （控制面：persona / kit / kb / audit / job / wt）
 
 | 维度 | dia | yan | dabo |
 |---|---|---|---|
-| 角色 | 框架 / 控制面（无业务数据、无运行时） | 工作域 agent | 个人域 agent |
+| 角色 | superagent / agent-team 生成与维护工具（控制面，无业务数据、无运行时） | 工作域 superagent（工作域 · 偏前端） | 个人助理 superagent（游戏 / 生活 / 个人项目） |
 | 仓库 | `~/repos/github/dia`（`minonl/dia`，private） | `~/.yan-agent/repos/yan-agent` | `~/repos/github/dabo-agent` |
 | 安装产物 | `~/.local/share/dia` + `~/.local/bin/dia` | `~/.local/share/dia/personas/yan/0.1.0` + `~/.config/opencode/agents/yan.md` + `~/.dsh/profiles/yan` | 同构：`personas/dabo/0.1.0` + `agents/dabo.md` + `~/.dsh/profiles/dabo` |
 | 版本 | `0.0.1`（package `private`） | persona `0.1.0` | persona `0.1.0` |
@@ -104,6 +105,8 @@ $ dia --persona yan kb scene S1  → 正常出场景卡
 |---|---|---|
 | **现状（可依赖）** | `overview.md`（本文）、`status.md`、`cli.md §4.1`、`persona-install.md`、`monorepo.md`、`team.md`、`pricing.md`、`migrations/yan-agent-current.md` | 与代码/本机一致 |
 | **设计（部分未实现）** | `architecture.md`、`framework-bootstrap.md`、`entrypoints.md`、`kit-install.md`、`versioning.md`、`patching.md`、`team-automation.md`、`security-sandbox.md`、`dependency-registry.md`、`acp-integration.md`、`proposals.md` | 保留意图，文首/文中标注实现范围 |
+| **方向（不是现状）** | `vision.md` | 长期定位：superagent/team 工厂、平台版本经验库、fleet（openrig）边界 |
+| **宿主经验** | `hosts/index.md` | opencode/dsh 版本矩阵、已知坑、验证命令 |
 | **理论 / 研究** | `evolution-process.md`、`model-behavior.md`、`model-baseline-sidecar.md`、`host-control-surface.md`、`ecosystem-*.md`、`research/*` | 供推导，不作为现状 |
 | **留痕** | `migrations/*`（除 current）、`review/*`、`research/h0/*` | 当时结论，可能被后续推翻 |
 

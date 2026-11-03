@@ -2,6 +2,7 @@
 
 > 日期 2026-10-28。
 > 一句话：**dia 不做通道、不做运行时、不做记忆产品；dia 做"进化的控制面"——观测、审计、基准、门禁。**
+> 长期形态（superagent / agent-team 工厂、fleet 对接）见 [`vision.md`](vision.md)；本文的"不做"边界仍然有效。
 > 通道用 dws-hub，执行用 dsh/opencode，其他 agent 只当可选后端。
 
 ---

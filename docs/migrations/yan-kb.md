@@ -18,7 +18,7 @@
 - §4 抽取顺序：定义契约 `kb search/get/lint` → framework 最小版 → **先切 yan-kb 的检索** → dabo → kit。
 - 判据：同一查询 20 条结果集一致；索引重建哈希一致；yan 一周无回归。
 
-`docs/framework-bootstrap.md` §3：
+`docs/history/framework-bootstrap.md` §3：
 
 ```text
 kb index [--root]

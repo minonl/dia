@@ -25,7 +25,7 @@
 | `dependency-registry.md` / `deps.jsonl` | 依赖登记格式（只追加） | **现行**：`deps.jsonl` 是单一事实源，`dia doctor` 派生校验（M1） |
 | `versioning.md` | 多版本、semver、激活模式 | **部分**：多版本 + `use` 已实现；`activation` 未实现 |
 | `architecture.md` | 三层职责、知识存储选型、抽取顺序 | **设计**（§7 待定已全部落定，见文内 2026-11-03 注） |
-| `framework-bootstrap.md` | 早期启动与分发选型 | **过时**：实际分发是 `install.sh`，无 release tarball / `agentctl` / `framework.lock` |
+| `history/framework-bootstrap.md` | 早期启动与分发选型（已归档） | **归档**：方案未采用，实际分发是 `install.sh`，不要按它部署 |
 | `entrypoints.md` | 用户入口矩阵 | **部分过时**：终端 dabo preset 已渲染；IM bridge 未写；`dia status` / `dia model` 不存在 |
 | `kit-install.md` | kit 清单、渲染、生命周期 | **设计**：实现只有 `add/list/verify/remove`；`show/update/gc/create` 未做 |
 | `patching.md` | 本地 patch | **未实现**（`unknown command`） |
@@ -89,6 +89,7 @@
 | D0.20 | 组合自检 | **完成** | `dia doctor`（persona/kit/knowledge/dsh preset/wt；exit 0/1/2） |
 | D0.21 | worktree 抽取 `packages/wt` | **完成** | 7 处 python→node；`dia wt`；4 套测试原样迁移全绿 |
 | D0.23 | doctor 平台版本自检 | **完成** | `platform:opencode` / `platform:dsh` 报版本（缺宿主 = warn，不判红）；`tests/active-doctor.test.ts` |
+| D0.30 | 清理过期内容 | **完成** | `docs/framework-bootstrap.md` → `docs/history/`（归档并标注不采用）；删除 `doctor.ts` 未用常量；全仓无 `deps.yaml` 残留引用 |
 | D0.29 | audit 哈希链（M3） | **完成**（团队自动循环 + 人工修正） | `audit append` 写 `seq/prev_hash/hash`；`audit verify --chain`；锚点 `audit/head.json`（原子写，截断/锚点缺失 fail-closed）；mkdir 锁串行化写入；坏行判链断点；`tests/audit.test.ts` 35 例 |
 | D0.28 | ACP 默认超时 10 分钟 | **完成** | `DEFAULT_ACP_TIMEOUT=600000`（180s 实测会掐断 builder）；`tests/team.test.ts` |
 | D0.27 | doctor 知识索引新鲜度 | **完成**（团队自动循环产出） | `packages/kb` 的 `indexStatus`（只读探测，不建目录）+ doctor 三态：目录缺失 fail / 索引缺失·落后·外部根 warn（带重建命令）/ 一致 ok；`tests/active-doctor.test.ts` |

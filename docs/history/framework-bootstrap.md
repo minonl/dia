@@ -1,3 +1,6 @@
+> **已归档（2026-11-03）**：本文的启动/分发方案（release tarball + `agentctl` + `framework.lock`）未采用；
+> 实际是 `bun run build` + `bash install.sh`。保留作为早期决策记录，不要按它部署。
+
 # 框架启动方案（bootstrap）
 
 > 日期 2026-10-27。配合 `docs/architecture.md`。

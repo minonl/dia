@@ -33,7 +33,6 @@ function platformChecks(): Check[] {
   if (!reg) return [{ name: "platforms", status: "warn", detail: "平台注册表未安装（docs/platforms/registry.json）" }];
   return platforms.checks(reg).map((c) => ({ ...c, status: c.status as Check["status"] }));
 }
-const dataDir = () => process.env.DIA_DATA_DIR || join(home(), ".local", "share", "dia");
 
 /** detail 里的重建命令要能直接复制执行：含 shell 元字符时加单引号（导出仅为单测覆盖转义）。 */
 export function quoteArg(v: string): string {

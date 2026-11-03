@@ -6,7 +6,7 @@
 > 长期定位看 [`docs/vision.md`](docs/vision.md)：superagent / agent-team 工厂、平台版本经验库、fleet 边界。
 
 > 定位：dabo-agent（个人域）与 yan-agent（工作域）共用的底层能力。
-> 设计见 [`docs/architecture.md`](docs/architecture.md)，启动方案见 [`docs/framework-bootstrap.md`](docs/framework-bootstrap.md)。
+> 设计见 [`docs/architecture.md`](docs/architecture.md)，现状见 [`docs/overview.md`](docs/overview.md)。
 
 ## 三层
 

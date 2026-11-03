@@ -12,7 +12,7 @@
 
 ```bash
 git status --short          # 期望：空（工作树干净）
-git log --oneline -1        # 期望：cf29fc5 docs: yan dsh host migrated（或其后继）
+git log --oneline -1        # 期望：当前 main HEAD（不要写死提交号）
 bun run test                # 期望：188 pass / 0 fail + smoke OK + E2E-1 OK (node)
 dia persona list            # 期望：dabo: 0.1.0 / yan: 0.1.0
 dia persona verify dabo     # 期望：ok <persona 目录>
@@ -99,6 +99,7 @@ f8c0767 feat: persona create/render   ← 本轮主功能
 
 ```bash
 cd ~/repos/github/dia
+sed -n '1,80p'  docs/overview.md    # 三方现状（dia/yan/dabo）+ 已知缺口
 sed -n '1,120p' docs/status.md      # 状态表 + 判决 + 待决策
 sed -n '1,80p'  docs/persona-install.md   # 安装命令面（本轮改的就是它）
 # 选一个 §4 待决策 → 用 dia wt create 开 worktree → 按 D1 判据开工

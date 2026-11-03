@@ -2,6 +2,9 @@
 
 > 日期 2026-10-30。前置：`docs/persona-install.md`（persona = 人格，kit = 内容）。
 > 本文只定 **kit 的清单格式、渲染规则、生命周期、边界**；实现拆到 P1/P2/P3。
+>
+> **2026-11-03 实现状态**：只有 `dia kit add / list / verify / remove`；本文出现的 `kit show`、`kit update`、
+> `kit gc`、`kit create` 仍是设计。persona 自带的 `files/skills/dirs/config` 内联内容已由 `persona add` 承担。
 
 ---
 

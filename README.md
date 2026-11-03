@@ -2,6 +2,8 @@
 
 轻量 agent 框架：**预设注入 + 知识索引 + 审计/止血 + 会话采集**。
 
+> **现状先看 [`docs/overview.md`](docs/overview.md)**：dia / yan / dabo 三方对照、能力面、已知缺口、文档地图。
+
 > 定位：dabo-agent（个人域）与 yan-agent（工作域）共用的底层能力。
 > 设计见 [`docs/architecture.md`](docs/architecture.md)，启动方案见 [`docs/framework-bootstrap.md`](docs/framework-bootstrap.md)。
 

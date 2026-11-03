@@ -49,7 +49,7 @@ dia --persona dabo doctor
 | 宿主 | 产物 | 是否改默认 |
 |---|---|---|
 | opencode | `~/.config/opencode/agents/dabo.md` | **否**（用户自己切） |
-| dsh | `~/.dsh/profiles/dabo/`（独立 profile，端口 3090） | **否**（`dsh --profile dabo`） |
+| dsh | `~/.dsh/profiles/dabo/`（独立 profile；webserver 端口动态，默认回退 1111） | **否**（`dsh --profile dabo`） |
 | 记录 | `deps.yaml` + `dia.lock` | — |
 
 原则：**只新增，不改 yan；默认 agent 必须显式 `persona default` 才动。**
@@ -175,7 +175,7 @@ staged dabo@v2 (commit abc123)
 
 - `dia persona add --from ~/repos/github/dabo-agent` → 同时渲染 opencode agent + dsh profile；
 - `opencode debug agents` 出现 `dabo`，**默认仍是 `yan`**；
-- `dsh --profile dabo` 启动正常（webserver 3090，避开被占用的 3080）；
+- `dsh --profile dabo` 启动正常（当时 webserver 3090，避开 3080；2026-11 起 dabo-agent 改为动态端口，默认回退 1111）；
 - yan 的 agent/profile 未改动。
 
 > 2026-11-01 补：`dia persona create` / `dia persona render` 已实现（此前只有文档）。

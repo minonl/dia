@@ -1,5 +1,7 @@
 # dia 外部依赖登记（只追加；升级新增一行，不改旧行）
 # 字段见 docs/dependency-registry.md §1
+# 2026-11-03 复核：本文件只是登记，doctor 尚未校验（M1）；其中 resolved 已与真实环境脱节
+#   （/opt/homebrew/bin/opencode 不存在、acpx 不在 PATH）。按平台解析前不要把它当健康断言。
 - id: host_cli:opencode@2.1.3
   kind: host_cli
   version: 2.1.3

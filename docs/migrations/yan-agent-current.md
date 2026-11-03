@@ -1,6 +1,6 @@
 # yan-agent 切到 dia：本机现状与剩余迁移
 
-> 2026-11-02。yan-agent 远端 main 已合入 `yan-agent@next`（dia persona 形态）。
+> 2026-11-02 初版，**2026-11-03 复核**。yan-agent 远端 main 已合入 `yan-agent@next`（dia persona 形态）。
 > 本文记录本机切换结果和**还没迁完**的部分；事实源仍是本机实际路径。
 
 ## 已完成
@@ -23,13 +23,14 @@
 | # | 缺口 | 影响 | 下一步 |
 |---|---|---|---|
 | 1 | ✅ dsh host 已补：`platform/dsh/yan-persona`（端口 3091），`doctor` preset 可加载 | — | — |
-| 2 | `yan-env` 仍是旧实现 | 凭据注入仍走旧脚本，未接 `dia env` | 评估 `dia env` 能力后 shim/迁移 |
-| 3 | `yan-version` / `yan-ref` 仍是旧实现 | active-ref 迁移未收口 | 按 `active-ref-design.md` 的剩余消费方迁移 |
-| 4 | `yan-data-root` / `yan-data-sync` 仍是旧脚本 | 数据根契约未统一 | 评估是否进 dia 或保留域脚本 |
+| 2 | `yan-env` 仍是旧实现 | 凭据注入仍走旧脚本，未接 `dia env`（`dia env list/check/run` 已可用，白名单/redact/不进 argv） | 评估 `dia env` 后 shim/迁移 |
+| 3 | `yan-version` / `yan-ref` 仍是旧实现 | `dia persona show/use/path` 已覆盖"生效版本"；旧脚本未收口 | 按 `active-ref-design.md` 的剩余消费方迁移 |
+| 4 | `yan-data-root` / `yan-data-sync` 仍是旧脚本 | 数据根契约未统一（`dia` 的 scope 已能注入 `DIA_DATA_ROOT_SCOPE`） | 评估是否进 dia 或保留域脚本 |
 | 5 | 本地 untracked `scripts/yan-kb|yan-task|yan-worktree` | 旧文件仍可能被误用 | 观察一轮后删除，统一走 shim |
 | 6 | 仓库 README/rules 仍写旧命令 | 文档与 AGENTS 漂移 | 批量改 `yan-kb`→`dia --persona yan kb`、`yan-worktree`→`dia wt` |
 | 7 | ✅ launchd 已复核：清 `--help`/`demo-isolated`，selfcheck 指向稳定 shim | 缺失 0；`dia job list` 无测试残留 | — |
 | 8 | `dia persona check` 显示 local-only | 未跟踪上游 commit | 需要上游 ref/更新策略 |
+| 9 | **安装落后来源仓**：persona 装的是 `83fbaa9`，`~/.yan-agent/repos/yan-agent` main 已是 `8d10cc5` | 差的提交是 dsh profile 根 `cordis.yml` 修复 | `dia persona add yan --from ~/.yan-agent/repos/yan-agent --force`（先备份） |
 
 ## 本机验证命令
 

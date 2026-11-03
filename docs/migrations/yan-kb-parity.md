@@ -3,6 +3,9 @@
 > 2026-10-30。触发：9 条 query golden 上，旧实现规则召回 10/12、top1 5/9；
 > dia top1 5/9、1/9 零命中。现有方案只能证明“调用切换”，不能证明“能力兼容”。
 > 本文件定义兼容边界、质量门禁、单引擎架构与 K2.1–K2.4 计划。
+>
+> **2026-11-03 复核**：`yan-agent` main 已切 dia 引擎（`dia.json` 的 `kb` 命令委派到 `scripts/kb-domain.mjs`，
+> 默认 `YAN_KB_ENGINE=dia`），文中「仅切 next / main 仍旧」是当时状态；`YAN_KB_ENGINE=old` 保留为临时回滚。
 
 ---
 

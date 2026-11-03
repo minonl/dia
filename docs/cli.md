@@ -28,6 +28,9 @@
 
 ## 2. 名词与子命令
 
+> **2026-11-03 注**：下面的 `kit create/update/show`、`patch`、`persona activation` 是**目标态**；
+> 实际已实现的命令与证据见 §4.1（`persona activation`、`patch` 当前是 `unknown command`）。
+
 ```
 dia persona add|remove|create|update|render|verify|list|show
 dia kit     add|remove|create|update|verify|list|show

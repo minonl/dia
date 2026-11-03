@@ -7,29 +7,36 @@
 
 ## 1. 文档清单
 
-| 文档 | 内容 | 状态 |
+> 三方合起来的现状看 [`overview.md`](overview.md)；本页只管 dia 自己的阶段与证据。
+
+| 文档 | 内容 | 状态（2026-11-03） |
 |---|---|---|
-| `HANDOFF.md`（仓库根） | **交接入口**：复验判据 / 接手须知 / 坑 / 待决策指针 | 现行（2026-11-02） |
-| `docs/evolution-process.md` | `(T,D,O)`、V 型、深度、压缩 | 现行 |
-| `docs/security-sandbox.md` | 单 seam、默认档位、fail-closed | 现行（部分未实现） |
-| `docs/host-control-surface.md` | opencode/dsh 控制面 L0/L1/L2 | 现行 |
-| `docs/model-behavior.md` | 客户端模型调控、五家对照 | 现行 |
-| `docs/model-baseline-sidecar.md` | 首次基准 + 事故 sidecar + 观察名单 | 现行 |
-| `docs/dependency-registry.md` / `deps.yaml` | 依赖登记与原始记录 | 现行（`dia doctor` 已实现，但**不校验 deps.yaml**） |
-| `docs/ecosystem-integration.md` | 插件/ACP/包格式 | 现行 |
-| `docs/ecosystem-positioning.md` | 常驻入口与生态位（dws-hub 优先） | 现行 |
-| `docs/entrypoints.md` | 用户入口与 agent 命名（dabo ≠ dia） | 现行 |
-| `docs/persona-install.md` | persona/kit 安装：git → opencode/dsh 渲染 | 现行（add/list/verify/remove/show/use/path/check/update/default/create/render 全部已实现；仅 activation 热更新未实现） |
-| `docs/cli.md` | CLI 动作词表（add/remove/create/update/render/verify/use/path/check/default） | 现行（§4.1 状态表 2026-11-02 复核） |
-| `docs/versioning.md` | 多版本、semver/双重审查、激活模式 | 现行 |
-| `docs/patching.md` | 本地 patch 设计 | 现行（**未实现**，`dia patch` 仍是 unknown command） |
-| `docs/research/*` | 理论、基准、生态、opencode 会话分区 | 现行 |
-| `docs/research/h0/*` | H0 三层覆盖实验：样本、标注、报告 | 留痕 |
-| `docs/migrations/yan-agent-next.md` | yan-agent@next → dia 的边界与阶段 | 现行 |
-| `docs/review/*` | 复用评审、验证报告 | 留痕 |
-| `docs/team.md` | 开发团队 4+3 | 现行 |
-| `docs/team-automation.md` | 全自动循环与验收包 | 现行（未实现） |
-| `docs/architecture.md` / `framework-bootstrap.md` | 早期架构与启动方案 | **部分过时**（以本页为准） |
+| `overview.md` | **三方现状**：dia/yan/dabo 对照、能力面、缺口、文档地图 | 现行 |
+| `HANDOFF.md`（仓库根） | 交接入口：复验判据 / 接手须知 / 坑 / 待决策指针 | 现行 |
+| `status.md` | 本页：阶段、判决、待决策 | 现行 |
+| `cli.md` | CLI 词表 + §4.1 实现状态 | 现行 |
+| `persona-install.md` | persona/kit 安装：git → opencode/dsh 渲染 | 现行 |
+| `monorepo.md` | core / kb / job / cli / wt 布局 | 现行 |
+| `team.md` | 开发团队 4+3 | 现行 |
+| `pricing.md` | 计价表与 `price` 命令 | 现行 |
+| `dependency-registry.md` / `deps.yaml` | 依赖登记格式 | **登记现行；校验未实现（M1）**；`deps.yaml` 的 `resolved` 已与真实环境脱节 |
+| `versioning.md` | 多版本、semver、激活模式 | **部分**：多版本 + `use` 已实现；`activation` 未实现 |
+| `architecture.md` | 三层职责、知识存储选型、抽取顺序 | **设计**（§7 待定已全部落定，见文内 2026-11-03 注） |
+| `framework-bootstrap.md` | 早期启动与分发选型 | **过时**：实际分发是 `install.sh`，无 release tarball / `agentctl` / `framework.lock` |
+| `entrypoints.md` | 用户入口矩阵 | **部分过时**：终端 dabo preset 已渲染；IM bridge 未写；`dia status` / `dia model` 不存在 |
+| `kit-install.md` | kit 清单、渲染、生命周期 | **设计**：实现只有 `add/list/verify/remove`；`show/update/gc/create` 未做 |
+| `patching.md` | 本地 patch | **未实现**（`unknown command`） |
+| `team-automation.md` | 计划→实现→验证全自动循环 | **未实现**（D0.6–D0.9 只跑通 mock / ACP 驱动） |
+| `proposals.md` | `team next` 目标候选 | **v0 已实现**（`dia team next`，纯规则打分） |
+| `security-sandbox.md` | 沙箱单 seam、档位、fail-closed | **部分未实现**（S4–S7） |
+| `security/public-release.md` | 公开 release 门禁 | **BLOCKED until audit** |
+| `acp-integration.md` / `ecosystem-*.md` | ACP 与生态选型 | **设计 / 参考**（server 未做） |
+| `model-behavior.md` / `model-baseline-sidecar.md` | 客户端模型调控、基准 sidecar | **有据，未实施**（D2） |
+| `evolution-process.md` | `(T,D,O)`、V 型、压缩 | **理论**（D3 未实施） |
+| `host-control-surface.md` | opencode/dsh 控制面 L0/L1/L2 | 参考 |
+| `migrations/yan-agent-current.md` | yan → dia 迁移现状 | **现行** |
+| `migrations/*`（其余） | 当时的迁移/清理结论 | **留痕**：可能已被推翻（`yan-kb-parity` 的「main 仍旧」已过期） |
+| `research/*`、`review/*`、`research/h0/*` | 实验与验证报告 | **留痕** |
 
 ---
 

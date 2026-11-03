@@ -2,6 +2,9 @@
 
 > 日期 2026-10-28。
 > 一句话：**入口仍是 opencode/dsh（和 yan 一样），但 agent 名是 `dabo`，不是 `dia`；`dia` 是控制面命令，不是人格。**
+>
+> **2026-11-03 复核**：终端入口已落地（`~/.config/opencode/agents/dabo.md` + `~/.dsh/profiles/dabo`）；
+> IM bridge 仍未写；文中出现的 `dia status` / `dia model` **不存在**，观测入口目前是 `dia doctor`。
 
 ---
 
@@ -21,10 +24,10 @@
 
 | 入口 | 形态 | 跑什么 | 现状 |
 |---|---|---|---|
-| **终端（主）** | `opencode`（agent=dabo）/ `dsh`（preset=dabo） | 交互式会话 | 待渲染 dabo preset（yan 已有） |
+| **终端（主）** | `opencode`（agent=dabo）/ `dsh`（profile=dabo） | 交互式会话 | **已渲染**（yan 同构，profile 3091；dabo 端口动态） |
 | **IM（异步）** | 钉钉 → dws-hub → dia bridge | 建任务 → 后端执行 → 草稿回复 | bridge 未写 |
 | **自动化** | launchd → `dsh headless` / `dia run` | 批处理、canary、巡检 | 部分有 |
-| **控制面** | `dia status/doctor/model/audit` | 观测、审计、基准 | 已有 |
+| **控制面** | `dia doctor` / `audit` / `kb` / `price` | 观测、审计、知识、计价 | 已有（`status` / `model` 未实现） |
 
 **没有第四种"dia 自带界面"**：dia 不拥有运行时，也不做 TUI。
 
@@ -65,8 +68,8 @@ dsh:       profile bundle: dabo-preset           （dsh-agent-preset + persona +
 | 失败 | 用户看到 | 行为 |
 |---|---|---|
 | dabo preset 未渲染 | `dia doctor` 报 `preset dabo missing`；opencode 里看不到 `dabo` | **不静默回退到默认 agent**；提示渲染命令 |
-| ACP 不可用 | `dia status` 标 degraded；`dia run` 一行提示回退 CLI | 交互可用，审计降级 |
-| dws-hub 未运行 | bridge 不启动；`dia status` 显示 `channel: down` | IM 入口不可用，终端入口不受影响 |
+| ACP 不可用 | `dia run` 报错，不静默回退 | 交互可用，审计降级（degraded 状态未实现） |
+| dws-hub 未运行 | bridge 未写，无入口 | IM 入口不可用，终端入口不受影响 |
 | 策略未加载 | **拒绝高风险动作**（不是回退到无策略） | 只读/草稿可用 |
 
 原则：**入口可以少，策略不能悄悄没。**

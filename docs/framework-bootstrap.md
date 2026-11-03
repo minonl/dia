@@ -2,6 +2,10 @@
 
 > 日期 2026-10-27。配合 `docs/architecture.md`。
 > 目标：先把"会话采集 + 知识检索"这条最小闭环跑起来，再谈其他。
+>
+> **2026-11-03 现状**：分发**没有**按本文的 A 方案做（无 release tarball、无 `agentctl`、无 `framework.lock`）。
+> 实际是 `bun run build` + `bash install.sh` → `~/.local/share/dia` + `~/.local/bin/dia`；
+> 版本只有 `package.json` 的 0.0.1，未发布。本文保留早期选型过程，**不要按它部署**。
 
 ## 1. 仓库与分发
 

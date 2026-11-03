@@ -157,9 +157,10 @@ dia 不拥有运行时；执行后端按场景选：
 
 ---
 
-## 7. 待定
+## 7. 早期待定 → 2026-11-03 结论
 
-1. framework 项目叫什么、放哪（新 repo？私有？）。
-2. 知识存储是否按 C 方案（md 主存 + 派生 FTS5）。
-3. 抽取顺序是否按"yan 先行、dabo 跟随"。
-4. kit 的最小粒度（知识按目录？技能按 skill？工具带不带测试）。
+1. **名字 / 位置**：叫 `dia`，仓库 `minonl/dia`（private），装到 `~/.local/share/dia` + `~/.local/bin/dia`。
+2. **知识存储**：按 C 方案落地——md 主存 + 派生 sqlite/FTS5 索引（`dia kb index/search/query`），索引可删可重建。
+3. **抽取顺序**：yan 先行、dabo 第二消费者，均已成 dia persona（`dia persona add`），工作域 / 个人域各一套知识根与数据根。
+4. **kit 最小粒度**：**仍未定**。实际只用到 `add/list/verify/remove`，大部分内容由 persona 的
+   `files/skills/dirs/config` 内联承担；`kit show/update/gc` 未实现。

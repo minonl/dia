@@ -12,11 +12,11 @@
 
 ```bash
 git status --short          # 期望：空（工作树干净）
-git log --oneline -1        # 期望：b7322a6 fix: dsh 模型不再写死（或其后继）
-bun run test                # 期望：175 pass / 0 fail + smoke OK + E2E-1 OK (node)
-dia persona list            # 期望：dabo: 0.1.0
+git log --oneline -1        # 期望：cf29fc5 docs: yan dsh host migrated（或其后继）
+bun run test                # 期望：188 pass / 0 fail + smoke OK + E2E-1 OK (node)
+dia persona list            # 期望：dabo: 0.1.0 / yan: 0.1.0
 dia persona verify dabo     # 期望：ok <persona 目录>
-dia doctor                  # 期望：verdict: ok（7 项全 ✓）
+dia doctor                  # 期望：verdict: ok（多 persona 时逐项列出 <id>.persona …）
 ```
 
 2026-11-02 实测：**上述全部通过**（175 tests / 26 files / 17.09s；doctor 7 项 ✓）。
@@ -86,7 +86,9 @@ f8c0767 feat: persona create/render   ← 本轮主功能
 
 | 缺口 | 影响 | 出处 |
 |---|---|---|
-| `deps.yaml` 里的 `resolved` 是 **macOS 路径**（`/opt/homebrew/bin/opencode`、`fnm/...`） | 本机为 Linux，`dia doctor` 的依赖项校验若按路径比对会误报；M1 落地时须按平台解析或标 `integrity: unknown` 免责 | `docs/deps.yaml` |
+| `deps.yaml` 里的 `resolved` 是 **macOS 路径**（`/opt/homebrew/bin/opencode`、`fnm/...`） | `dia doctor` 的依赖项校验未做，登记项与真实可执行文件可能已经不一致（2026-11-03 实测：`/opt/homebrew/bin/opencode` 不存在、`acpx` 不在 PATH，doctor 仍报 ok）；M1 落地时须按平台解析或标 `integrity: unknown` 免责 | `docs/deps.yaml` |
+| **本地目录安装的 persona 无法 `update`** | `update` 拒绝 local 源（`E_SOURCE`）；旧产物与源不同时 `add` 报 `E_CONFLICT`。可用 `dia persona add … --from <dir> --force`（覆盖前备份）刷新，但 `update` 仍未支持本地源 | `src/persona.ts`；`docs/cli.md §4.1` |
+| dabo 安装树是旧版本（`dia.json` 无 `knowledge`/`commands`/`data_root`） | 修复前 `--persona dabo kb` 会回落到 cwd 索引；需用 `--force` 重装刷新（2026-11-03 已定位，未执行） | `~/.local/share/dia/personas/dabo/0.1.0/` |
 | `persona activation` 模式未实现 | 只能手动 `default`/`use`，无按会话激活 | `docs/persona-install.md` |
 | `patches` / `team-automation` / npm 发布 / ACP server | 未开始 | `docs/status.md` §3 |
 | 公开 release gate | **BLOCKED until audit**（脱敏 + 历史清洁 + `dia-security` pass） | `docs/security/public-release.md` |

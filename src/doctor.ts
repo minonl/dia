@@ -3,7 +3,7 @@
 // 只做组合与判定，不实现检查逻辑：
 //   persona verify / kit verify / default_agent / kb 索引 / wt 包 / job 包
 // 退出码：0 全绿；1 有 warn；2 有 fail（便于脚本与 CI 判定）
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import * as persona from "./persona.ts";
@@ -17,69 +17,104 @@ export interface Check { name: string; status: "ok" | "warn" | "fail"; detail: s
 const home = () => process.env.DIA_HOME || homedir();
 const dataDir = () => process.env.DIA_DATA_DIR || join(home(), ".local", "share", "dia");
 
-export function run(opts: { persona?: string } = {}): { persona: string | null; checks: Check[]; verdict: "ok" | "warn" | "fail" } {
+/**
+ * 单个 persona 的作用域检查。`prefix` 用于多 persona 场景区分条目（如 `dabo.persona`）。
+ * 显式指定了不存在的 persona ⇒ 只报 scope fail，不再顺手报「未安装任何 persona」（旧行为会自相矛盾）。
+ */
+function personaChecks(id: string, prefix: string): Check[] {
   const checks: Check[] = [];
   let sc: scope.Scope | null = null;
-  try { sc = scope.current(opts.persona); }
+  try { sc = scope.current(id); }
   catch (e: any) { checks.push({ name: "scope", status: "fail", detail: e?.message || String(e) }); }
+  if (!sc) return checks;
 
-  if (!sc) {
-    checks.push({ name: "persona", status: "warn", detail: "未安装任何 persona（dia persona add …）" });
-  } else {
-    const eff = active.effective(sc.id);
-    checks.push({
-      name: "persona",
-      status: "ok",
-      detail: `${sc.id}@${sc.version}（生效来源：${eff?.source === "active" ? "active 指针" : "最新安装"}）`,
-    });
-    try {
-      const v = persona.verify(sc.id, sc.version);
-      checks.push({ name: "persona.verify", status: v.ok ? "ok" : "fail", detail: v.ok ? "内容哈希一致" : (v.issues[0] ?? "drift") });
-    } catch (e: any) { checks.push({ name: "persona.verify", status: "fail", detail: e?.message }); }
+  const eff = active.effective(sc.id);
+  checks.push({
+    name: `${prefix}persona`,
+    status: "ok",
+    detail: `${sc.id}@${sc.version}（生效来源：${eff?.source === "active" ? "active 指针" : "最新安装"}）`,
+  });
+  try {
+    const v = persona.verify(sc.id, sc.version);
+    checks.push({ name: `${prefix}persona.verify`, status: v.ok ? "ok" : "fail", detail: v.ok ? "内容哈希一致" : (v.issues[0] ?? "drift") });
+  } catch (e: any) { checks.push({ name: `${prefix}persona.verify`, status: "fail", detail: e?.message }); }
 
-    // 默认 agent 只是**信息项**：dia 的契约就是「只新增、不改默认」，
-    // 因此默认指向别处（或未设置）都不算不健康——不要越界替用户判红。
-    try {
-      const d = persona.showDefaultAgent({ host: "opencode" });
-      checks.push({
-        name: "default_agent",
-        status: "ok",
-        detail: d.current
-          ? `当前 ${d.current}${d.current === sc.id ? "" : "（dia 不自动切换）"}`
-          : "未设置（dia 不自动设置）",
-      });
-    } catch (e: any) { checks.push({ name: "default_agent", status: "warn", detail: e?.message }); }
-
-    // kit 校验
-    const installed = kit.list();
-    if (!installed.length) checks.push({ name: "kits", status: "ok", detail: "无独立 kit（内容由 persona 自带）" });
-    for (const k of installed) {
-      for (const v of k.versions) {
-        try {
-          const r = kit.verify(k.id, v);
-          checks.push({ name: `kit:${k.id}@${v}`, status: r.ok ? "ok" : "fail", detail: r.ok ? "一致" : r.drift.join("; ") });
-        } catch (e: any) { checks.push({ name: `kit:${k.id}@${v}`, status: "fail", detail: e?.message }); }
+  // kit 校验
+  const installed = kit.list();
+  if (!installed.length) checks.push({ name: `${prefix}kits`, status: "ok", detail: "无独立 kit（内容由 persona 自带）" });
+  for (const k of installed) {
+    for (const v of k.versions) {
+      try {
+        const r = kit.verify(k.id, v);
+        checks.push({ name: `${prefix}kit:${k.id}@${v}`, status: r.ok ? "ok" : "fail", detail: r.ok ? "一致" : r.drift.join("; ") });
+      } catch (e: any) {
+        checks.push({ name: `${prefix}kit:${k.id}@${v}`, status: "fail", detail: e?.message });
       }
     }
-
-    // 知识根可读 + 索引是否落后
-    if (sc.knowledgeRoot) {
-      checks.push({ name: "knowledge", status: existsSync(sc.knowledgeRoot) ? "ok" : "fail", detail: sc.knowledgeRoot });
-    }
-
-    // 宿主 dsh 的 preset 自检（dsh 不装 / 没渲染 profile 时跳过）
-    const profiles = process.env.DIA_DSH_PROFILES_DIR || join(home(), ".dsh", "profiles");
-    const preset = dsh.checkPreset(sc.id, join(profiles, sc.id));
-    checks.push({
-      name: "dsh.preset",
-      status: preset.issues.length ? "fail" : "ok",
-      detail: preset.issues[0] ?? preset.skipped ?? "preset 插件配置可加载",
-    });
   }
+
+  // 知识根可读 + 索引是否落后
+  if (sc.knowledgeRoot) {
+    checks.push({ name: `${prefix}knowledge`, status: existsSync(sc.knowledgeRoot) ? "ok" : "fail", detail: sc.knowledgeRoot });
+  }
+
+  // 宿主 dsh 的 preset 自检（dsh 不装 / 没渲染 profile 时跳过）
+  const profiles = process.env.DIA_DSH_PROFILES_DIR || join(home(), ".dsh", "profiles");
+  const preset = dsh.checkPreset(sc.id, join(profiles, sc.id));
+  checks.push({
+    name: `${prefix}dsh.preset`,
+    status: preset.issues.length ? "fail" : "ok",
+    detail: preset.issues[0] ?? preset.skipped ?? "preset 插件配置可加载",
+  });
+  return checks;
+}
+
+export function run(opts: { persona?: string } = {}): {
+  persona: string | null;
+  personas: string[];
+  checks: Check[];
+  verdict: "ok" | "warn" | "fail";
+} {
+  const checks: Check[] = [];
+  const explicit = opts.persona || process.env.DIA_PERSONA;
+
+  // 不指定 persona：装了多个就**逐个自检**（旧行为是整体 fail，等于多 persona 机器上 doctor 不可用）。
+  let ids: string[] = [];
+  if (explicit) ids = [explicit];
+  else {
+    try {
+      const s = scope.current();
+      if (s) ids = [s.id];
+    } catch { ids = scope.installedPersonas(); }
+  }
+
+  if (!ids.length) {
+    checks.push({ name: "persona", status: "warn", detail: "未安装任何 persona（dia persona add …）" });
+  }
+
+  const multi = ids.length > 1;
+  let primary: scope.Scope | null = null;
+  for (const id of ids) {
+    checks.push(...personaChecks(id, multi ? `${id}.` : ""));
+    if (!primary) { try { primary = scope.current(id); } catch { /* scope 检查里已报 */ } }
+  }
+
+  // 默认 agent 只是**信息项**：dia 的契约就是「只新增、不改默认」，
+  // 因此默认指向别处（或未设置）都不算不健康——不要越界替用户判红。
+  try {
+    const d = persona.showDefaultAgent({ host: "opencode" });
+    checks.push({
+      name: "default_agent",
+      status: "ok",
+      detail: d.current
+        ? `当前 ${d.current}${primary && d.current !== primary.id ? "（dia 不自动切换）" : ""}`
+        : "未设置（dia 不自动设置）",
+    });
+  } catch (e: any) { checks.push({ name: "default_agent", status: "warn", detail: e?.message }); }
 
   const wt = join(process.env.DIA_HOME_INSTALL || join(home(), ".local", "share", "dia"), "packages/wt/bin/dia-wt");
   checks.push({ name: "wt", status: existsSync(wt) ? "ok" : "warn", detail: existsSync(wt) ? wt : "dia wt 未安装（dia install.sh）" });
 
   const verdict = checks.some((c) => c.status === "fail") ? "fail" : checks.some((c) => c.status === "warn") ? "warn" : "ok";
-  return { persona: sc?.id ?? null, checks, verdict };
+  return { persona: ids.length === 1 ? ids[0] : null, personas: ids, checks, verdict };
 }

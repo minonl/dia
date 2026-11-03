@@ -39,6 +39,15 @@ function readJson(p: string): any {
   try { return JSON.parse(readFileSync(p, "utf8")); } catch { return null; }
 }
 
+/**
+ * 旧 lock 的兜底：早期 `persona add` 不写 `content` 段，导致作用域只剩 persona 身份、没有知识根/域命令。
+ * 这里只读安装目录里自带的 `dia.json` 补齐，**不回写 lock**（安装态由 add/update 负责）。
+ */
+function contentFromInstalled(dir: string): { knowledge: string[]; commands: any[]; dataRoot: string | null; env: any } {
+  const m = readJson(join(dir, "dia.json")) ?? {};
+  return { knowledge: m.knowledge ?? [], commands: m.commands ?? [], dataRoot: m.data_root ?? null, env: m.env ?? null };
+}
+
 function loadKit(id: string, version: string): KitScope | null {
   const dir = join(dataDir(), "kits", id, version);
   const lock = readJson(join(dir, "kit.lock"));
@@ -73,8 +82,8 @@ export function current(explicit?: string): Scope | null {
   const dir = join(idDir, version);
   const lock = readJson(join(dir, "dia.lock")) ?? {};
   const kits: KitScope[] = [];
-  // persona 自带内容优先（它就在 persona 树里，路径即 lock 所在目录）
-  const c = lock.content ?? {};
+  // persona 自带内容优先（它就在 persona 树里，路径即 lock 所在目录）；旧 lock 缺 content 时用 dia.json 兜底
+  const c = lock.content ?? contentFromInstalled(dir);
   if ((c.knowledge ?? []).length || (c.commands ?? []).length) {
     kits.push({
       id, version, dir, root: dir,

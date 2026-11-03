@@ -1,6 +1,6 @@
 # dia 状态页（单一事实源）
 
-> 更新：2026-11-02（复核：`bun test tests` 175/26 全绿）。任何"现在做到哪了"的问题，以本页为准；其他文档是细节。
+> 更新：2026-11-03（复核：`bun test tests` 188/28 全绿）。任何"现在做到哪了"的问题，以本页为准；其他文档是细节。
 > 规则：状态必须能追到**命令/测试/提交**；没有证据的写"未验证"。
 
 ---
@@ -78,6 +78,7 @@
 | D0.19 | 凭据注入（白名单 → 子进程） | **完成** | `dia env list/check/run`；不回显、redact、不进 argv |
 | D0.20 | 组合自检 | **完成** | `dia doctor`（persona/kit/knowledge/dsh preset/wt；exit 0/1/2） |
 | D0.21 | worktree 抽取 `packages/wt` | **完成** | 7 处 python→node；`dia wt`；4 套测试原样迁移全绿 |
+| D0.22 | 安装/自检一致性修复 | **完成** | `doctor` 多 persona 逐项自检；`scope` 旧 lock 缺 `content` 时读 `dia.json` 兜底；`render --check` 跳过宿主自写 `cordis.yml`；`persona add --force`（先备份） |
 | D1 | doctor 依赖校验（M1）+ audit 哈希链（M3） | **未开始** | doctor 已存在，但 deps.yaml 校验与哈希链未做 |
 | D2 | ModelSpec + 首次基准 + 事故 sidecar | **未开始** | 设计完成 |
 | D3 | state 事件 + `(T,D,O)` 视图 | **未开始** | 设计完成 |

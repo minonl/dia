@@ -53,6 +53,8 @@ export interface Installed {
   dir: string;
   rendered: string[];
   hash: string;
+  /** 被 --force 覆盖的已存在产物（覆盖前已备份），供 CLI 提示 */
+  overwrites?: string[];
   /** 来源 commit（git 源 = rev-parse HEAD；本地目录 = --short HEAD 或 "local"；dry-run = "dry-run"）。
    *  CLI 展示与 persona check 走同一条信息，避免「undefined」。 */
   commit: string;
@@ -131,7 +133,7 @@ function hashTree(root: string): string {
   return h.digest("hex");
 }
 
-export function install(from: string, opts: { ref?: string; host?: string; dryRun?: boolean } = {}): Installed {
+export function install(from: string, opts: { ref?: string; host?: string; dryRun?: boolean; force?: boolean } = {}): Installed {
   const src = resolveSource(from, opts.ref);
   const m = readManifest(src.dir);
   if (m.kind !== "persona") throw new Error("E_MANIFEST: not a persona");
@@ -140,6 +142,7 @@ export function install(from: string, opts: { ref?: string; host?: string; dryRu
   const hosts = opts.host ? [opts.host] : (m.hosts ?? ["opencode"]);
   for (const h of hosts) if (!["opencode", "dsh"].includes(h)) throw new Error("E_HOST: host not implemented: " + h);
   const rendered: string[] = [];
+  const overwrites: string[] = [];
 
   // 先检查宿主冲突，避免破坏已安装目录
   const entry = hosts.includes("opencode") ? m.entry?.opencode : undefined;
@@ -153,7 +156,9 @@ export function install(from: string, opts: { ref?: string; host?: string; dryRu
     if (!entryReal.startsWith(srcReal + sep)) throw new Error("E_MANIFEST: entry escapes persona dir");
     const dest = join(opencodeAgents(), `${m.id}.md`);
     if (existsSync(dest) && !readFileSync(dest).equals(readFileSync(entryAbs))) {
-      throw new Error("E_CONFLICT: agent file exists and differs; remove it first");
+      // 手改/旧版本的产物：默认拒绝；--force 才覆盖，且覆盖前先备份（覆盖不丢东西）
+      if (!opts.force) throw new Error("E_CONFLICT: agent file exists and differs; remove it first (或 --force 覆盖，覆盖前会备份)");
+      overwrites.push(dest);
     }
   }
 
@@ -167,7 +172,7 @@ export function install(from: string, opts: { ref?: string; host?: string; dryRu
 
   if (opts.dryRun) {
     if (hosts.includes("opencode")) rendered.push(join(opencodeAgents(), `${m.id}.md`));
-    return { id: m.id, version: m.version, dir: target, rendered, hash: "dry-run", commit: src.commit };
+    return { id: m.id, version: m.version, dir: target, rendered, hash: "dry-run", commit: src.commit, overwrites };
   }
 
   rmSync(target, { recursive: true, force: true });
@@ -177,6 +182,13 @@ export function install(from: string, opts: { ref?: string; host?: string; dryRu
   if (hosts.includes("opencode")) {
     mkdirSync(opencodeAgents(), { recursive: true });
     const dest = join(opencodeAgents(), `${m.id}.md`);
+    if (overwrites.length) {
+      // 覆盖前先备份（--force 的代价必须可回滚）
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const bdir = join(dataDir(), "backups", `persona-${m.id}-${stamp}`);
+      mkdirSync(bdir, { recursive: true });
+      for (const p of overwrites) cpSync(p, join(bdir, basename(p)));
+    }
     const entryAbs2 = resolve(target, entry!);
     if (!entryAbs2.startsWith(resolve(target) + sep)) throw new Error("E_MANIFEST: entry escapes persona dir");
     cpSync(entryAbs2, dest);
@@ -217,7 +229,7 @@ export function install(from: string, opts: { ref?: string; host?: string; dryRu
   writeFileSync(join(target, "dia.lock"), JSON.stringify({ id: m.id, version: m.version, commit: src.commit, source: from, ref: opts.ref ?? null, hash, rendered, renderedHashes, renderedDirs, kits: kitRefs,
     content: { knowledge: m.knowledge ?? [], commands: m.commands ?? [], dataRoot: m.data_root ?? null, env: m.env ?? null, rendered: inline, config: appliedConfig },
   }, null, 1));
-  return { id: m.id, version: m.version, dir: target, rendered, hash, commit: src.commit };
+  return { id: m.id, version: m.version, dir: target, rendered, hash, commit: src.commit, overwrites };
 }
 
 export function list(): { id: string; versions: string[] }[] {
@@ -408,10 +420,16 @@ export function create(id: string, opts: { dir?: string; hosts?: string[]; dryRu
 export interface RenderDrift { path: string; action: "missing" | "changed" }
 export interface RenderResult { id: string; version: string; check: boolean; drift: RenderDrift[]; backups: string[] }
 
+// 宿主会在自己的 profile 目录里改写/生成这些文件（dsh 每次启动重写 cordis.yml），
+// 它们不属于渲染产物：比对时跳过，否则 --check 永远报 drift。
+const HOST_OWNED_FILES = new Set(["cordis.yml"]);
+
 function compareDir(expected: string, actual: string): RenderDrift[] {
   const out: RenderDrift[] = [];
   for (const f of walkFiles(expected)) {
-    const dest = join(actual, relative(expected, f));
+    const rel = relative(expected, f);
+    if (HOST_OWNED_FILES.has(rel)) continue;
+    const dest = join(actual, rel);
     if (!existsSync(dest)) out.push({ path: dest, action: "missing" });
     else if (shaFile(dest) !== shaFile(f)) out.push({ path: dest, action: "changed" });
   }

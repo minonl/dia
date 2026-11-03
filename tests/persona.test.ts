@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeAll } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -43,6 +43,16 @@ describe("persona", () => {
   test("conflicting agent file is refused", () => {
     writeFileSync(join(agents, "dabo.md"), "user edited\n");
     expect(() => persona.install(src)).toThrow(/E_CONFLICT/);
+  });
+
+  test("--force 覆盖手改产物：先备份再写回", () => {
+    const r = persona.install(src, { force: true });
+    expect(r.overwrites).toEqual([join(agents, "dabo.md")]);
+    expect(readFileSync(join(agents, "dabo.md"), "utf8")).toContain("You are dabo.");
+
+    const bdir = readdirSync(join(data, "backups")).find((d) => d.startsWith("persona-dabo-"))!;
+    expect(bdir).toBeTruthy();
+    expect(readFileSync(join(data, "backups", bdir, "dabo.md"), "utf8")).toBe("user edited\n");
   });
 
   test("remove deletes rendered file", () => {

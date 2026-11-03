@@ -84,6 +84,30 @@ describe("persona → kit 联动", () => {
     expect(() => scope.current()).toThrow(/E_SCOPE/);
     expect(scope.current("yan").id).toBe("yan");
   });
+
+  test("旧 lock（缺 content）→ 用安装目录 dia.json 兜底知识根与命令", () => {
+    const src2 = mkdtempSync(join(tmpdir(), "dia-scope-legacy-"));
+    mkdirSync(join(src2, "agents"), { recursive: true });
+    mkdirSync(join(src2, "knowledge"), { recursive: true });
+    writeFileSync(join(src2, "knowledge", "a.md"), "# a\n");
+    writeFileSync(join(src2, "agents", "legacy.md"), "---\ndescription: legacy\n---\nYou are legacy.\n");
+    writeFileSync(join(src2, "dia.json"), JSON.stringify({
+      schema: 1, kind: "persona", id: "legacy", version: "0.1.0", hosts: ["opencode"],
+      entry: { opencode: "agents/legacy.md" }, knowledge: ["knowledge"],
+      commands: [{ name: "old", entry: "agents/legacy.md" }],
+    }));
+    expect(runCli(["persona", "add", "--from", src2]).status).toBe(0);
+
+    // 模拟早期 add 落下的 lock：没有 content 段
+    const lockPath = join(data, "personas", "legacy", "0.1.0", "dia.lock");
+    const lock = JSON.parse(readFileSync(lockPath, "utf8"));
+    delete lock.content;
+    writeFileSync(lockPath, JSON.stringify(lock));
+
+    const s = scope.current("legacy");
+    expect(s.knowledgeRoot).toBe(join(data, "personas", "legacy", "0.1.0", "knowledge"));
+    expect(s.kits[0].commands[0].name).toBe("old");
+  });
 });
 
 describe("一级委派（A）与 dia cmd（B）", () => {

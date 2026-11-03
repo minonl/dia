@@ -11,6 +11,9 @@
 # 取回并注册（私有仓用现有 git 凭据）
 dia persona add dabo --from git+https://github.com/minonl/dabo-agent.git --ref <sha>
 
+# 已存在产物与源不一致（用户手改 / 旧版本安装）→ 覆盖；覆盖前备份到 <data>/backups/persona-<id>-<ts>/
+dia persona add dabo --from <dir> --force
+
 # 查看 / 校验 / 卸载
 dia persona list
 dia persona verify dabo

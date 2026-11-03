@@ -76,6 +76,29 @@ describe("dia doctor", () => {
     expect(JSON.parse(r.stdout).verdict).toBe("fail");
     expect(r.status).toBe(2);
   });
+
+  test("多 persona 且不指定 → 逐个自检，不再整体 E_SCOPE fail", () => {
+    // 上一条故意改坏了 AGENTS.md，先恢复，免得本用例被它带成 fail
+    writeFileSync(join(home, ".config/opencode/AGENTS.md"), ["---", "description: yan", "mode: primary", "---", "You are yan.", ""].join("\n"));
+    const src2 = mkdtempSync(join(tmpdir(), "dia-act-src2-"));
+    mkdirSync(join(src2, "agents"), { recursive: true });
+    writeFileSync(join(src2, "agents", "dabo.md"), "---\ndescription: dabo\n---\nYou are dabo.\n");
+    writeFileSync(join(src2, "dia.json"), JSON.stringify({
+      schema: 1, kind: "persona", id: "dabo", version: "0.1.0", hosts: ["opencode"], entry: { opencode: "agents/dabo.md" },
+    }));
+    expect(run(["persona", "add", "--from", src2]).status).toBe(0);
+
+    const r = run(["doctor", "--json"]);
+    const d = JSON.parse(r.stdout);
+    expect(d.personas.sort()).toEqual(["dabo", "yan"]);
+    expect(d.checks.some((c: any) => c.name === "scope")).toBe(false);
+    expect(d.checks.some((c: any) => c.name === "yan.persona")).toBe(true);
+    expect(d.checks.some((c: any) => c.name === "dabo.persona")).toBe(true);
+    expect(d.checks.filter((c: any) => c.name === "default_agent").length).toBe(1);
+    expect(r.status).toBeLessThanOrEqual(1);
+
+    run(["persona", "remove", "dabo"]);
+  });
 });
 
 describe("persona check / update", () => {

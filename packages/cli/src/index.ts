@@ -124,7 +124,7 @@ usage:
   dia guard [--once] [--json]
   dia run --session S [--tool T] [--agent A] [--waive --risk N] [--redline] -- <cmd> [args...]
   dia resume --session S [--json]
-  dia persona add <id|--from SRC> [--ref REF] [--host opencode] [--dry-run] [--json]
+  dia persona add <id|--from SRC> [--ref REF] [--host opencode] [--dry-run] [--force] [--json]
   dia persona create <id> --dir DIR [--host opencode|dsh] [--dry-run] [--json]
   dia persona render <id> [--host opencode|dsh] [--check] [--json]
   dia persona list|verify|remove|show <id>|use <id>[@ver]
@@ -498,8 +498,9 @@ async function personaCli(argv: string[]): Promise<number> {
     const from = flag(args, "--from") || id;
     if (!from) { err("missing --from"); return 2; }
     try {
-      const r = persona.install(from, { ref: flag(args, "--ref"), host: flag(args, "--host"), dryRun: has(args, "--dry-run") });
-      out(asJson ? JSON.stringify(r) : `installed ${r.id}@${r.version} -> ${r.rendered.join(", ") || "(dry-run)"}`);
+      const r = persona.install(from, { ref: flag(args, "--ref"), host: flag(args, "--host"), dryRun: has(args, "--dry-run"), force: has(args, "--force") });
+      out(asJson ? JSON.stringify(r) : `installed ${r.id}@${r.version} -> ${r.rendered.join(", ") || "(dry-run)"}` +
+        (r.overwrites?.length ? `\n  ⚠ 覆盖 ${r.overwrites.length} 个已存在产物（已备份）：${r.overwrites.join(", ")}` : ""));
       return 0;
     } catch (e: any) {
       err(e?.message || String(e));

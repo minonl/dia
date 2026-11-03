@@ -101,8 +101,15 @@ describe("persona render", () => {
     persona.remove("rbot");
   });
 
-  test("dsh profile 缺文件：render 恢复", () => {
+  test("宿主改写 cordis.yml 不算 drift（dsh 运行时自写）", () => {
     setup();
+    const prof = join(profiles, "rbot");
+    writeFileSync(join(prof, "cordis.yml"), "[]\n");
+    expect(persona.render("rbot", { check: true }).drift).toEqual([]);
+    persona.remove("rbot");
+  });
+
+  test("dsh profile 缺文件：render 恢复", () => {    setup();
     const prof = join(profiles, "rbot");
     const before = readdirSync(prof).length;
     rmSync(join(prof, "cordis.patch.yml"));

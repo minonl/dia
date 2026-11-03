@@ -851,7 +851,7 @@ export async function main(rawArgv: string[]): Promise<number> {
     }
   }
   if (cmd === "doctor") {
-    const r = doctor.run({ persona: flag(argv, "--persona") });
+    const r = await doctor.run({ persona: flag(argv, "--persona") });
     if (has(argv, "--json")) out(JSON.stringify(r, null, 1));
     else {
       for (const c of r.checks) out(`${c.status === "ok" ? "✓" : c.status === "warn" ? "!" : "✗"} ${c.name.padEnd(20)} ${c.detail}`);

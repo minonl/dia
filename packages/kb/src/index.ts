@@ -95,11 +95,16 @@ function scanRoot(root: string): { docs: number; fingerprint: string; maxMtimeMs
   return { docs: files.length, maxMtimeMs, fingerprint: createHash("sha1").update(parts.join("\n")).digest("hex") };
 }
 
-export function defaultDb(root: string): string {
+/** 默认索引路径（**无副作用**：不建目录，只算路径）。只读消费方（如 doctor）用它探测索引。 */
+export function indexDbPath(root: string): string {
   const key = createHash("sha1").update(resolve(root)).digest("hex").slice(0, 16);
-  const dir = cacheDir();
-  mkdirSync(dir, { recursive: true });
-  return join(dir, key + ".db");
+  return join(cacheDir(), key + ".db");
+}
+
+export function defaultDb(root: string): string {
+  const target = indexDbPath(root);
+  mkdirSync(dirname(target), { recursive: true });
+  return target;
 }
 
 export async function buildIndex(root: string, dbPath?: string) {
@@ -145,22 +150,28 @@ export async function buildIndex(root: string, dbPath?: string) {
 }
 
 interface IndexMeta { docs: number; max_mtime_ms: number; fingerprint: string; tokenizer: string; root: string; schema: number }
+interface IndexSnapshot extends IndexMeta { rows: { path: string; mtime: number }[] }
 
-async function readMeta(path: string): Promise<IndexMeta | null> {
+async function readSnapshot(path: string): Promise<IndexSnapshot | null> {
   if (!existsSync(path)) return null;
   const db = await openDb(path, { readonly: true });
   try {
-    const rows = db.all<any>("SELECT key, value FROM meta");
-    const m = new Map(rows.map((r) => [String(r.key), String(r.value)]));
+    const meta = db.all<any>("SELECT key, value FROM meta");
+    const m = new Map(meta.map((r) => [String(r.key), String(r.value)]));
     if (!m.has("schema") || !m.has("docs")) return null;
+    const rows = db.all<any>("SELECT path, mtime FROM docs").map((r) => ({ path: String(r.path), mtime: Number(r.mtime || 0) }));
     return {
       docs: Number(m.get("docs") || 0), max_mtime_ms: Number(m.get("max_mtime_ms") || 0),
       fingerprint: m.get("fingerprint") || "", tokenizer: m.get("tokenizer") || "unknown",
-      root: m.get("root") || "", schema: Number(m.get("schema") || 0),
+      root: m.get("root") || "", schema: Number(m.get("schema") || 0), rows,
     };
   } catch {
     return null;
   } finally { db.close(); }
+}
+
+async function readMeta(path: string): Promise<IndexMeta | null> {
+  return await readSnapshot(path);
 }
 
 export async function assertIndex(root: string, dbPath?: string): Promise<string> {
@@ -175,6 +186,59 @@ export async function assertIndex(root: string, dbPath?: string): Promise<string
     throw new KbIndexError(`index stale: docs ${meta.docs}→${scan.docs}; run "dia kb index --root ${root}"`, "E_INDEX_STALE");
   }
   return target;
+}
+
+export type IndexState = "ok" | "missing" | "foreign" | "stale";
+
+export interface IndexStatus {
+  root: string;
+  db: string;
+  state: IndexState;
+  /** 索引里记录的文档数 */
+  indexed: number;
+  /** 磁盘上现在的 .md 文档数 */
+  scanned: number;
+  /** 磁盘有、索引没有 */
+  added: number;
+  /** 索引有、磁盘没有 */
+  removed: number;
+  /** 两边都有但 mtime 不同 */
+  changed: number;
+  /** 聚合指纹不一致、逐文件却没差异（同一秒内改内容 / 大小不变） */
+  contentOnly: boolean;
+}
+
+/**
+ * 索引新鲜度（**只读探测**，不建目录、不重建）：doctor / 脚本判「要不要提示重建」用。
+ * 判据与 `assertIndex` 完全一致（schema + root + docs 数 + 聚合指纹），只是把抛错换成三态，
+ * 额外用索引里的逐篇 mtime 给出「落后几篇」。
+ */
+export async function indexStatus(root: string, dbPath?: string): Promise<IndexStatus> {
+  const abs = resolve(root);
+  const target = dbPath || indexDbPath(abs);
+  const base: IndexStatus = { root: abs, db: target, state: "missing", indexed: 0, scanned: 0, added: 0, removed: 0, changed: 0, contentOnly: false };
+  const snap = await readSnapshot(target);
+  if (!snap || snap.schema !== SCHEMA_VERSION) return base;
+  const scan = scanRoot(abs);
+  if (snap.root !== abs) return { ...base, state: "foreign", indexed: snap.docs, scanned: scan.docs };
+  const disk = new Map(walk(abs).map((f) => {
+    const rel = relative(abs, f);
+    // 与建索引时同口径：秒级 mtime
+    return [rel, Math.floor(statSync(f).mtimeMs / 1000)] as [string, number];
+  }));
+  const recorded = new Set(snap.rows.map((r) => r.path));
+  let added = 0, removed = 0, changed = 0;
+  for (const p of disk.keys()) if (!recorded.has(p)) added++;
+  for (const r of snap.rows) {
+    if (!disk.has(r.path)) removed++;
+    else if (disk.get(r.path) !== r.mtime) changed++;
+  }
+  const stale = snap.docs !== scan.docs || snap.fingerprint !== scan.fingerprint;
+  return {
+    ...base, state: stale ? "stale" : "ok",
+    indexed: snap.docs, scanned: scan.docs, added, removed, changed,
+    contentOnly: stale && added + removed + changed === 0,
+  };
 }
 
 export interface Hit { path: string; title: string; snippet: string }

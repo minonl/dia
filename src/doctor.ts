@@ -5,7 +5,7 @@
 // 退出码：0 全绿；1 有 warn；2 有 fail（便于脚本与 CI 判定）
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import * as persona from "./persona.ts";
 import * as kit from "./kit.ts";
 import * as scope from "./scope.ts";
@@ -13,6 +13,7 @@ import * as active from "./active.ts";
 import * as dsh from "./dsh.ts";
 import * as platforms from "./platforms.ts";
 import * as deps from "./deps.ts";
+import { indexStatus, type IndexStatus } from "./kb.ts";
 
 export interface Check { name: string; status: "ok" | "warn" | "fail"; detail: string }
 
@@ -34,11 +35,44 @@ function platformChecks(): Check[] {
 }
 const dataDir = () => process.env.DIA_DATA_DIR || join(home(), ".local", "share", "dia");
 
+/** detail 里的重建命令要能直接复制执行：含 shell 元字符时加单引号（导出仅为单测覆盖转义）。 */
+export function quoteArg(v: string): string {
+  return /^[\w.@%+=:,\/-]+$/.test(v) ? v : `'${v.replace(/'/g, "'\\''")}'`;
+}
+
+function describeStale(st: IndexStatus): string {
+  const diff = st.added + st.removed + st.changed;
+  const parts = [st.added ? `新增 ${st.added}` : "", st.removed ? `删除 ${st.removed}` : "", st.changed ? `修改 ${st.changed}` : ""].filter(Boolean);
+  const behind = diff ? `落后 ${diff} 篇（${parts.join(" / ")}）` : st.contentOnly ? "内容已变更（同一秒内改动，mtime 未变）" : "已落后";
+  return `索引${behind}：索引 ${st.indexed} 篇 → 磁盘 ${st.scanned} 篇`;
+}
+
+/**
+ * 知识索引新鲜度（三态）：
+ *   目录缺失 → fail（persona 声明了知识根却没有，是真问题）
+ *   索引缺失 / 落后 / 属于别的知识根 → warn（运行时 `dia kb query` 会自动重建，不该判红）
+ *   索引一致 → ok
+ * 判定复用 packages/kb 的 `indexStatus`（与 `assertIndex` 同口径），doctor 不自己再扫一遍。
+ */
+async function knowledgeCheck(id: string, prefix: string, root: string): Promise<Check> {
+  const name = `${prefix}knowledge`;
+  if (!existsSync(root)) return { name, status: "fail", detail: root };
+  const rebuild = `dia kb index --persona ${quoteArg(id)}`;
+  let st: IndexStatus;
+  try { st = await indexStatus(root); }
+  catch (e: any) { return { name, status: "warn", detail: `${root}（索引不可读：${e?.message || String(e)}；重建：${rebuild}）` }; }
+  if (st.state === "ok") return { name, status: "ok", detail: `${root}（索引 ${st.indexed} 篇，已是最新）` };
+  const why = st.state === "missing" ? "索引不存在"
+    : st.state === "foreign" ? `索引属于其它知识根（${st.db}）`
+    : describeStale(st);
+  return { name, status: "warn", detail: `${root}（${why}；重建：${rebuild}）` };
+}
+
 /**
  * 单个 persona 的作用域检查。`prefix` 用于多 persona 场景区分条目（如 `dabo.persona`）。
  * 显式指定了不存在的 persona ⇒ 只报 scope fail，不再顺手报「未安装任何 persona」（旧行为会自相矛盾）。
  */
-function personaChecks(id: string, prefix: string): Check[] {
+async function personaChecks(id: string, prefix: string, shared: Map<string, { check: Check; id: string }>): Promise<Check[]> {
   const checks: Check[] = [];
   let sc: scope.Scope | null = null;
   try { sc = scope.current(id); }
@@ -72,7 +106,16 @@ function personaChecks(id: string, prefix: string): Check[] {
 
   // 知识根可读 + 索引是否落后
   if (sc.knowledgeRoot) {
-    checks.push({ name: `${prefix}knowledge`, status: existsSync(sc.knowledgeRoot) ? "ok" : "fail", detail: sc.knowledgeRoot });
+    const key = resolve(sc.knowledgeRoot);
+    const hit = shared.get(key);
+    if (hit) {
+      // 多 persona 共享同一知识根（典型：同一个 kit）：只算一次，避免同一问题刷屏
+      checks.push({ ...hit.check, name: `${prefix}knowledge`, detail: `${hit.check.detail}（与 ${hit.id} 共享知识根）` });
+    } else {
+      const c = await knowledgeCheck(id, prefix, sc.knowledgeRoot);
+      shared.set(key, { check: c, id });
+      checks.push(c);
+    }
   }
 
   // 宿主 dsh 的 preset 自检（dsh 不装 / 没渲染 profile 时跳过）
@@ -86,12 +129,12 @@ function personaChecks(id: string, prefix: string): Check[] {
   return checks;
 }
 
-export function run(opts: { persona?: string } = {}): {
+export async function run(opts: { persona?: string } = {}): Promise<{
   persona: string | null;
   personas: string[];
   checks: Check[];
   verdict: "ok" | "warn" | "fail";
-} {
+}> {
   const checks: Check[] = [];
   const explicit = opts.persona || process.env.DIA_PERSONA;
 
@@ -110,9 +153,10 @@ export function run(opts: { persona?: string } = {}): {
   }
 
   const multi = ids.length > 1;
+  const shared = new Map<string, { check: Check; id: string }>();
   let primary: scope.Scope | null = null;
   for (const id of ids) {
-    checks.push(...personaChecks(id, multi ? `${id}.` : ""));
+    checks.push(...(await personaChecks(id, multi ? `${id}.` : "", shared)));
     if (!primary) { try { primary = scope.current(id); } catch { /* scope 检查里已报 */ } }
   }
 

@@ -82,7 +82,7 @@ dia persona remove dabo
 
 ## 4.1 实现状态（2026-11-03 复核）
 
-> 判定方式：命令实跑 + `bun test tests`（201 tests / 31 files 全绿）+ 代码入口。写"未实现"的项当前是 `unknown command`。
+> 判定方式：命令实跑 + `bun test tests`（210 tests / 31 files 全绿）+ 代码入口。写"未实现"的项当前是 `unknown command`。
 
 | 命令 | 状态 | 证据 / 备注 |
 |---|---|---|
@@ -98,7 +98,7 @@ dia persona remove dabo
 | `kit add / list / verify / remove` | **已实现** | 复制/软链/记账；冲突写盘前全量检查（`E_CONFLICT`）；`src/kit.ts` + `tests/kit.test.ts` |
 | `env list / check / run` | **已实现** | 白名单注入、不回显值、`--redact`、密钥不进 argv；清单由 persona 声明（`src/env.ts` + `tests/env.test.ts`） |
 | `deps list / record` | **已实现** | `list` = 登记 + 实测派生视图（required 缺失 exit 2）；`record` = 只追加一行（`--id/--kind/--version` 必填）；`src/deps.ts` + `tests/deps*.test.ts` |
-| `doctor` | **已实现** | 组合自检：persona verify / default_agent / kit / knowledge / dsh preset / **deps 登记校验** / **platform 版本（读 `docs/platforms/registry.json`）** / wt；exit 0/1/2。不指定 persona 且装了多个 → **逐个自检**（条目加 `<id>.` 前缀），不再整体 `E_SCOPE` |
+| `doctor` | **已实现** | 组合自检：persona verify / default_agent / kit / knowledge（**索引新鲜度三态**，过期给重建命令）/ dsh preset / **deps 登记校验** / **platform 版本（读 `docs/platforms/registry.json`）** / wt；exit 0/1/2。不指定 persona 且装了多个 → **逐个自检**（条目加 `<id>.` 前缀），不再整体 `E_SCOPE` |
 | `wt …` | **已实现（需安装包）** | 转发 `packages/wt/bin/dia-wt`；未装时 `E_WT`（exit 33），`install.sh` 会分发 |
 | `kb index/search/query/get/lint/path/review` | **已实现** | persona 作用域下索引过期自动重建；显式 `--root` 保持「缺索引即报错」 |
 | `kb <域命令>` | **已实现（委派）** | 未命中内置 → persona `commands` → 委派；argv 透传、exit code 原样 |

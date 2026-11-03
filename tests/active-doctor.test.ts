@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { quoteArg } from "../src/doctor.ts";
 
 let home: string, data: string, src: string;
 const cli = join(import.meta.dir, "..", "packages", "cli", "src", "index.ts");
@@ -141,5 +142,147 @@ describe("persona check / update", () => {
   test("内容被改 → check 返回 2", () => {
     writeFileSync(join(home, ".config/opencode/AGENTS.md"), "tampered\n");
     expect(run(["persona", "check", "yan"]).status).toBe(2);
+  });
+});
+
+// 知识索引新鲜度：三态（目录缺失 fail / 索引缺失或落后 warn / 一致 ok），warn 不改退出码语义（1）
+describe("dia doctor: 知识索引新鲜度", () => {
+  let ksrc: string, kroot: string;
+  const kcheck = (d: any, name = "knowledge") => d.checks.find((c: any) => c.name === name);
+
+  beforeAll(() => {
+    // 知识根刻意放在 persona 树外：改它不会动到 persona 内容哈希，才能把 verdict 稳定停在 warn
+    kroot = mkdtempSync(join(tmpdir(), "dia-act-kbroot-"));
+    mkdirSync(join(kroot, "rules"), { recursive: true });
+    writeFileSync(join(kroot, "index.md"), "# Index\n\n- [R1](rules/r1.md)\n");
+    writeFileSync(join(kroot, "rules", "r1.md"), "# R1\n\n规则一。\n");
+    ksrc = mkdtempSync(join(tmpdir(), "dia-act-kbsrc-"));
+    mkdirSync(join(ksrc, "agents"), { recursive: true });
+    writeFileSync(join(ksrc, "agents", "kbby.md"), "---\ndescription: kbby\n---\nYou are kbby.\n");
+    writeFileSync(join(ksrc, "dia.json"), JSON.stringify({
+      schema: 1, kind: "persona", id: "kbby", version: "0.1.0", hosts: ["opencode"],
+      entry: { opencode: "agents/kbby.md" }, knowledge: [kroot],
+    }));
+    expect(run(["persona", "add", "--from", ksrc]).status).toBe(0);
+  });
+
+  test("知识目录在但索引还没建 → warn（不是 fail）", () => {
+    const r = run(["doctor", "--persona", "kbby", "--json"]);
+    const k = kcheck(JSON.parse(r.stdout));
+    expect(k.status).toBe("warn"); // 索引还没建：warn 而不是 fail（缺失 ≠ 目录缺失）
+    expect(r.status).toBe(1);
+  });
+
+  test("建索引后 → knowledge ok", () => {
+    expect(run(["kb", "index", "--persona", "kbby"]).status).toBe(0);
+    const r = run(["doctor", "--persona", "kbby", "--json"]);
+    const k = kcheck(JSON.parse(r.stdout));
+    expect(k.status).toBe("ok");
+    expect(k.detail).toContain(kroot);
+    expect(k.detail).not.toContain("重建");
+  });
+
+  test("知识新增一篇 → warn，detail 写落后篇数 + 可执行的重建命令，退出码 1", () => {
+    writeFileSync(join(kroot, "rules", "r2.md"), "# R2\n\n规则二。\n");
+    const r = run(["doctor", "--persona", "kbby", "--json"]);
+    const k = kcheck(JSON.parse(r.stdout));
+    expect(k.status).toBe("warn");
+    expect(k.detail).toContain("落后 1 篇");
+    expect(k.detail).toContain("新增 1");
+    expect(k.detail).toContain("dia kb index --persona kbby");
+    expect(r.status).toBe(1);
+  });
+
+  test("按 detail 里的命令重建 → 恢复 ok", () => {
+    expect(run(["kb", "index", "--persona", "kbby"]).status).toBe(0);
+    const r = run(["doctor", "--persona", "kbby", "--json"]);
+    expect(kcheck(JSON.parse(r.stdout)).status).toBe("ok");
+  });
+
+  test("改内容（同一秒、大小不变）也判落后", () => {
+    const f = join(kroot, "rules", "r1.md");
+    writeFileSync(f, "# R1\n\n规则九。\n"); // 等长替换，mtime 秒内可能不变 → 靠聚合指纹兜底
+    const r = run(["doctor", "--persona", "kbby", "--json"]);
+    const k = kcheck(JSON.parse(r.stdout));
+    expect(k.status).toBe("warn");
+    expect(k.detail).toContain("dia kb index --persona kbby");
+    expect(r.status).toBe(1);
+    expect(run(["kb", "index", "--persona", "kbby"]).status).toBe(0);
+  });
+
+  test("索引属于其它知识根（foreign）→ warn，不判 fail", () => {
+    // 把索引槽位让给另一个知识根：doctor 必须识别「索引不是我的」而不是当成最新
+    const other = mkdtempSync(join(tmpdir(), "dia-act-kbother-"));
+    writeFileSync(join(other, "x.md"), "# X\n");
+    const slot = JSON.parse(run(["kb", "index", "--persona", "kbby", "--json"]).stdout).db;
+    try {
+      expect(run(["kb", "index", "--root", other, "--db", slot]).status).toBe(0);
+      const r = run(["doctor", "--persona", "kbby", "--json"]);
+      const d = JSON.parse(r.stdout);
+      const k = kcheck(d);
+      expect(k.status).toBe("warn");
+      expect(k.detail).toContain("其它知识根");
+      expect(k.detail).toContain("dia kb index --persona kbby");
+      expect(d.verdict).not.toBe("fail");
+      expect(r.status).toBeLessThanOrEqual(1);
+    } finally {
+      expect(run(["kb", "index", "--persona", "kbby"]).status).toBe(0);
+    }
+    expect(kcheck(JSON.parse(run(["doctor", "--persona", "kbby", "--json"]).stdout)).status).toBe("ok");
+  });
+
+  test("多 persona 共享同一知识根 → 各报一条，但不重复计算", () => {
+    const src2 = mkdtempSync(join(tmpdir(), "dia-act-kbsrc2-"));
+    mkdirSync(join(src2, "agents"), { recursive: true });
+    writeFileSync(join(src2, "agents", "kbby2.md"), "---\ndescription: kbby2\n---\nYou are kbby2.\n");
+    writeFileSync(join(src2, "dia.json"), JSON.stringify({
+      schema: 1, kind: "persona", id: "kbby2", version: "0.1.0", hosts: ["opencode"],
+      entry: { opencode: "agents/kbby2.md" }, knowledge: [kroot],
+    }));
+    expect(run(["persona", "add", "--from", src2]).status).toBe(0);
+    writeFileSync(join(kroot, "rules", "r3.md"), "# R3\n\n规则三。\n"); // 造一次落后
+    try {
+      const r = run(["doctor", "--json"]);
+      const rows = JSON.parse(r.stdout).checks.filter((c: any) => c.name === "kbby.knowledge" || c.name === "kbby2.knowledge");
+      expect(rows.length).toBe(2);
+      expect(rows.every((c: any) => c.status === "warn")).toBe(true);
+      expect(rows.filter((c: any) => c.detail.includes("共享知识根")).length).toBe(1);
+    } finally {
+      run(["persona", "remove", "kbby2"]);
+      run(["kb", "index", "--persona", "kbby"]);
+    }
+  });
+});
+
+describe("dia doctor: 知识根目录缺失 / 重建命令转义", () => {
+  test("persona 声明了知识根但目录不存在 → fail（真问题，不降级为 warn）", () => {
+    const gone = join(mkdtempSync(join(tmpdir(), "dia-act-kbgone-")), "not-created");
+    const src3 = mkdtempSync(join(tmpdir(), "dia-act-kbsrc3-"));
+    mkdirSync(join(src3, "agents"), { recursive: true });
+    writeFileSync(join(src3, "agents", "kbfail.md"), "---\ndescription: kbfail\n---\nYou are kbfail.\n");
+    writeFileSync(join(src3, "dia.json"), JSON.stringify({
+      schema: 1, kind: "persona", id: "kbfail", version: "0.1.0", hosts: ["opencode"],
+      entry: { opencode: "agents/kbfail.md" }, knowledge: [gone],
+    }));
+    expect(run(["persona", "add", "--from", src3]).status).toBe(0);
+    try {
+      const r = run(["doctor", "--persona", "kbfail", "--json"]);
+      const d = JSON.parse(r.stdout);
+      const k = d.checks.find((c: any) => c.name === "knowledge");
+      expect(k.status).toBe("fail");
+      expect(k.detail).toBe(gone);
+      expect(d.verdict).toBe("fail");
+      expect(r.status).toBe(2);
+    } finally {
+      run(["persona", "remove", "kbfail"]);
+    }
+  });
+
+  test("detail 里的重建命令按 shell 规则转义（含空格 / 引号也能复制执行）", () => {
+    expect(quoteArg("yan")).toBe("yan");
+    expect(quoteArg("a-b_c.d")).toBe("a-b_c.d");
+    expect(quoteArg("a b")).toBe("'a b'");
+    expect(quoteArg("it's")).toBe("'it'\\''s'");
+    expect(quoteArg("a;b")).toBe("'a;b'");
   });
 });

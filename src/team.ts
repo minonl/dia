@@ -25,6 +25,18 @@ export function runMock(id: string) {
   return dir;
 }
 
+/** redteam 的 high 级反驳：gate 必须拦住，run 要回灌给 builder 修。 */
+export function highFindings(redteam: any): any[] {
+  const list = Array.isArray(redteam?.findings) ? redteam.findings : [];
+  return list.filter((f: any) => String(f?.severity || "").toLowerCase() === "high");
+}
+
+/** 在 workspace 里跑判据命令；返回退出码 + 合并输出（截断）。 */
+function runJudge(workspace: string, judge: string) {
+  const r = execFileSync("sh", ["-c", judge], { cwd: workspace, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  return { code: 0, out: String(r) };
+}
+
 export function gate(id: string) {
   const dir = runDir(id);
   const need = ["plan.md", "diff.patch", "test.log", "verify.json", "redteam.json", "packet.md"];
@@ -41,6 +53,8 @@ export function gate(id: string) {
     return !t || t === "(no evidence)" || t === "invalid verifier output";
   })) return { ok: false, reason: "placeholder evidence" };
   if (!Array.isArray(redteam.findings)) return { ok: false, reason: "bad findings" };
+  const high = highFindings(redteam);
+  if (high.length) return { ok: false, reason: `redteam high: ${high.length}（必须先修复）` };
   return { ok: true };
 }
 
@@ -258,8 +272,41 @@ export async function runAcp(id: string, workspace: string) {
       recordModelCall(id, "redteam-repair", modelOf(redNs), r.usage, usageAcc, prices);
       return r.text;
     });
-    const redteam = { ...normalizeRedteam(fixed.value), repaired: fixed.repaired };
+    let redteam: any = { ...normalizeRedteam(fixed.value), repaired: fixed.repaired };
     writeFileSync(join(dir, "redteam.json"), JSON.stringify(redteam, null, 1));
+
+    // redteam 的 high 级反驳必须回灌 builder 修（gate 也会拦）；修完复跑判据 + 复检一轮。
+    if (highFindings(redteam).length) {
+      const fixNs = await acp.newSession(workspace);
+      await acp.setMode(fixNs.sessionId, "dabo-builder");
+      const fOut = await acp.prompt(fixNs.sessionId, `Fix these high-severity findings. Keep the judge green; do not change the judge itself.\n${JSON.stringify(highFindings(redteam))}\nReturn a brief summary.`);
+      recordModelCall(id, "builder-fix", modelOf(fixNs), fOut.usage, usageAcc, prices);
+
+      let judgeCode = 0, judgeOut = "";
+      try { const r = runJudge(workspace, judge); judgeOut = r.out; } catch (e: any) { judgeCode = typeof e?.status === "number" ? e.status : 1; judgeOut = String(e?.stdout || e?.message || ""); }
+      writeFileSync(join(dir, "test.log"), `judge: ${judge}\nexit=${judgeCode}\n${judgeOut}`.slice(0, 20000));
+
+      const diff2 = gitDiff(workspace);
+      const rws2 = snapshotWorkspace(workspace, join(dir, "redteam-ws-2"));
+      const red2 = await acp.newSession(rws2);
+      await acp.setMode(red2.sessionId, "dabo-redteam");
+      const rOut2 = await acp.prompt(red2.sessionId, `Repo: ${rws2}\nDiff:\n${diff2.slice(0, 20000)}\nReturn only the JSON object.`);
+      recordModelCall(id, "redteam-2", modelOf(red2), rOut2.usage, usageAcc, prices);
+      const parsed2 = await parseRoleJsonWithRepair(rOut2.text, async (msg) => {
+        const r = await acp.prompt(red2.sessionId, msg);
+        recordModelCall(id, "redteam-2-repair", modelOf(red2), r.usage, usageAcc, prices);
+        return r.text;
+      });
+      redteam = { ...normalizeRedteam(parsed2.value), repaired: parsed2.repaired, round: 2 };
+      writeFileSync(join(dir, "redteam.json"), JSON.stringify(redteam, null, 1));
+
+      if (judgeCode !== 0 || highFindings(redteam).length) {
+        writeFileSync(join(dir, "packet.md"), `# 验收包 ${id}\n\n- 任务：${t.title}\n- 结论：**已升级**（redteam 修复后仍不达标）\n- judge exit：${judgeCode}\n- 剩余 high：${highFindings(redteam).length}\n- 变更：见 diff.patch\n`);
+        writeFileSync(join(dir, "usage.json"), JSON.stringify({ task_id: id, calls: usageAcc.rows.length, input_tokens: usageAcc.input, output_tokens: usageAcc.output, total_tokens: usageAcc.total, cost_usd: usageAcc.cost, unpriced_calls: usageAcc.unpriced, by_role: usageAcc.rows }, null, 1));
+        setStatus(id, "escalated", "redteam: high findings remain");
+        return { dir, verify, redteam, escalated: true };
+      }
+    }
 
     writeFileSync(join(dir, "usage.json"), JSON.stringify({ task_id: id, calls: usageAcc.rows.length, input_tokens: usageAcc.input, output_tokens: usageAcc.output, total_tokens: usageAcc.total, cost_usd: usageAcc.cost, unpriced_calls: usageAcc.unpriced, by_role: usageAcc.rows }, null, 1));
     writeFileSync(join(dir, "packet.md"), `# 验收包 ${id}\n\n- 任务：${t.title}\n- 判据：${judge}\n- 验证：${verify?.conclusion}\n- 修复重试：${verify?.repaired ? "是" : "否"} / redteam：${redteam.repaired ? "是" : "否"}\n- 反驳：${(redteam.findings || []).length} 条\n- 模型调用：${usageAcc.rows.length} 次 / ${usageAcc.total} tokens\n`);

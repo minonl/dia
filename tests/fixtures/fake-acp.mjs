@@ -9,18 +9,22 @@ const pi = process.argv.indexOf("--profile");
 if (pi >= 0) role = String(process.argv[pi + 1] || "").replace(/^dabo-/, "") || null;
 
 const sessions = new Map();
+let redCalls = 0;
 let seq = 0;
 const send = (o) => process.stdout.write(JSON.stringify(o) + "\n");
 
 function textFor(r) {
   switch (r) {
     case "planner":
-      return JSON.stringify({ judge: "fake judge: a.txt 存在", steps: ["impl", "verify"] });
+      return JSON.stringify({ judge: process.env.FAKE_JUDGE || "fake judge: a.txt 存在", steps: ["impl", "verify"] });
     case "builder":
       return "changed: a.txt";
     case "verifier":
       return JSON.stringify({ conclusion: process.env.FAKE_VERIFY || "通过", evidence: ["fake-verify: ok"] });
     case "redteam":
+      if (process.env.FAKE_REDTEAM_HIGH === "1" && redCalls++ === 0) {
+        return JSON.stringify({ findings: [{ severity: "high", trigger: "fake", consequence: "fake", repro: "fake" }] });
+      }
       return JSON.stringify({ findings: [] });
     default:
       return "ok";

@@ -127,3 +127,24 @@ describe("team run --dsh（假 dsh）", () => {
     expect(JSON.parse(readFileSync(join(data, "runs", id, "verify.json"), "utf8")).conclusion).toBe("通过");
   }, 30000);
 });
+
+
+describe("team redteam high 自动修复", () => {
+  test("第一轮 high → 回灌 builder 修 + 复检清零 → awaiting_acceptance；gate 对 high 判 fail", () => {
+    const id = newTask("a.txt 存在");
+    const r = run(["team", "run", id, "--acp", "--workspace", workspace], { FAKE_REDTEAM_HIGH: "1", FAKE_JUDGE: "test -f a.txt" });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("awaiting_acceptance");
+
+    const redPath = join(data, "runs", id, "redteam.json");
+    const red = JSON.parse(readFileSync(redPath, "utf8"));
+    expect(red.findings).toEqual([]); // 第二轮已清零
+    expect(run(["team", "gate", id]).status).toBe(0);
+
+    // 篡改出一条 high：gate 必须拦住
+    writeFileSync(redPath, JSON.stringify({ findings: [{ severity: "high", trigger: "x", consequence: "y", repro: "z" }] }));
+    const g = run(["team", "gate", id]);
+    expect(g.status).toBe(30);
+    expect(g.stdout).toContain("redteam high");
+  });
+});

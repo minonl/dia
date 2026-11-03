@@ -69,6 +69,17 @@ describe("dia doctor", () => {
     expect(r.status).toBeLessThanOrEqual(1);
   });
 
+  test("平台版本自检：opencode/dsh 只报告，不判红", () => {
+    const r = run(["doctor", "--json"]);
+    const d = JSON.parse(r.stdout);
+    for (const name of ["platform:opencode", "platform:dsh"]) {
+      const c = d.checks.find((x: any) => x.name === name);
+      expect(c).toBeTruthy();
+      expect(["ok", "warn"]).toContain(c.status);
+    }
+    expect(d.verdict).not.toBe("fail");
+  });
+
   test("产物被改 → doctor fail（exit 2）", () => {
     expect(existsSync(join(home, ".config/opencode/AGENTS.md"))).toBe(true);
     writeFileSync(join(home, ".config/opencode/AGENTS.md"), "tampered\n");

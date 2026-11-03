@@ -32,6 +32,8 @@
 
 ---
 
+> `dia doctor` 现在会输出 `platform:opencode` / `platform:dsh` 的实测版本；缺宿主只 warn（渲染不需要宿主，运行才需要）。
+
 ## 2. 已知断代与坑
 
 | 宿主 | 版本范围 | 坑 | 判据 / 复现 | 出处 |

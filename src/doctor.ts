@@ -4,6 +4,7 @@
 //   persona verify / kit verify / default_agent / kb 索引 / wt 包 / job 包
 // 退出码：0 全绿；1 有 warn；2 有 fail（便于脚本与 CI 判定）
 import { existsSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import * as persona from "./persona.ts";
@@ -15,6 +16,23 @@ import * as dsh from "./dsh.ts";
 export interface Check { name: string; status: "ok" | "warn" | "fail"; detail: string }
 
 const home = () => process.env.DIA_HOME || homedir();
+
+// 平台自检只报告「装没装、什么版本」，不判红：渲染不需要宿主，运行才需要。
+const PLATFORMS = ["opencode", "dsh"];
+
+function platformVersion(bin: string): string | null {
+  try {
+    const out = execFileSync(bin, ["--version"], { encoding: "utf8", timeout: 2000, stdio: ["ignore", "pipe", "ignore"] });
+    return out.trim().split("\n")[0] || null;
+  } catch { return null; }
+}
+
+function platformChecks(): Check[] {
+  return PLATFORMS.map((bin) => {
+    const v = platformVersion(bin);
+    return { name: `platform:${bin}`, status: v ? "ok" : "warn", detail: v ?? "未安装（渲染不需要，运行需要）" } as Check;
+  });
+}
 const dataDir = () => process.env.DIA_DATA_DIR || join(home(), ".local", "share", "dia");
 
 /**
@@ -111,6 +129,8 @@ export function run(opts: { persona?: string } = {}): {
         : "未设置（dia 不自动设置）",
     });
   } catch (e: any) { checks.push({ name: "default_agent", status: "warn", detail: e?.message }); }
+
+  checks.push(...platformChecks());
 
   const wt = join(process.env.DIA_HOME_INSTALL || join(home(), ".local", "share", "dia"), "packages/wt/bin/dia-wt");
   checks.push({ name: "wt", status: existsSync(wt) ? "ok" : "warn", detail: existsSync(wt) ? wt : "dia wt 未安装（dia install.sh）" });

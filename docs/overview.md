@@ -95,7 +95,8 @@ $ dia --persona yan kb scene S1  → 正常出场景卡
 5. **yan 旧脚本未迁**：`yan-env`、`yan-version`、`yan-ref`、`yan-data-root`、`yan-data-sync` 仍是仓库脚本
    （`dia env` / `persona show/use` 已有等价能力，未收口）。
 6. **`verify` 只看内容哈希**，宿主产物漂移要靠 `render --check`（两个命令给不同答案，容易误判）。
-7. 公开 release 仍 BLOCKED（脱敏 + 历史清洁 + `dia-security` pass，见 `docs/security/public-release.md`）。
+7. **凭据放行粒度**：bw 按账号/collection 分组，任务级最小权限与调用审计都缺；调研见 `docs/security/credentials.md`。
+8. 公开 release 仍 BLOCKED（脱敏 + 历史清洁 + `dia-security` pass，见 `docs/security/public-release.md`）。
 
 ---
 
@@ -106,7 +107,7 @@ $ dia --persona yan kb scene S1  → 正常出场景卡
 | **现状（可依赖）** | `overview.md`（本文）、`status.md`、`cli.md §4.1`、`persona-install.md`、`monorepo.md`、`team.md`、`pricing.md`、`migrations/yan-agent-current.md` | 与代码/本机一致 |
 | **设计（部分未实现）** | `architecture.md`、`framework-bootstrap.md`、`entrypoints.md`、`kit-install.md`、`versioning.md`、`patching.md`、`team-automation.md`、`security-sandbox.md`、`dependency-registry.md`、`acp-integration.md`、`proposals.md` | 保留意图，文首/文中标注实现范围 |
 | **方向（不是现状）** | `vision.md` | 长期定位：superagent/team 工厂、平台版本经验库、fleet（openrig）边界 |
-| **宿主经验** | `hosts/index.md` | opencode/dsh 版本矩阵、已知坑、验证命令 |
+| **平台经验** | `platforms/index.md` | opencode/dsh 版本矩阵、已知坑、验证命令、脱敏规则（不记录设备） |
 | **理论 / 研究** | `evolution-process.md`、`model-behavior.md`、`model-baseline-sidecar.md`、`host-control-surface.md`、`ecosystem-*.md`、`research/*` | 供推导，不作为现状 |
 | **留痕** | `migrations/*`（除 current）、`review/*`、`research/h0/*` | 当时结论，可能被后续推翻 |
 

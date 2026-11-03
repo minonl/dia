@@ -13,7 +13,8 @@
 |---|---|---|
 | `overview.md` | **三方现状**：dia/yan/dabo 对照、能力面、缺口、文档地图 | 现行 |
 | `vision.md` | **长期定位**：superagent/agent-team 工厂、平台经验库、fleet 边界 | 方向（不是现状） |
-| `hosts/index.md` | **宿主经验库**：版本矩阵、断代与坑、验证命令 | 现行（P0 持续补） |
+| `platforms/index.md` | **AI 工具平台经验库**：版本矩阵、断代与坑、验证命令、脱敏规则 | 现行（P0 持续补） |
+| `security/credentials.md` | 凭据管理现状与调研待办（bw 分组粒度问题） | 待调研 |
 | `HANDOFF.md`（仓库根） | 交接入口：复验判据 / 接手须知 / 坑 / 待决策指针 | 现行 |
 | `status.md` | 本页：阶段、判决、待决策 | 现行 |
 | `cli.md` | CLI 词表 + §4.1 实现状态 | 现行 |

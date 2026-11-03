@@ -46,7 +46,10 @@
 | 面 | 形态 | 属性 | 现在 |
 |---|---|---|---|
 | **A. 控制面** | `dia` CLI（确定性、无 LLM） | 可脚本化、可审计、可回滚；CI/门禁的稳定接口 | 已存在（见 `cli.md`） |
-| **B. dia-agent** | 跑在宿主里的 superagent，工具 = 控制面 + 知识 | 能对话、能规划、能解释"为什么这样配" | 未开始 |
+| **B. dia-agent** | **独立 persona `dia-evoler`**（跑在宿主里，工具 = 控制面 + 知识） | 能对话、能规划、能解释"为什么这样配" | 未开始 |
+
+**仓库边界（2026-11-03 定）**：dia 仓库**只放控制面（工具）**。agent 面是独立 persona `dia-evoler`
+（独立仓 + 独立数据根），由 `dia persona create` 出骨架、`dia persona add` 安装；dia 不为它写专属代码。
 
 **B 不是把 LLM 塞进 A。** 硬边界：
 
@@ -59,7 +62,18 @@
 
 ## 4. 平台对接能力（当前最大的工程缺口）
 
-目标：**同一份域内容，能在不同宿主 / 不同版本上稳定落地**，且每个坑都有记录、有判据。
+目标：**同一份域内容，能在不同平台 / 不同版本上稳定落地**，且每个坑都有记录、有判据。
+
+### 4.0 原则：宿主配置对 persona 透明
+
+persona 只声明"我是谁、我会什么"（逻辑入口、能力、策略）；opencode / dsh / pi / codex 的配置键、
+目录结构、frontmatter 由 dia 的适配层编译生成。**写 persona 的人不需要知道宿主怎么配。**
+
+现状差距：`dia.json` 仍要求按平台写 `entry.{opencode,dsh}`（同一份正文写两遍），
+`--host` 也只认这两家——这仍是"让 persona 操心宿主"。
+
+方向：清单收敛为 `agent`（一份正文）+ `capabilities` + 可选 `overrides`；适配层按平台生成；
+平台缺能力时**显式失败**（不静默降级）。
 
 ### 4.1 需要的能力
 
@@ -74,8 +88,8 @@
 ### 4.2 版本经验库的建议形态
 
 ```
-docs/hosts/
-  index.md            # 宿主 × 版本矩阵：支持到哪、哪个版本断代（已建，2026-11-03）
+docs/platforms/       # 记录 AI 工具平台，不记录设备（脱敏规则见 index.md §0）
+  index.md            # 平台 × 版本矩阵：支持到哪、哪个版本断代（已建，2026-11-03）
   opencode.md         # 配置键、渲染目标、已知坑、验证命令（含 v1→v2 断代）
   dsh.md              # bundle/patch 语义、preset 校验、冷启动坑
   codex.md / mimocode.md / zed.md   # 有接入才建
@@ -106,9 +120,9 @@ dia 对 fleet 的交付物：**可导出的 persona 包 + 能力声明 + 校验�
 
 | 阶段 | 内容 | 依赖 / 判据 |
 |---|---|---|
-| **P0** | 平台经验库 + 依赖校验（M1）：`docs/hosts/` + `hosts.yaml` + `doctor --host` | 现有两台宿主实测通过；`deps.yaml` 不再与真实环境脱节 |
+| **P0** | 平台经验库 + 依赖校验（M1）：`docs/platforms/` + `hosts.yaml` + `doctor --host` | 现有两台平台实测通过；`deps.yaml` 不再与真实环境脱节 |
 | **P1** | team 生成：team spec → 多个 persona/角色 + 门禁 | `team run --mock` 已可用；需补"从 spec 生成角色" |
-| **P2** | `dia-agent`：控制面 persona（读文档、解释配置、给迁移建议） | P0 的经验库是前置（否则它只会瞎猜） |
+| **P2** | `dia-evoler`：独立 persona（读文档、解释配置、给迁移建议） | P0 的经验库是前置（否则它只会瞎猜）；dia 仓不动 |
 | **P3** | rig 导出：persona 包 + 能力声明 → openrig | 与 openrig 的接口定稿 |
 | **P4** | 多域隔离（团队/家庭/项目）与数据根策略 | `data_root` 契约 + `DIA_DATA_ROOT_SCOPE` 已有雏形 |
 
@@ -120,6 +134,7 @@ P2 依赖 `patch` / `activation` 的边界先定清。
 ## 7. 不做什么（防止漂移）
 
 - **不自建运行时 / 沙箱 / 通道**：复用宿主与 openrig，dia 只做装配与控制。
+- **不在 dia 仓里写 agent 人格 / 对话实现**：agent 面独立成 persona（`dia-evoler`），保持仓库的工具形态。
 - **不把 LLM 放进确定性控制面**：模型只在 dia-agent 面说话，判定仍走命令与判据。
 - **不做公共市场 / 自动安装**：安装必须可审、可回滚。
 - **不存业务数据**：域数据留在各域的数据根。
@@ -127,9 +142,18 @@ P2 依赖 `patch` / `activation` 的边界先定清。
 
 ---
 
-## 8. 待决策
+## 8. 决策记录
 
-1. **dia-agent 的边界**：它是否也需要独立人格 / 数据根？还是只作为"控制面顾问"临时加载？
-2. **fleet 层归谁**：配置与知识归 dia、编排与隔离归 openrig——这条边界要 openrig 侧确认。
-3. **版本经验库的载体**：`docs/hosts/*.md` + `hosts.yaml` 双份（人读 + 机器读），还是只做 yaml？
-4. **多域数据隔离**：家庭库这类敏感域，是否需要独立加密数据根与独立审计线？
+**已定（2026-11-03）**
+
+1. **dia-agent 的边界**：独立 persona `dia-evoler`（独立仓 / 数据根）；**dia 仓库保持工具形态**。
+2. **`hosts/` 的语义**：记录的是 **AI 工具平台**（opencode/dsh/pi/codex…），不是设备；目录改名 `docs/platforms/`，
+   写之前按 `docs/platforms/index.md §0` 脱敏——公共仓只放公开平台事实，设备/家庭/内网信息落私人仓。
+3. **多域数据隔离**：**需要**。家庭库这类敏感域用独立数据根 + 独立审计线；凭据管理单独立项（见下）。
+
+**待定**
+
+4. **fleet 层归谁**：配置与知识归 dia、编排与隔离归 openrig——这条边界要 openrig 侧确认。
+5. **版本经验库的载体**：`docs/platforms/*.md` + `hosts.yaml` 双份（人读 + 机器读），还是只做 yaml？
+6. **凭据管理的落地**：现在用 `bw` CLI 入库，但"按账号分组"约束下放行粒度粗、个人 vault 内容过多 + 风险集中；
+   需要继续调研开源项目与最佳实践。现状与候选方向见 [`security/credentials.md`](security/credentials.md)。

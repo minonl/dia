@@ -420,9 +420,19 @@ export function create(id: string, opts: { dir?: string; hosts?: string[]; dryRu
 export interface RenderDrift { path: string; action: "missing" | "changed" }
 export interface RenderResult { id: string; version: string; check: boolean; drift: RenderDrift[]; backups: string[] }
 
-// 宿主会在自己的 profile 目录里改写/生成这些文件（dsh 每次启动重写 cordis.yml），
-// 它们不属于渲染产物：比对时跳过，否则 --check 永远报 drift。
-const HOST_OWNED_FILES = new Set(["cordis.yml"]);
+// 宿主会在自己的 profile 目录里改写/生成这些文件（dsh 每次启动重写 cordis.yml，
+// `dsh plugin --profile <id> add <pkg>` 会改 package.json 与锁文件），它们不属于渲染产物：
+// 比对时跳过、写回时不覆盖，否则 --check 永远报 drift，且 re-render 会回退宿主运行态。
+// 与 docs/persona-install.md §5.3 一致：profile 目录是宿主领地，dia 只关心自己写的字节。
+const HOST_OWNED_FILES = new Set([
+  "cordis.yml",
+  "package.json",
+  "package-lock.json",
+  "pnpm-lock.yaml",
+  "yarn.lock",
+  "bun.lock",
+  "bun.lockb",
+]);
 
 function compareDir(expected: string, actual: string): RenderDrift[] {
   const out: RenderDrift[] = [];
@@ -497,9 +507,16 @@ export function render(id: string, opts: { host?: string; check?: boolean } = {}
   }
   if (agentDest && agentSrc) { mkdirSync(dirname(agentDest), { recursive: true }); cpSync(agentSrc, agentDest); }
   if (dshDest && dshSrc) {
-    rmSync(dshDest, { recursive: true, force: true });
+    // 只覆盖 persona 自己写入的文件，绝不整树重建：profile 目录是宿主领地，
+    // 宿主装的插件目录/改动过的 package.json 不在 drift 名单里，删掉就再也回不来。
     mkdirSync(dshDest, { recursive: true });
-    cpSync(dshSrc, dshDest, { recursive: true });
+    for (const f of walkFiles(dshSrc)) {
+      const rel = relative(dshSrc, f);
+      if (HOST_OWNED_FILES.has(rel)) continue;
+      const dest = join(dshDest, rel);
+      mkdirSync(dirname(dest), { recursive: true });
+      cpSync(f, dest);
+    }
     writeFileSync(join(dshDest, ".dia-managed"), JSON.stringify({ id, version }, null, 1));
   }
 
@@ -513,6 +530,74 @@ export function render(id: string, opts: { host?: string; check?: boolean } = {}
   if (dshDest) renderedDirs.push({ path: dshDest, hash: hashTree(dshDest) });
   writeFileSync(lockPath, JSON.stringify({ ...lock, rendered, renderedHashes, renderedDirs }, null, 1));
   return { id, version, check: false, drift, backups };
+}
+
+export interface RenderDriftReport {
+  id: string;
+  version: string;
+  drift: RenderDrift[];
+  /** 比对范围被裁剪的原因（无 lock / lock 损坏）：doctor 据此降级为 skip，而不是报错。 */
+  skipped?: string;
+}
+
+/**
+ * 渲染产物的**只读**漂移查询（doctor 用：不写盘、不备份、不改 `dia.lock`）。
+ *
+ * 口径与 `dia persona render <id> --check` **完全一致**（直接复用 `render({ check: true })`，
+ * 共享 `HOST_OWNED_FILES` 跳过规则，避免 doctor 与 CLI 判定分叉），再按 `dia.lock` 补齐
+ * 「已经渲染到宿主、但 manifest 比对看不到」的产物：
+ *   · `renderedHashes`：opencode agent md 等逐字节快照；
+ *   · `renderedDirs`：dsh profile 目录是否存在 + `.dia-managed` 归属标记；
+ *   · `content.rendered` 的 file/link：persona 自带 `files`/`skills` 落到宿主的位置（如 `~/.config/opencode/AGENTS.md`）。
+ * 这些产物都能被 `dia persona render <id>` 直接修复，所以 doctor 里按 warn 报，不与 `persona.verify` 争 fail。
+ */
+export function renderDrift(id: string, opts: { host?: string } = {}): RenderDriftReport {
+  const idDir = join(dataDir(), "personas", id);
+  if (!existsSync(idDir)) throw new Error(`E_NOT_INSTALLED: persona ${id}`);
+  const version = active.effective(id)?.version
+    ?? readdirSync(idDir).filter((v) => statSync(join(idDir, v)).isDirectory()).sort().pop();
+  if (!version) return { id, version: "", drift: [], skipped: `无已安装版本：${idDir}` };
+  const dir = join(idDir, version);
+  const lockPath = join(dir, "dia.lock");
+  // 安装未完成（没有 lock）：manifest 比对也不能代表安装态 → 降级为 skip
+  if (!existsSync(lockPath)) return { id, version, drift: [], skipped: `无 dia.lock（安装未完成）：${dir}` };
+
+  let lock: any;
+  try { lock = JSON.parse(readFileSync(lockPath, "utf8")); }
+  catch { return { id, version, drift: [], skipped: `dia.lock 不可解析：${lockPath}` }; }
+
+  const r = render(id, { host: opts.host, check: true });
+  const drift: RenderDrift[] = [...r.drift];
+  const seen = new Set(drift.map((d) => d.path));
+  const push = (d: RenderDrift) => { if (!seen.has(d.path)) { seen.add(d.path); drift.push(d); } };
+
+  // lock 里的渲染产物快照（render 写回后刷新）：手改 / 丢失都算 drift
+  for (const [f, expected] of Object.entries((lock.renderedHashes ?? {}) as Record<string, string>)) {
+    if (!existsSync(f)) push({ path: f, action: "missing" });
+    else if (shaFile(f) !== expected) push({ path: f, action: "changed" });
+  }
+  // 宿主自管目录只判「还在 + 归属仍是我」，不比对字节（宿主会改写自己的文件）
+  for (const d of lock.renderedDirs ?? []) {
+    if (!existsSync(d.path)) { push({ path: d.path, action: "missing" }); continue; }
+    const marker = join(d.path, ".dia-managed");
+    if (!existsSync(marker)) { push({ path: marker, action: "missing" }); continue; }
+    try { if (JSON.parse(readFileSync(marker, "utf8")).id !== id) push({ path: marker, action: "changed" }); }
+    catch { push({ path: marker, action: "changed" }); }
+  }
+  // persona 自带内容渲染到宿主的产物（files 复制 / skills 软链）
+  for (const c of lock.content?.rendered ?? []) {
+    if (c.type === "dir") continue;
+    if (!existsSync(c.path)) { push({ path: c.path, action: "missing" }); continue; }
+    if (c.type === "file") {
+      if (shaFile(c.path) !== c.value) push({ path: c.path, action: "changed" });
+      continue;
+    }
+    let cur = "";
+    try { cur = realpathSync(c.path); } catch { push({ path: c.path, action: "changed" }); continue; }
+    const want = resolve(dir, c.value);
+    if (!existsSync(want) || cur !== realpathSync(want)) push({ path: c.path, action: "changed" });
+  }
+  return { id, version: r.version, drift };
 }
 
 export function remove(id: string): { removed: string[]; skipped: string[] } {

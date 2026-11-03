@@ -181,6 +181,9 @@ staged dabo@v2 (commit abc123)
 > 2026-11-01 补：`dia persona create` / `dia persona render` 已实现（此前只有文档）。
 > create 生成骨架时**已内置必填 config**（`tool-fs-search.sampleOverCapGlobResults`），
 > render 修产物时先备份到 `<data>/backups/render-<ts>/`；`--check` 只报 drift 不写盘。
+> 2026-11-03 补：dsh profile 是宿主领地——宿主会改 `cordis.yml` / `package.json` / 锁文件，
+> 这些文件**不参与 drift 比对、re-render 也不覆盖**；render 只写入 persona 自己的产物，
+> **不再整树重建 profile**（宿主装的插件目录不会被删）。
 
 ## 5.2 opencode 配置：`.json` 与 `.jsonc`（2026-11-01）
 

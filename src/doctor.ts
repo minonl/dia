@@ -89,6 +89,29 @@ async function personaChecks(id: string, prefix: string, shared: Map<string, { c
     checks.push({ name: `${prefix}persona.verify`, status: v.ok ? "ok" : "fail", detail: v.ok ? "内容哈希一致" : (v.issues[0] ?? "drift") });
   } catch (e: any) { checks.push({ name: `${prefix}persona.verify`, status: "fail", detail: e?.message }); }
 
+  // 渲染产物（宿主侧）只读比对：语义与 persona.verify 分工明确——
+  //   verify 判「persona 内容完整性 / 归属」（真问题 → fail）；
+  //   render 判「宿主侧产物是否被手改 / 丢失」（可被 `dia persona render` 修好 → warn，不改变退出码语义）。
+  // 未安装 / 无 lock / 宿主不支持时降级为 skip（status ok + detail 前缀），不拉红。
+  try {
+    const rep = persona.renderDrift(sc.id);
+    if (rep.skipped) {
+      checks.push({ name: `${prefix}persona.render`, status: "ok", detail: `跳过：${rep.skipped}` });
+    } else if (!rep.drift.length) {
+      checks.push({ name: `${prefix}persona.render`, status: "ok", detail: `宿主产物与 ${rep.id}@${rep.version} 一致` });
+    } else {
+      const shown = rep.drift.slice(0, 3).map((d) => `${d.action}: ${d.path}`);
+      const more = rep.drift.length > shown.length ? `（共 ${rep.drift.length} 处）` : "";
+      checks.push({
+        name: `${prefix}persona.render`,
+        status: "warn",
+        detail: `${shown.join("; ")}${more}；修复：dia persona render ${quoteArg(rep.id)}`,
+      });
+    }
+  } catch (e: any) {
+    checks.push({ name: `${prefix}persona.render`, status: "ok", detail: `跳过（${e?.message || String(e)}）` });
+  }
+
   // kit 校验
   const installed = kit.list();
   if (!installed.length) checks.push({ name: `${prefix}kits`, status: "ok", detail: "无独立 kit（内容由 persona 自带）" });

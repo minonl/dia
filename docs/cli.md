@@ -82,7 +82,7 @@ dia persona remove dabo
 
 ## 4.1 实现状态（2026-11-03 复核）
 
-> 判定方式：命令实跑 + `bun test tests`（231 tests / 31 files 全绿）+ 代码入口。写"未实现"的项当前是 `unknown command`。
+> 判定方式：命令实跑 + `bun test tests`（237 tests / 31 files 全绿）+ 代码入口。写"未实现"的项当前是 `unknown command`。
 
 | 命令 | 状态 | 证据 / 备注 |
 |---|---|---|
@@ -94,11 +94,11 @@ dia persona remove dabo
 | `persona check <id>` | **已实现** | 上游比对 same / differs / unknown / local-only；exit 0/1/3，内容被改 exit 2 |
 | `persona update <id>` | **已实现** | 从 lock 记录的 source+ref 重装，并把 active 指向新版本；本地源亦可 |
 | `persona default <id>` | **已实现** | 改宿主 `default_agent`：备份原文件 + 记原值，`--unset` 精确还原；非严格 JSON 直接拒绝 |
-| `persona create / render` | **已实现** | `create` 出骨架；`render --check` 只比对不写盘（跳过宿主自写文件，如 dsh `cordis.yml`） |
+| `persona create / render` | **已实现** | `create` 出骨架；`render --check` 只比对不写盘（跳过宿主自写文件，如 dsh `cordis.yml` / `package.json` / 锁文件）；`render` 只覆盖 persona 产物，不整树重建宿主 profile |
 | `kit add / list / verify / remove` | **已实现** | 复制/软链/记账；冲突写盘前全量检查（`E_CONFLICT`）；`src/kit.ts` + `tests/kit.test.ts` |
 | `env list / check / run` | **已实现** | 白名单注入、不回显值、`--redact`、密钥不进 argv；清单由 persona 声明（`src/env.ts` + `tests/env.test.ts`） |
 | `deps list / record` | **已实现** | `list` = 登记 + 实测派生视图（required 缺失 exit 2）；`record` = 只追加一行（`--id/--kind/--version` 必填）；`src/deps.ts` + `tests/deps*.test.ts` |
-| `doctor` | **已实现** | 组合自检：persona verify / default_agent / kit / knowledge（**索引新鲜度三态**，过期给重建命令）/ dsh preset / **deps 登记校验** / **platform 版本（读 `docs/platforms/registry.json`）** / wt；exit 0/1/2。不指定 persona 且装了多个 → **逐个自检**（条目加 `<id>.` 前缀），不再整体 `E_SCOPE` |
+| `doctor` | **已实现** | 组合自检：persona verify / **persona.render（宿主产物只读漂移，warn + 修复命令）** / default_agent / kit / knowledge（**索引新鲜度三态**，过期给重建命令）/ dsh preset / **deps 登记校验** / **platform 版本（读 `docs/platforms/registry.json`）** / wt；exit 0/1/2。不指定 persona 且装了多个 → **逐个自检**（条目加 `<id>.` 前缀），不再整体 `E_SCOPE` |
 | `wt …` | **已实现（需安装包）** | 转发 `packages/wt/bin/dia-wt`；未装时 `E_WT`（exit 33），`install.sh` 会分发 |
 | `kb index/search/query/get/lint/path/review` | **已实现** | persona 作用域下索引过期自动重建；显式 `--root` 保持「缺索引即报错」 |
 | `kb <域命令>` | **已实现（委派）** | 未命中内置 → persona `commands` → 委派；argv 透传、exit code 原样 |

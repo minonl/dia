@@ -121,6 +121,90 @@ describe("persona render", () => {
   });
 });
 
+describe("renderDrift（doctor 用的只读查询）", () => {
+  const setup = () => {
+    const src = join(work, "rd");
+    persona.create("rdbot", { dir: src });
+    persona.install(src);
+  };
+
+  test("健康态：drift 为空", () => {
+    setup();
+    expect(persona.renderDrift("rdbot").drift).toEqual([]);
+    persona.remove("rdbot");
+  });
+
+  test("产物被手改 / 删除 → changed / missing，且不写盘、不改 dia.lock", () => {
+    setup();
+    const agent = join(agents, "rdbot.md");
+    const lockPath = join(data, "personas", "rdbot", "0.1.0", "dia.lock");
+    const lockBefore = readFileSync(lockPath, "utf8");
+
+    writeFileSync(agent, "user edited\n");
+    const rep = persona.renderDrift("rdbot");
+    expect(rep.drift.some((d: any) => d.path === agent && d.action === "changed")).toBe(true);
+    expect(readFileSync(agent, "utf8")).toBe("user edited\n"); // 只读：不修复
+    expect(readFileSync(lockPath, "utf8")).toBe(lockBefore); // 只读：不改 lock
+    expect(persona.verify("rdbot").ok).toBe(false); // verify 视角也是红的（语义不冲突）
+
+    rmSync(agent);
+    expect(persona.renderDrift("rdbot").drift.some((d: any) => d.path === agent && d.action === "missing")).toBe(true);
+    persona.remove("rdbot");
+  });
+
+  test("persona 自带 files 渲染到宿主的产物被改 → drifted（如 AGENTS.md）", () => {
+    const src = join(work, "rdf");
+    mkdirSync(join(src, "agents"), { recursive: true });
+    writeFileSync(join(src, "agents", "rdfile.md"), "---\ndescription: rdfile\n---\nYou are rdfile.\n");
+    writeFileSync(join(src, "dia.json"), JSON.stringify({
+      schema: 1, kind: "persona", id: "rdfile", version: "0.1.0", hosts: ["opencode"],
+      entry: { opencode: "agents/rdfile.md" },
+      files: [{ from: "agents/rdfile.md", to: "~/.config/opencode/AGENTS.md" }],
+    }));
+    // `files.to` 走 DIA_HOME 展开：必须指到临时 HOME，别落到真实家目录
+    const prevHome = process.env.DIA_HOME;
+    const fakeHome = mkdtempSync(join(tmpdir(), "dia-cr-home-"));
+    process.env.DIA_HOME = fakeHome;
+    try {
+      expect(persona.install(src).id).toBe("rdfile");
+      const dest = join(fakeHome, ".config/opencode/AGENTS.md");
+      expect(persona.renderDrift("rdfile").drift).toEqual([]);
+      writeFileSync(dest, "tampered\n");
+      const rep = persona.renderDrift("rdfile");
+      expect(rep.drift.some((d: any) => d.path === dest && d.action === "changed")).toBe(true);
+      expect(readFileSync(dest, "utf8")).toBe("tampered\n"); // 只读：不修复
+    } finally {
+      if (prevHome === undefined) delete process.env.DIA_HOME;
+      else process.env.DIA_HOME = prevHome;
+      persona.remove("rdfile");
+    }
+  });
+
+  test("未安装 → E_NOT_INSTALLED（doctor 侧降级为 skip）", () => {
+    expect(() => persona.renderDrift("ghost")).toThrow(/E_NOT_INSTALLED/);
+  });
+
+  test("宿主改写 profile 里的 package.json / 自带插件 → 不算 drift，render 也不回退/删除", () => {
+    const src = join(work, "rdhost");
+    persona.create("rdhost", { dir: src });
+    writeFileSync(join(src, "package.json"), JSON.stringify({ name: "rdhost" }) + "\n");
+    persona.install(src);
+    const prof = join(profiles, "rdhost");
+    // 模拟宿主：`dsh plugin --profile rdhost add plug` 改 package.json 并装插件
+    writeFileSync(join(prof, "package.json"), JSON.stringify({ name: "rdhost", dependencies: { plug: "1" } }) + "\n");
+    mkdirSync(join(prof, "plugins"), { recursive: true });
+    writeFileSync(join(prof, "plugins", "host-installed.js"), "host\n");
+
+    expect(persona.verify("rdhost").ok).toBe(true);
+    expect(persona.renderDrift("rdhost").drift).toEqual([]);
+
+    persona.render("rdhost");
+    expect(existsSync(join(prof, "plugins", "host-installed.js"))).toBe(true);
+    expect(JSON.parse(readFileSync(join(prof, "package.json"), "utf8")).dependencies).toEqual({ plug: "1" });
+    persona.remove("rdhost");
+  });
+});
+
 describe("render 安全边界", () => {
   test("安装目录被手改成越界 entry → E_MANIFEST，不复制目录外文件", () => {
     const src = join(work, "evil");

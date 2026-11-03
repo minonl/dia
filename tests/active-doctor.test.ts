@@ -76,6 +76,36 @@ describe("dia doctor", () => {
     expect(r.status).toBeLessThanOrEqual(1);
   });
 
+  test("persona.render：全绿 ok；手改宿主产物 → warn（detail 含路径），恢复后回 ok", () => {
+    const dest = join(home, ".config/opencode/AGENTS.md");
+    const before = readFileSync(dest, "utf8");
+    const pick = (out: string) =>
+      JSON.parse(out).checks.find((c: any) => c.name === "persona.render");
+
+    const ok = pick(run(["doctor", "--persona", "yan", "--json"]).stdout);
+    expect(ok.status).toBe("ok");
+    expect(ok.detail).not.toContain("跳过");
+
+    writeFileSync(dest, before + "\n手改\n");
+    try {
+      const r = run(["doctor", "--persona", "yan", "--json"]);
+      const c = pick(r.stdout);
+      expect(["warn", "fail"]).toContain(c.status);
+      expect(c.detail).toContain(dest);
+      expect(c.detail).toContain("changed");
+      // 只读：doctor 不得把产物写回（写回是 `dia persona render` 的职责）
+      expect(readFileSync(dest, "utf8")).toBe(before + "\n手改\n");
+      // verify 仍按「内容完整性」判 fail，退出码语义不变（2）
+      expect(JSON.parse(r.stdout).verdict).toBe("fail");
+      expect(r.status).toBe(2);
+    } finally {
+      writeFileSync(dest, before);
+    }
+
+    const back = pick(run(["doctor", "--persona", "yan", "--json"]).stdout);
+    expect(back.status).toBe("ok");
+  });
+
   test("平台版本自检：opencode/dsh 只报告，不判红", () => {
     const r = run(["doctor", "--json"]);
     const d = JSON.parse(r.stdout);

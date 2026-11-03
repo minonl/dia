@@ -116,7 +116,7 @@ usage:
   dia ingest git --repo DIR [--since DATE] [--limit N] [--json]
   dia audit append --session S --tool T [--decision allow|deny|waive] [--params JSON]
                     [--risk N] [--redline] [--note ...] [--json]
-  dia audit verify --session S --calls N [--json]
+  dia audit verify --session S --calls N [--chain] [--json]
   dia audit score --session S [--json]
   dia audit tail [--n 20] [--json]
   dia freeze --reason R [--auto] [--last-episode ID] [--json]
@@ -339,9 +339,16 @@ async function auditCli(argv: string[]): Promise<number> {
     const auto = !flag(args, "--calls");
     const calls = auto ? countCalls(session) : Number(flag(args, "--calls"));
     if (Number.isNaN(calls)) { err("bad --calls"); return 2; }
-    const r = audit.verify(session, calls);
+    const chained = has(args, "--chain");
+    const r = audit.verify(session, calls, { chain: chained });
+    const chain = r.chain;
+    const extra = chained && chain
+      ? ` chain=${chain.ok ? "ok" : "broken" + (chain.broken_at !== null ? "@" + chain.broken_at : "") + " " + chain.reason}`
+        + ` checked=${chain.checked} legacy=${chain.legacy} head=${chain.head_seq ?? "-"}`
+        + (chain.tail_truncated ? " tail_truncated=true" : "")
+      : "";
     out(asJson ? JSON.stringify({ ...r, expected_source: auto ? "runtime" : "manual" })
-      : `audit_rows=${r.audit_rows} expected=${r.expected_calls} (${auto ? "runtime" : "manual"}) ok=${r.ok} gap=${r.gap}`);
+      : `audit_rows=${r.audit_rows} expected=${r.expected_calls} (${auto ? "runtime" : "manual"}) ok=${r.ok} gap=${r.gap}${extra}`);
     return r.ok ? 0 : 1;
   }
   if (sub === "score") {

@@ -72,6 +72,7 @@ grep -q 'REDACTED:GITHUB_TOKEN' "$TMP/corpus/episodes.jsonl"
 echo "[5/7] 审计对账"
 for i in 1 2 3; do run audit append --session e2e-s1 --tool bash --decision allow >/dev/null; done
 run audit verify --session e2e-s1 --calls 3 >/dev/null
+run audit verify --session e2e-s1 --calls 3 --chain >/dev/null
 set +e; run audit verify --session e2e-s1 --calls 4 >/dev/null; RC=$?; set -e
 [ "$RC" -ne 0 ] || { echo "verify should fail on gap"; exit 1; }
 

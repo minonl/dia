@@ -134,6 +134,11 @@ dia audit append --session S --tool send --decision deny --redline
 # 对账：审计行数 >= 实际工具调用数
 dia audit verify --session S --calls 12
 
+# 完整性：逐行重算 prev_hash/hash 链（篡改/删行/乱序报 broken@N，退出码 1）
+dia audit verify --session S --calls 12 --chain [--json]
+# 链头锚点 audit/head.json（last_seq/last_hash/row_count）由 append 原子写入：
+# 末尾删行/回滚报 tail_truncated，锚点缺失或损坏时 fail-closed（ok=false，退出码 1）
+
 # 评分：deny+2 / waive+risk / 越界+4 / 未知工具+3 / 对账缺口+10 / 红线+10
 dia audit score --session S
 

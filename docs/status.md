@@ -1,6 +1,6 @@
 # dia 状态页（单一事实源）
 
-> 更新：2026-11-03（复核：`bun test tests` 211/31 全绿）。任何"现在做到哪了"的问题，以本页为准；其他文档是细节。
+> 更新：2026-11-03（复核：`bun test tests` 230/31 全绿）。任何"现在做到哪了"的问题，以本页为准；其他文档是细节。
 > 规则：状态必须能追到**命令/测试/提交**；没有证据的写"未验证"。
 
 ---
@@ -89,6 +89,7 @@
 | D0.20 | 组合自检 | **完成** | `dia doctor`（persona/kit/knowledge/dsh preset/wt；exit 0/1/2） |
 | D0.21 | worktree 抽取 `packages/wt` | **完成** | 7 处 python→node；`dia wt`；4 套测试原样迁移全绿 |
 | D0.23 | doctor 平台版本自检 | **完成** | `platform:opencode` / `platform:dsh` 报版本（缺宿主 = warn，不判红）；`tests/active-doctor.test.ts` |
+| D0.29 | audit 哈希链（M3） | **完成**（团队自动循环 + 人工修正） | `audit append` 写 `seq/prev_hash/hash`；`audit verify --chain`；锚点 `audit/head.json`（原子写，截断/锚点缺失 fail-closed）；mkdir 锁串行化写入；坏行判链断点；`tests/audit.test.ts` 35 例 |
 | D0.28 | ACP 默认超时 10 分钟 | **完成** | `DEFAULT_ACP_TIMEOUT=600000`（180s 实测会掐断 builder）；`tests/team.test.ts` |
 | D0.27 | doctor 知识索引新鲜度 | **完成**（团队自动循环产出） | `packages/kb` 的 `indexStatus`（只读探测，不建目录）+ doctor 三态：目录缺失 fail / 索引缺失·落后·外部根 warn（带重建命令）/ 一致 ok；`tests/active-doctor.test.ts` |
 | D0.26 | `dia deps list/record` | **完成** | 追加与派生视图进 CLI；`tests/deps-cli.test.ts` |

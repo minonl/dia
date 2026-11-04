@@ -146,7 +146,9 @@ usage:
   dia deps record --id ID --kind K --version V [--resolved R] [--role required|optional] [--result pass|fail|unknown] [--evidence P]
   dia env list|check [KEY…] | env [--dry-run] [--redact] <cmd…>
   dia env bw status|unlock [--passwordfile P]|lock
-  dia env bw run --map KEY=item [--map …] -- <cmd…>   # 只注入映射键；BW_SESSION 不进子进程
+  dia env bw run --map KEY=item [--map …] [--task T] -- <cmd…>   # 只注入映射键；BW_SESSION 不进子进程
+  dia env bw serve [--socket PATH]   # 常驻 broker：单会话 + 审计行（前台）
+  dia env bw get --item ITEM [--env KEY] [--task T] [--json]
   dia persona default <id>|--unset|--show [--host opencode]
   dia kit add --from SRC [--ref REF] [--dry-run] [--json]
   dia kit list|verify <id>|remove <id>
@@ -992,14 +994,31 @@ export async function main(rawArgv: string[]): Promise<number> {
           }
           if (act === "run") {
             const maps = bw.parseMaps(flags(rest2, "--map"));
-            if (!maps.length) { err("usage: dia env bw run --map KEY=item [--map …] -- <cmd…>"); return 2; }
+            if (!maps.length) { err("usage: dia env bw run --map KEY=item [--map …] [--task T] -- <cmd…>"); return 2; }
             const sep = rest2.indexOf("--");
             if (sep < 0 || sep === rest2.length - 1) { err("missing -- <cmd…>"); return 2; }
             const [command, ...cmdArgs] = rest2.slice(sep + 1);
-            const r = bw.runMapped(maps, command, cmdArgs);
+            const extra = await bw.resolveMaps(maps, flag(rest2, "--task"));
+            const r = bw.runWithEnv(extra, command, cmdArgs);
             process.stdout.write(r.out);
             process.stderr.write(r.err);
             return r.code;
+          }
+          if (act === "serve") {
+            const h = await bw.serve({ socket: flag(rest2, "--socket"), ready: () => out(`broker listening ${bw.socketFile()}`) });
+            process.on("SIGINT", () => { h.close(); process.exit(0); });
+            process.on("SIGTERM", () => { h.close(); process.exit(0); });
+            await new Promise(() => { /* keep alive; server holds the loop */ });
+            return 0;
+          }
+          if (act === "get") {
+            const item = flag(rest2, "--item");
+            if (!item) { err("usage: dia env bw get --item ITEM [--env KEY] [--task T]"); return 2; }
+            const viaBroker = await bw.askBroker({ env: flag(rest2, "--env"), item, task: flag(rest2, "--task") }).catch(() => null);
+            const value = viaBroker ?? bw.getItemPassword(item);
+            if (has(rest2, "--json")) out(JSON.stringify({ item, ok: true }));
+            else out(value); // 仅调用方管道消费；日志/截图不要捕获
+            return 0;
           }
           err("usage: dia env bw status|unlock|lock|run");
           return 2;

@@ -16,10 +16,12 @@ function walk(dir: string): string[] {
 
 describe("static safety", () => {
   test("no network modules imported by the framework", () => {
+    // node:net 唯一例外：src/bw.ts 的本机 unix socket（credential broker 的进程间通道，不开 TCP 端口）。
+    const NET_IPC_ALLOWED = new Set(["bw.ts"]);
     for (const f of walk(SRC)) {
       const text = readFileSync(f, "utf8");
       expect(text).not.toMatch(/node:https?/);
-      expect(text).not.toMatch(/\bnode:net\b/);
+      if (!NET_IPC_ALLOWED.has(f.split("/").pop()!)) expect(text).not.toMatch(/\bnode:net\b/);
       expect(text).not.toMatch(/\bdgram\b/);
       expect(text).not.toMatch(/\bfetch\(/);
     }

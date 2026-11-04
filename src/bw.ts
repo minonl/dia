@@ -11,6 +11,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync }
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
+import { connect } from "node:net";
 
 const home = () => process.env.DIA_HOME || homedir();
 const dataDir = () => process.env.DIA_DATA_DIR || join(home(), ".local", "share", "dia");
@@ -116,6 +117,20 @@ export interface Map { env: string; item: string }
 export function runMapped(maps: Map[], command: string, args: string[]): { code: number; out: string; err: string } {
   const extra: Record<string, string> = {};
   for (const m of maps) extra[m.env] = getItemPassword(m.item);
+  return runWithEnv(extra, command, args);
+}
+
+/** 优先走 broker（单会话 + 审计行），broker 不在才回落到本地 session。 */
+export async function resolveMaps(maps: Map[], task?: string): Promise<Record<string, string>> {
+  const extra: Record<string, string> = {};
+  for (const m of maps) {
+    const viaBroker = await askBroker({ env: m.env, item: m.item, task }).catch(() => null);
+    extra[m.env] = viaBroker ?? getItemPassword(m.item);
+  }
+  return extra;
+}
+
+export function runWithEnv(extra: Record<string, string>, command: string, args: string[]): { code: number; out: string; err: string } {
   const env: NodeJS.ProcessEnv = { ...process.env, ...extra };
   delete env.BW_SESSION;
   delete env.BW_PASSWORD;
@@ -133,5 +148,95 @@ export function parseMaps(raw: string[]): Map[] {
     const m = /^([A-Za-z_][A-Za-z0-9_]*)=(.+)$/.exec(s.trim());
     if (!m) throw new Error(`E_USAGE: --map 需要 KEY=item（收到 ${JSON.stringify(s)}）`);
     return { env: m[1], item: m[2] };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// 常驻 broker（unix socket，换行分隔 JSON；只 bind 文件路径，不监听 TCP 端口）：单进程持有 session，客户端只按 item 取值。
+// 审计：<data>/audit/bw.jsonl 每行 {ts, env, item, task, ok} —— 只记键名，不记值。
+// ---------------------------------------------------------------------------
+import { createServer } from "node:net";
+import { appendFileSync } from "node:fs";
+
+export function socketFile(): string {
+  return process.env.DIA_BW_SOCKET || join(dataDir(), "state", "bw.sock");
+}
+
+export function auditFile(): string {
+  return process.env.DIA_BW_AUDIT || join(dataDir(), "audit", "bw.jsonl");
+}
+
+function audit(rec: { env?: string; item: string; task?: string; ok: boolean; error?: string }) {
+  const f = auditFile();
+  mkdirSync(join(f, ".."), { recursive: true });
+  appendFileSync(f, JSON.stringify({ ts: new Date().toISOString(), ...rec }) + "\n", { mode: 0o600 });
+}
+
+/** 启动 broker（前台；launchd/systemd 托管时由它们拉起）。 */
+export function serve(opts: { socket?: string; ready?: () => void } = {}): Promise<{ close: () => void }> {
+  const sock = opts.socket || socketFile();
+  mkdirSync(join(sock, ".."), { recursive: true });
+  rmSync(sock, { force: true });
+  return new Promise((resolve, reject) => {
+    const server = createServer((conn) => {
+      let buf = "";
+      conn.setEncoding("utf8");
+      conn.on("data", (chunk) => {
+        buf += chunk;
+        let i: number;
+        while ((i = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, i).trim();
+          buf = buf.slice(i + 1);
+          if (!line) continue;
+          let req: any = {};
+          try { req = JSON.parse(line); } catch { conn.write(JSON.stringify({ ok: false, error: "bad json" }) + "\n"); continue; }
+          const item = String(req.item || "");
+          const env = req.env ? String(req.env) : undefined;
+          const task = req.task ? String(req.task) : undefined;
+          try {
+            if (!item) throw new Error("E_USAGE: item required");
+            const value = getItemPassword(item);
+            audit({ env, item, task, ok: true });
+            conn.write(JSON.stringify({ ok: true, value }) + "\n");
+          } catch (e: any) {
+            audit({ env, item, task, ok: false, error: String(e?.message || e) });
+            conn.write(JSON.stringify({ ok: false, error: String(e?.message || e) }) + "\n");
+          }
+        }
+      });
+      conn.on("error", () => { /* client gone */ });
+    });
+    server.on("error", reject);
+    server.listen(sock, () => {
+      try { chmodSync(sock, 0o600); } catch { /* ignore */ }
+      opts.ready?.();
+      resolve({ close: () => { try { server.close(); } catch {} try { rmSync(sock, { force: true }); } catch {} } });
+    });
+  });
+}
+
+/** 通过 broker 取一个值；broker 不在时返回 null（调用方决定 fallback 或失败）。 */
+export function askBroker(req: { env?: string; item: string; task?: string }, timeoutMs = 5000): Promise<string | null> {
+  const sock = socketFile();
+  if (!existsSync(sock)) return Promise.resolve(null);
+  return new Promise((resolve, reject) => {
+    const conn = connect(sock);
+    let buf = "";
+    const timer = setTimeout(() => { conn.destroy(); reject(new Error("E_BW: broker 超时")); }, timeoutMs);
+    conn.setEncoding("utf8");
+    conn.on("connect", () => conn.write(JSON.stringify(req) + "\n"));
+    conn.on("data", (chunk) => {
+      buf += chunk;
+      const i = buf.indexOf("\n");
+      if (i < 0) return;
+      clearTimeout(timer);
+      conn.end();
+      try {
+        const r = JSON.parse(buf.slice(0, i));
+        if (r.ok) resolve(String(r.value));
+        else reject(new Error(String(r.error || "E_BW: broker 拒绝")));
+      } catch (e: any) { reject(e); }
+    });
+    conn.on("error", (e) => { clearTimeout(timer); reject(e); });
   });
 }

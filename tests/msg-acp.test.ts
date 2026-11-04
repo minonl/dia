@@ -22,7 +22,7 @@ describe("dia msg ACP 传输", () => {
     const reg = run(["agents", "register", "--agent", "mock", "--host", "dsh", "--cwd", "/tmp", "--acp-cmd", `node ${mock}`]);
     expect(reg.status).toBe(0);
     const id = JSON.parse(run(["msg", "send", "mock", "--from", "ops", "--kind", "question", "--subject", "s", "--json"]).stdout).id;
-    const d = run(["msg", "deliver", "mock", id, "--transport", "acp", "--json"]);
+    const d = run(["msg", "deliver", "mock", id, "--transport", "acp", "--wait", "--json"]);
     expect(d.status).toBe(0);
     expect(JSON.parse(d.stdout).reply).toContain("已处理");
     const inbox = JSON.parse(run(["msg", "inbox", "mock", "--json"]).stdout);
@@ -49,7 +49,7 @@ describe("dia msg ACP 传输", () => {
   test("未登记 acp_cmd 时报 E_NO_ACP", () => {
     run(["agents", "register", "--agent", "plain", "--host", "dsh", "--cwd", "/tmp"]);
     const id = JSON.parse(run(["msg", "send", "plain", "--from", "ops", "--kind", "notify", "--subject", "s", "--json"]).stdout).id;
-    const d = run(["msg", "deliver", "plain", id, "--transport", "acp"]);
+    const d = run(["msg", "deliver", "plain", id, "--transport", "acp", "--wait"]);
     expect(d.status).not.toBe(0);
     expect(d.stderr).toContain("E_NO_ACP");
   });

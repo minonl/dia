@@ -27,3 +27,5 @@ git tag -a "v$NEW" -m "v$NEW"
 git push origin main "v$NEW"
 gh release create "v$NEW" --repo "${REPO:-minonl/dia}" --generate-notes --title "v$NEW"
 echo "released v$NEW"
+# npm 发布由 .github/workflows/publish.yml 在 release published 时用 OIDC 完成（仓库不放 token）
+echo "npm publish: 由 publish.yml 触发（需先在 npmjs 配好 Trusted Publisher）"

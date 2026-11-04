@@ -1,0 +1,36 @@
+name: publish
+
+# npm Trusted Publishing：OIDC 换短时凭据，仓库里不放 token。
+# 前置（npmjs.com → @minonl/dia → Settings → Trusted Publisher）：
+#   Publisher: GitHub Actions
+#   Repository: minonl/dia
+#   Workflow filename: publish.yml
+#   Environment: (留空)
+# 注意：npm provenance 要求包源码可公开访问；仓库仍为 private 时 publish 会失败，
+#       需要先去 public-release 门禁（docs/security/public-release.md）。
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # OIDC：npm 用它签发短时凭据
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: latest }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+      - run: bun install --frozen-lockfile
+      - run: bun run build
+      - run: bun test tests
+      - name: publish (trusted, provenance)
+        run: npm publish --access public --provenance

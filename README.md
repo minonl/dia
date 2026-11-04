@@ -56,6 +56,10 @@ dia version && dia doctor
 ```
 
 > 包里带 `dist` + `packages/{wt,job}`；persona 仍需单独 `dia persona add …`。
+>
+> **发布方式**：GitHub Actions + npm **Trusted Publishing**（OIDC，仓库里不放 token）；
+> 打 release 即触发 `.github/workflows/publish.yml`。npmjs 侧需配 Trusted Publisher：
+> repo `minonl/dia`、workflow `publish.yml`。**provenance 要求仓库公开**，私有仓需先过 public-release 门禁。
 
 ### 从仓库（开发/本地）
 

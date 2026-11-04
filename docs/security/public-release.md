@@ -1,6 +1,9 @@
 # dia Public Release Gate
 
 > 状态：**BLOCKED until audit**（2026-10-30）
+>
+> 2026-11-04：npm **provenance** 要求包源码可公开访问；仓库仍是 private 时 `npm publish --provenance` 会失败。
+> 所以「发 npm」与「仓库转公开」是同一道门：先过本文件的门禁。
 > 适用：把 `minonl/dia` 从 private 改为 public 之前。任何一项失败都不得公开。
 
 ---

@@ -4962,6 +4962,9 @@ dia env bw get --item db --task t-1    # 走 broker，写审计行
 # dia Public Release Gate
 
 > 状态：**BLOCKED until audit**（2026-10-30）
+>
+> 2026-11-04：npm **provenance** 要求包源码可公开访问；仓库仍是 private 时 `npm publish --provenance` 会失败。
+> 所以「发 npm」与「仓库转公开」是同一道门：先过本文件的门禁。
 > 适用：把 `minonl/dia` 从 private 改为 public 之前。任何一项失败都不得公开。
 
 ---
@@ -5161,6 +5164,7 @@ git for-each-ref
 | D0.21 | worktree 抽取 `packages/wt` | **完成** | 7 处 python→node；`dia wt`；4 套测试原样迁移全绿 |
 | D0.23 | doctor 平台版本自检 | **完成** | `platform:opencode` / `platform:dsh` 报版本（缺宿主 = warn，不判红）；`tests/active-doctor.test.ts` |
 | D0.44 | 配置迁移走 LLM 任务 | **完成** | `docs/migrations/llm-migration.md`：升级只改声明；迁移=任务+判据+回滚；禁止代码里堆版本分支（安全敏感/原子场景例外） |
+| D0.47 | npm Trusted Publishing | **完成（待配置侧）** | `.github/workflows/publish.yml`：release published → OIDC → `npm publish --provenance`；`publishConfig.provenance=true`；仓库不放 token。npmjs 侧需配 Trusted Publisher（repo + workflow 名） |
 | D0.46 | npm 包准备 | **完成（待发布）** | 去掉 `private`、`publishConfig.access=public`、`files` 含 `packages/{wt,job}`；`npm pack` + 本地全局安装实测通过 |
 | D0.45 | 发版脚本 | **完成** | `scripts/release.sh <patch|minor|major|x.y.z> [--dry-run]`：干净 main + 同步校验 → bump → tag → push → `gh release create`（私有仓默认不发 npm） |
 | D0.43 | broker 取用写主审计链 | **完成** | `DIA_BW_AUDIT_CHAIN=1` 时成功取用追加 `audit.jsonl`（tool=bw、note=ENV=item，无值）；默认关，避免测试/日常噪声；失败只留 `bw.jsonl` |

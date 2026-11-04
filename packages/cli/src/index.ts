@@ -6,6 +6,7 @@ import { runWrapped } from "../../../src/run.ts";
 import { countCalls } from "../../../src/runtime.ts";
 import { resumeCard } from "../../../src/resume.ts";
 import * as persona from "../../../src/persona.ts";
+import * as msg from "../../../src/msg.ts";
 import * as kit from "../../../src/kit.ts";
 import * as scope from "../../../src/scope.ts";
 import * as active from "../../../src/active.ts";
@@ -141,7 +142,7 @@ usage:
   dia wt create|form|list|status|check|route|scope|clean|prune-merged …
   dia cmd <name> [args…]              # 只查 persona 声明的命令（可绕开同名内置）
   dia <persona-cmd> [args…]           # 一级委派（内置优先）
-  dia task add|list|status|done
+  dia msg send|inbox|ack|delivered|reply|thread|escalate|agents\n  dia task add|list|status|done
   dia team run <id> --mock | --acp|--dsh --workspace DIR
   dia team gate|accept|reject|next
   dia job <list|status|install|...>   # 调度适配器
@@ -446,6 +447,91 @@ async function taskCli(argv: string[]): Promise<number> {
     }
   } catch (e: any) { err(e?.message || String(e)); return 30; }
   err("usage: dia task add|list|status|done");
+  return 2;
+}
+
+
+async function msgCli(argv: string[]): Promise<number> {
+  const [sub, ...args] = argv;
+  const asJson = has(args, "--json");
+  const refs: Record<string, string> = {};
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--ref" && args[i + 1]) { const [k, ...v] = args[i + 1].split("="); if (k && v.length) refs[k] = v.join("="); i++; }
+  }
+  try {
+    if (sub === "send") {
+      const to = positional(args)[0];
+      const from = flag(args, "--from") || process.env.DIA_AGENT || process.env.DIA_PERSONA;
+      if (!to || !from) { err("usage: dia msg send <to> --from <me> --kind <k> --subject S [--body B|--body-file F]"); return 2; }
+      const m = msg.send({
+        from, to,
+        kind: (flag(args, "--kind") || "notify") as any,
+        subject: flag(args, "--subject") || "",
+        body: flag(args, "--body"),
+        bodyFile: flag(args, "--body-file"),
+        refs: Object.keys(refs).length ? refs : undefined,
+        requiresReply: has(args, "--requires-reply") ? true : undefined,
+        deadline: flag(args, "--deadline"),
+        threadId: flag(args, "--thread"),
+        hops: flag(args, "--hops") ? Number(flag(args, "--hops")) : undefined,
+      });
+      out(asJson ? JSON.stringify(m) : `${m.id}\t${m.thread_id}#${m.seq}\t${m.from} → ${m.to}\t${m.kind}\t${m.subject}`);
+      return 0;
+    }
+    if (sub === "inbox") {
+      const agent = positional(args)[0];
+      if (!agent) { err("usage: dia msg inbox <agent> [--unread]"); return 2; }
+      const rows = msg.inbox(agent, { unread: has(args, "--unread") });
+      out(asJson ? JSON.stringify(rows, null, 1) : rows.map((m) => `${m.id}\t${m.state}\t${m.from}\t${m.subject}`).join("\n") || "(empty)");
+      return 0;
+    }
+    if (sub === "ack") {
+      const [agent, id] = positional(args);
+      if (!agent || !id) { err("usage: dia msg ack <agent> <id>"); return 2; }
+      const m = msg.ack(agent, id);
+      out(asJson ? JSON.stringify(m) : `${m.id}\t${m.state}`);
+      return 0;
+    }
+    if (sub === "delivered") {
+      const [agent, id] = positional(args);
+      const transport = flag(args, "--transport") || "unknown";
+      if (!agent || !id) { err("usage: dia msg delivered <agent> <id> --transport tmux|acp"); return 2; }
+      const m = msg.markDelivered(agent, id, transport);
+      out(asJson ? JSON.stringify(m) : `${m.id}\t${m.state}\t${m.transport}`);
+      return 0;
+    }
+    if (sub === "reply") {
+      const [agent, id] = positional(args);
+      if (!agent || !id) { err("usage: dia msg reply <agent> <id> --body B"); return 2; }
+      const r = msg.reply(agent, id, flag(args, "--body") || "", { refs: Object.keys(refs).length ? refs : undefined });
+      out(asJson ? JSON.stringify(r) : `${r.reply.id}\t${r.reply.thread_id}#${r.reply.seq}\t${r.reply.from} → ${r.reply.to}`);
+      return 0;
+    }
+    if (sub === "thread") {
+      const tid = positional(args)[0];
+      if (!tid) { err("usage: dia msg thread <thread_id>"); return 2; }
+      const rows = msg.thread(tid);
+      out(asJson ? JSON.stringify(rows, null, 1) : rows.map((m) => `${m.id}\t${m.state}\t${m.from} → ${m.to}\t${m.kind}\t${m.subject}`).join("\n") || "(empty)");
+      return 0;
+    }
+    if (sub === "escalate") {
+      const rows = msg.escalateOverdue();
+      out(asJson ? JSON.stringify(rows, null, 1) : rows.map((m) => `${m.id}\t${m.to}\t${m.subject}`).join("\n") || "(none)");
+      return 0;
+    }
+    if (sub === "agents") {
+      const rows = msg.agents();
+      out(asJson ? JSON.stringify(rows) : rows.join("\n") || "(none)");
+      return 0;
+    }
+  } catch (e: any) {
+    const m = e?.message || String(e);
+    err(m);
+    if (m.startsWith("E_NOT_FOUND")) return 21;
+    if (m.startsWith("E_USAGE")) return 2;
+    return 31;
+  }
+  err("usage: dia msg send|inbox|ack|delivered|reply|thread|escalate|agents");
   return 2;
 }
 
@@ -924,6 +1010,7 @@ export async function main(rawArgv: string[]): Promise<number> {
     return rc;
   }
   if (cmd === "task") return taskCli(argv.slice(1));
+  if (cmd === "msg") return msgCli(argv.slice(1));
   if (cmd === "team") return teamCli(argv.slice(1));
   if (cmd === "job") return runJob(argv.slice(1));
   if (cmd === "price") {

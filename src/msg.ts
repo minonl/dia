@@ -129,6 +129,12 @@ export function send(opts: SendOptions): Message {
   return m;
 }
 
+export function get(agent: string, id: string): Message {
+  const hit = findInbox(agent, id);
+  if (!hit) throw new Error(`E_NOT_FOUND: ${id}`);
+  return hit.msg;
+}
+
 export function inbox(agent: string, opts: { unread?: boolean } = {}): Message[] {
   const all = readAll(agent);
   const active = all.filter((m) => m.state !== "closed");

@@ -7,6 +7,8 @@ import { countCalls } from "../../../src/runtime.ts";
 import { resumeCard } from "../../../src/resume.ts";
 import * as persona from "../../../src/persona.ts";
 import * as msg from "../../../src/msg.ts";
+import * as agents from "../../../src/agents.ts";
+import * as tmux from "../../../src/tmux.ts";
 import * as kit from "../../../src/kit.ts";
 import * as scope from "../../../src/scope.ts";
 import * as active from "../../../src/active.ts";
@@ -142,7 +144,7 @@ usage:
   dia wt create|form|list|status|check|route|scope|clean|prune-merged …
   dia cmd <name> [args…]              # 只查 persona 声明的命令（可绕开同名内置）
   dia <persona-cmd> [args…]           # 一级委派（内置优先）
-  dia msg send|inbox|ack|delivered|reply|thread|escalate|agents\n  dia task add|list|status|done
+  dia msg send|show|inbox|ack|delivered|deliver|reply|thread|escalate|agents\n  dia agents list|register|unregister|discover\n  dia task add|list|status|done
   dia team run <id> --mock | --acp|--dsh --workspace DIR
   dia team gate|accept|reject|next
   dia job <list|status|install|...>   # 调度适配器
@@ -451,6 +453,40 @@ async function taskCli(argv: string[]): Promise<number> {
 }
 
 
+
+async function agentsCli(argv: string[]): Promise<number> {
+  const [sub, ...args] = argv;
+  const asJson = has(args, "--json");
+  try {
+    if (!sub || sub === "list") {
+      const rows = agents.list({ live: has(args, "--live") });
+      out(asJson ? JSON.stringify(rows, null, 1)
+        : rows.map((r) => `${r.agent}\t${r.live ? "live" : "offline"}${r.mismatch ? "(!mismatch)" : ""}\t${r.host}\t${r.pane ?? "-"}\t${r.cwd ?? "-"}`).join("\n") || "(none)");
+      return 0;
+    }
+    if (sub === "register") {
+      const agent = flag(args, "--agent") || positional(args)[0];
+      if (!agent) { err("usage: dia agents register --agent X --host codex [--pane %3] [--cwd DIR]"); return 2; }
+      const r = agents.register({ agent, host: flag(args, "--host") || "codex", pane: flag(args, "--pane"), cwd: flag(args, "--cwd"), session: flag(args, "--session"), pid: flag(args, "--pid") ? Number(flag(args, "--pid")) : undefined });
+      out(asJson ? JSON.stringify(r) : `registered ${r.agent} (${r.host}) pane=${r.pane ?? "-"}`);
+      return 0;
+    }
+    if (sub === "unregister") {
+      const agent = positional(args)[0];
+      if (!agent) { err("usage: dia agents unregister <agent>"); return 2; }
+      out(agents.unregister(agent) ? `unregistered ${agent}` : `(not found) ${agent}`);
+      return 0;
+    }
+    if (sub === "discover") {
+      const rows = agents.discoverTmux();
+      out(asJson ? JSON.stringify(rows, null, 1) : rows.map((r) => `${r.agent}\t${r.session}\t${r.pane}\t${r.cwd}`).join("\n") || "(none)");
+      return 0;
+    }
+  } catch (e: any) { err(e?.message || String(e)); return 31; }
+  err("usage: dia agents list|register|unregister|discover");
+  return 2;
+}
+
 async function msgCli(argv: string[]): Promise<number> {
   const [sub, ...args] = argv;
   const asJson = has(args, "--json");
@@ -476,6 +512,21 @@ async function msgCli(argv: string[]): Promise<number> {
         hops: flag(args, "--hops") ? Number(flag(args, "--hops")) : undefined,
       });
       out(asJson ? JSON.stringify(m) : `${m.id}\t${m.thread_id}#${m.seq}\t${m.from} → ${m.to}\t${m.kind}\t${m.subject}`);
+      return 0;
+    }
+    if (sub === "show") {
+      const [agent, id] = positional(args);
+      if (!agent || !id) { err("usage: dia msg show <agent> <id>"); return 2; }
+      const m = msg.get(agent, id);
+      const body = m.body_file ? `(见文件) ${m.body_file}` : (m.body ?? "");
+      out(asJson ? JSON.stringify(m, null, 1) : `${m.id}  [${m.state}]  ${m.from} → ${m.to}  ${m.kind}\n主题: ${m.subject}\n${body}`);
+      return 0;
+    }
+    if (sub === "deliver") {
+      const [agent, id] = positional(args);
+      if (!agent || !id) { err("usage: dia msg deliver <agent> <id> [--force]"); return 2; }
+      const r = tmux.deliver(agent, id, { force: has(args, "--force") });
+      out(asJson ? JSON.stringify(r) : `delivered ${r.id} → ${r.agent} (${r.pane})`);
       return 0;
     }
     if (sub === "inbox") {
@@ -1011,6 +1062,7 @@ export async function main(rawArgv: string[]): Promise<number> {
   }
   if (cmd === "task") return taskCli(argv.slice(1));
   if (cmd === "msg") return msgCli(argv.slice(1));
+  if (cmd === "agents") return agentsCli(argv.slice(1));
   if (cmd === "team") return teamCli(argv.slice(1));
   if (cmd === "job") return runJob(argv.slice(1));
   if (cmd === "price") {

@@ -21,6 +21,7 @@ export function runMock(id: string) {
   writeFileSync(join(dir, "verify.json"), JSON.stringify({ conclusion: "通过", commit: "mock", evidence: ["mock test.log"] }, null, 1));
   writeFileSync(join(dir, "redteam.json"), JSON.stringify({ findings: [] }, null, 1));
   writeFileSync(join(dir, "packet.md"), `# 验收包 ${id}\n\n- 结论：通过（mock）\n- 风险：无\n`);
+  writeFileSync(join(dir, "run.json"), JSON.stringify({ mock: true, judge: t.judge || null, ts: new Date().toISOString() }, null, 1));
   setStatus(id, "awaiting_acceptance", "mock run");
   return dir;
 }
@@ -39,12 +40,15 @@ function runJudge(workspace: string, judge: string) {
 
 export function gate(id: string) {
   const dir = runDir(id);
-  const need = ["plan.md", "diff.patch", "test.log", "verify.json", "redteam.json", "packet.md"];
+  const need = ["plan.md", "diff.patch", "test.log", "verify.json", "redteam.json", "packet.md", "run.json"];
   const missing = need.filter((f) => !existsSync(join(dir, f)));
   if (missing.length) return { ok: false, reason: "missing: " + missing.join(",") };
-  let verify: any, redteam: any;
+
+  let verify: any, redteam: any, run: any;
   try { verify = JSON.parse(readFileSync(join(dir, "verify.json"), "utf8")); } catch { return { ok: false, reason: "bad verify.json" }; }
   try { redteam = JSON.parse(readFileSync(join(dir, "redteam.json"), "utf8")); } catch { return { ok: false, reason: "bad redteam.json" }; }
+  try { run = JSON.parse(readFileSync(join(dir, "run.json"), "utf8")); } catch { return { ok: false, reason: "bad run.json" }; }
+
   if (!["通过", "不通过", "无法判定"].includes(verify.conclusion)) return { ok: false, reason: "bad conclusion" };
   if (verify.conclusion !== "通过") return { ok: false, reason: "verify conclusion: " + verify.conclusion };
   if (!Array.isArray(verify.evidence) || !verify.evidence.length) return { ok: false, reason: "no evidence" };
@@ -55,6 +59,35 @@ export function gate(id: string) {
   if (!Array.isArray(redteam.findings)) return { ok: false, reason: "bad findings" };
   const high = highFindings(redteam);
   if (high.length) return { ok: false, reason: `redteam high: ${high.length}（必须先修复）` };
+
+  // 判据：**以任务台账为准**，由 gate 现场重跑（workspace 从 run.json 取）。
+  // 任何角色写过的 judge.json 都不采信——它只是上一次的观察记录，会被本次结果覆盖。
+  const t = get(id);
+  const judgeCmd = String(t.judge || "").trim();
+  if (!judgeCmd) return { ok: false, reason: "task has no judge" };
+  if (run.judge && String(run.judge) !== judgeCmd) {
+    return { ok: false, reason: "run.json judge 与任务台账不一致（角色改过判据）" };
+  }
+  if (run.mock) {
+    // mock 只用于状态机演练：不允许拿它当判据证据过 gate
+    return { ok: false, reason: "mock run 不能作为验收证据（请用 --acp/--dsh 真跑判据）" };
+  }
+  const workspace = String(run.workspace || "");
+  if (!workspace || !existsSync(workspace)) return { ok: false, reason: "run.json workspace 不存在" };
+
+  const started = Date.now();
+  let exit = 1, out = "";
+  try {
+    const r = execFileSync("sh", ["-c", judgeCmd], { cwd: workspace, encoding: "utf8", timeout: 600_000, stdio: ["ignore", "pipe", "pipe"] });
+    exit = 0;
+    out = String(r);
+  } catch (e: any) {
+    exit = typeof e?.status === "number" ? e.status : 1;
+    out = String(e?.stdout || e?.message || "");
+  }
+  writeFileSync(join(dir, "judge.json"), JSON.stringify({ source: "gate", command: judgeCmd, exit, ms: Date.now() - started, ts: new Date().toISOString() }, null, 1));
+  writeFileSync(join(dir, "judge.log"), out.slice(0, 20000));
+  if (exit !== 0) return { ok: false, reason: `judge exit: ${exit}（见 judge.log）` };
   return { ok: true };
 }
 
@@ -310,6 +343,8 @@ export async function runAcp(id: string, workspace: string) {
 
     writeFileSync(join(dir, "usage.json"), JSON.stringify({ task_id: id, calls: usageAcc.rows.length, input_tokens: usageAcc.input, output_tokens: usageAcc.output, total_tokens: usageAcc.total, cost_usd: usageAcc.cost, unpriced_calls: usageAcc.unpriced, by_role: usageAcc.rows }, null, 1));
     writeFileSync(join(dir, "packet.md"), `# 验收包 ${id}\n\n- 任务：${t.title}\n- 判据：${judge}\n- 验证：${verify?.conclusion}\n- 修复重试：${verify?.repaired ? "是" : "否"} / redteam：${redteam.repaired ? "是" : "否"}\n- 反驳：${(redteam.findings || []).length} 条\n- 模型调用：${usageAcc.rows.length} 次 / ${usageAcc.total} tokens\n`);
+    // 判据命令与工作区由 harness 记录，gate 会**重新执行**它（不信任任何角色写的证据）
+    writeFileSync(join(dir, "run.json"), JSON.stringify({ mock: false, mode: "acp", workspace, judge, ts: new Date().toISOString() }, null, 1));
     setStatus(id, "awaiting_acceptance", "acp run");
     return { dir, verify, redteam };
   } finally {

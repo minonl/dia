@@ -52,7 +52,7 @@ afterAll(() => {
 
 describe("team run --acp（假 ACP 服）", () => {
   test("全流程：planner→builder→verifier→redteam → awaiting_acceptance + gate ok", () => {
-    const id = newTask("a.txt 存在");
+    const id = newTask("test -f a.txt");
     const r = run(["team", "run", id, "--acp", "--workspace", workspace]);
     expect(r.status).toBe(0);
     expect(r.stdout).toContain("awaiting_acceptance");
@@ -103,14 +103,14 @@ describe("team run --dsh（假 dsh）", () => {
 
   test("默认不向 profile 写死模型（用宿主配置）", () => {
     writeFileSync(fakeLog, "");
-    const id = newTask("a.txt 存在");
+    const id = newTask("test -f a.txt");
     expect(run(["team", "run", id, "--dsh", "--workspace", workspace]).status).toBe(0);
     expect(configLog().filter((e: any) => e.id === "model")).toEqual([]);
   }, 30000);
 
   test("DIA_DSH_MODEL 显式覆盖才写 model", () => {
     writeFileSync(fakeLog, "");
-    const id = newTask("a.txt 存在");
+    const id = newTask("test -f a.txt");
     const r = run(["team", "run", id, "--dsh", "--workspace", workspace], { DIA_DSH_MODEL: "example/deepseek-v4.1-flash" });
     expect(r.status).toBe(0);
     const models = configLog().filter((e: any) => e.id === "model");
@@ -119,7 +119,7 @@ describe("team run --dsh（假 dsh）", () => {
   }, 30000);
 
   test("全流程 → awaiting_acceptance", () => {
-    const id = newTask("a.txt 存在");
+    const id = newTask("test -f a.txt");
     const r = run(["team", "run", id, "--dsh", "--workspace", workspace]);
     expect(r.status).toBe(0);
     expect(r.stdout).toContain("awaiting_acceptance");
@@ -131,7 +131,7 @@ describe("team run --dsh（假 dsh）", () => {
 
 describe("team redteam high 自动修复", () => {
   test("第一轮 high → 回灌 builder 修 + 复检清零 → awaiting_acceptance；gate 对 high 判 fail", () => {
-    const id = newTask("a.txt 存在");
+    const id = newTask("test -f a.txt");
     const r = run(["team", "run", id, "--acp", "--workspace", workspace], { FAKE_REDTEAM_HIGH: "1", FAKE_JUDGE: "test -f a.txt" });
     expect(r.status).toBe(0);
     expect(r.stdout).toContain("awaiting_acceptance");

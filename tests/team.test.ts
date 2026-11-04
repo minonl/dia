@@ -30,12 +30,35 @@ describe("task ledger", () => {
 });
 
 describe("team state machine", () => {
-  test("mock run reaches acceptance and gate passes", () => {
-    const t = task.add("team task", { judge: "bun test" });
+  test("mock run reaches acceptance but gate 拒绝用它当判据证据", () => {
+    const t = task.add("team task", { judge: "true" });
     team.runMock(t.id);
     expect(task.get(t.id).status).toBe("awaiting_acceptance");
-    expect(team.gate(t.id).ok).toBe(true);
-    expect(team.accept(t.id).status).toBe("accepted");
+    const g = team.gate(t.id);
+    expect(g.ok).toBe(false);
+    expect(g.reason).toContain("mock");
+  });
+
+  test("gate 现场重跑 judge：失败判 fail，成功放行", () => {
+    const ws = mkdtempSync(join(tmpdir(), "dia-gate-ws-"));
+    writeFileSync(join(ws, "a.txt"), "hi");
+    const mk = (judge: string) => {
+      const t = task.add("real gate " + judge, { judge });
+      const dir = team.runDir(t.id);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "plan.md"), "p");
+      writeFileSync(join(dir, "diff.patch"), "d");
+      writeFileSync(join(dir, "test.log"), "t");
+      writeFileSync(join(dir, "verify.json"), JSON.stringify({ conclusion: "通过", evidence: ["cmd -> exit=0"] }));
+      writeFileSync(join(dir, "redteam.json"), JSON.stringify({ findings: [] }));
+      writeFileSync(join(dir, "packet.md"), "pk");
+      writeFileSync(join(dir, "run.json"), JSON.stringify({ mock: false, workspace: ws, judge }));
+      return t.id;
+    };
+    const bad = mk("test -f nope.txt");
+    expect(team.gate(bad).ok).toBe(false);
+    const good = mk("test -f a.txt");
+    expect(team.gate(good).ok).toBe(true);
   });
 
   test("gate fails on non-passing verify", () => {
@@ -52,10 +75,19 @@ describe("team state machine", () => {
     expect(team.gate(t.id).ok).toBe(false);
   });
 
-  test("gate accepts legitimate evidence containing 'no evidence of'", () => {
-    const t = task.add("legit evidence", { judge: "x" });
-    team.runMock(t.id);
-    writeFileSync(join(team.runDir(t.id), "verify.json"), JSON.stringify({ conclusion: "通过", evidence: ["grep -r leak -> exit=1 | no evidence of leak"] }));
+  test("gate accepts legitimate evidence containing 'no evidence of'（仍需真跑判据）", () => {
+    const ws = mkdtempSync(join(tmpdir(), "dia-gate-ws2-"));
+    writeFileSync(join(ws, "a.txt"), "hi");
+    const t = task.add("legit evidence", { judge: "test -f a.txt" });
+    const dir = team.runDir(t.id);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "plan.md"), "p");
+    writeFileSync(join(dir, "diff.patch"), "d");
+    writeFileSync(join(dir, "test.log"), "t");
+    writeFileSync(join(dir, "verify.json"), JSON.stringify({ conclusion: "通过", evidence: ["grep -r leak -> exit=1 | no evidence of leak"] }));
+    writeFileSync(join(dir, "redteam.json"), JSON.stringify({ findings: [] }));
+    writeFileSync(join(dir, "packet.md"), "pk");
+    writeFileSync(join(dir, "run.json"), JSON.stringify({ mock: false, workspace: ws, judge: "test -f a.txt" }));
     expect(team.gate(t.id).ok).toBe(true);
   });
 

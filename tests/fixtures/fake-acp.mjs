@@ -16,7 +16,7 @@ const send = (o) => process.stdout.write(JSON.stringify(o) + "\n");
 function textFor(r) {
   switch (r) {
     case "planner":
-      return JSON.stringify({ judge: process.env.FAKE_JUDGE || "fake judge: a.txt 存在", steps: ["impl", "verify"] });
+      return JSON.stringify({ judge: process.env.FAKE_JUDGE || "test -f a.txt", steps: ["impl", "verify"] });
     case "builder":
       return "changed: a.txt";
     case "verifier":

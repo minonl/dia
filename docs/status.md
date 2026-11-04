@@ -1,6 +1,6 @@
 # dia 状态页（单一事实源）
 
-> 更新：2026-11-03（复核：`bun test tests` 282/38 全绿）。任何"现在做到哪了"的问题，以本页为准；其他文档是细节。
+> 更新：2026-11-03（复核：`bun test tests` 283/38 全绿）。任何"现在做到哪了"的问题，以本页为准；其他文档是细节。
 > 规则：状态必须能追到**命令/测试/提交**；没有证据的写"未验证"。
 
 ---
@@ -89,6 +89,7 @@
 | D0.20 | 组合自检 | **完成** | `dia doctor`（persona/kit/knowledge/dsh preset/wt；exit 0/1/2） |
 | D0.21 | worktree 抽取 `packages/wt` | **完成** | 7 处 python→node；`dia wt`；4 套测试原样迁移全绿 |
 | D0.23 | doctor 平台版本自检 | **完成** | `platform:opencode` / `platform:dsh` 报版本（缺宿主 = warn，不判红）；`tests/active-doctor.test.ts` |
+| D0.41 | accept 接 CI 门禁 | **完成** | `dia team accept <id> --pr N [--repo R] [--merge]`：先验 `gh pr checks` 全绿，绿才接受；`--merge` 顺带 squash 合并；`tests/team.test.ts` |
 | D0.39 | 合并门禁脚本 | **完成** | `scripts/pr-merge.sh`：CI 全绿才 `gh pr merge`（私有仓无 branch protection）；`tests/pr-merge.test.ts` |
 | D0.40 | bw broker launchd 模板 | **完成** | `packaging/launchd/com.minzhao.dia-bw-broker.plist.template` + README（load/unload/检查） |
 | D0.38 | bw broker 常驻进程 + 审计行 | **完成** | `dia env bw serve/get`：unix socket（0600，不监听 TCP）、单进程持有 session；每次取用写 `audit/bw.jsonl`（env/item/task/ok，**不记值**）；client 优先走 broker，不在才回落本地 session；`tests/bw-broker.test.ts` |

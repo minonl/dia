@@ -158,6 +158,7 @@ usage:
   dia msg send|show|inbox|ack|delivered|deliver|reply|thread|escalate|agents\n  dia agents list|register|unregister|discover\n  dia task add|list|status|done
   dia team run <id> --mock | --acp|--dsh --workspace DIR
   dia team gate|accept|reject|next
+  dia team accept <id> [--note ...] [--pr N [--repo R] [--merge]]   # --pr：先验 CI，绿才接受/合并
   dia job <list|status|install|...>   # 调度适配器
   dia price list|--json
   dia version`);
@@ -626,7 +627,7 @@ async function teamCli(argv: string[]): Promise<number> {
       return g.ok ? 0 : 30;
     }
     if (sub === "accept") {
-      const t = team.accept(id, flag(args, "--note"));
+      const t = team.accept(id, flag(args, "--note"), { pr: flag(args, "--pr"), repo: flag(args, "--repo"), merge: has(args, "--merge") });
       out(asJson ? JSON.stringify(t) : `${t.id} -> accepted`);
       return 0;
     }

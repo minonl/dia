@@ -613,8 +613,46 @@ export async function runDsh(id: string, workspace: string) {
   }
 }
 
-export function accept(id: string, note = "") {
+/**
+ * PR 的 CI 状态：全部 pass/skipping 才 ok（私有仓开不了 branch protection，用这里兜）。
+ * 需要 gh CLI；失败时返回具体检查名，便于定位。
+ */
+export function prStatus(pr: string, repo: string): { ok: boolean; failed: string[]; error?: string } {
+  try {
+    const out = execFileSync("gh", ["pr", "checks", pr, "--repo", repo, "--json", "name,bucket,state"], {
+      encoding: "utf8", timeout: 60_000, stdio: ["ignore", "pipe", "pipe"],
+    });
+    const rows = JSON.parse(out || "[]") as { name?: string; bucket?: string }[];
+    const failed = rows.filter((r) => !["pass", "skipping"].includes(String(r.bucket || "").toLowerCase())).map((r) => r.name || "?");
+    return { ok: failed.length === 0, failed };
+  } catch (e: any) {
+    return { ok: false, failed: [], error: String(e?.stderr || e?.message || e).split("\n")[0] };
+  }
+}
+
+/** 合并 PR（squash + 删分支）；调用方应先用 prStatus 确认 CI 绿。 */
+export function mergePr(pr: string, repo: string): void {
+  try {
+    execFileSync("gh", ["pr", "merge", pr, "--repo", repo, "--squash", "--delete-branch"], {
+      encoding: "utf8", timeout: 180_000, stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (e: any) {
+    throw new Error("E_MERGE: " + String(e?.stderr || e?.message || e).split("\n")[0]);
+  }
+}
+
+export function accept(id: string, note = "", opts: { pr?: string; repo?: string; merge?: boolean } = {}) {
   const g = gate(id); if (!g.ok) throw new Error("E_GATE: " + g.reason);
+  if (opts.pr) {
+    const repo = opts.repo || "minonl/dia";
+    const st = prStatus(opts.pr, repo);
+    if (st.error) throw new Error("E_CI: " + st.error);
+    if (!st.ok) throw new Error("E_CI: 未通过的检查：" + st.failed.join(","));
+    if (opts.merge) {
+      mergePr(opts.pr, repo);
+      note = (note ? note + "; " : "") + `merged PR #${opts.pr}`;
+    }
+  }
   setStatus(id, "accepted", note || "human accepted"); return get(id);
 }
 

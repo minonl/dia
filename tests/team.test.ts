@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeAll } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -197,5 +197,31 @@ describe("role repair loop", () => {
   });
   test("fails after one repair", async () => {
     await expect(team.parseRoleJsonWithRepair("{bad", async () => "still bad")).rejects.toThrow();
+  });
+});
+
+
+describe("accept 接 CI 门禁", () => {
+  test("prStatus：全部 pass 才 ok；有 fail 列出检查名", () => {
+    const bin = mkdtempSync(join(tmpdir(), "dia-ghbin2-"));
+    const gh = join(bin, "gh");
+    writeFileSync(gh, `#!/bin/sh
+if [ "$1 $2" = "pr checks" ]; then
+  if [ "$FAKE_CHECKS" = "fail" ]; then echo '[{"name":"test (ubuntu-latest)","bucket":"fail"}]'; else echo '[{"name":"test (ubuntu-latest)","bucket":"pass"}]'; fi
+else
+  echo merged
+fi
+`);
+    chmodSync(gh, 0o755);
+    const old = process.env.PATH;
+    process.env.PATH = `${bin}:${old}`;
+    try {
+      process.env.FAKE_CHECKS = "pass";
+      expect(team.prStatus("1", "o/r").ok).toBe(true);
+      process.env.FAKE_CHECKS = "fail";
+      const bad = team.prStatus("1", "o/r");
+      expect(bad.ok).toBe(false);
+      expect(bad.failed[0]).toContain("ubuntu");
+    } finally { process.env.PATH = old; delete process.env.FAKE_CHECKS; }
   });
 });

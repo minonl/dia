@@ -5,6 +5,12 @@
 > **现状先看 [`docs/overview.md`](docs/overview.md)**：dia / yan / dabo 三方对照、能力面、已知缺口、文档地图。
 > 长期定位看 [`docs/vision.md`](docs/vision.md)：superagent / agent-team 工厂、平台版本经验库、fleet 边界。
 
+## 文档入口（人 / agent）
+
+- 人：菜单 [`docs/index.md`](docs/index.md)（由脚本生成，开 GitHub Pages 可直接当站点）
+- agent：[`llms.txt`](llms.txt)（摘要 + 链接）、[`llms-full.txt`](llms-full.txt)（全量拼接）
+- 生成/校验：`bun run docs:index` / `bun run docs:check`（CI 会跑 check，避免漂移）
+
 > 定位：dabo-agent（个人域）与 yan-agent（工作域）共用的底层能力。
 > 设计见 [`docs/architecture.md`](docs/architecture.md)，现状见 [`docs/overview.md`](docs/overview.md)。
 

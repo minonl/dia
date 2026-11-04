@@ -1,0 +1,5860 @@
+# dia — full docs
+
+> 生成物；来源 docs/**.md。仓库：https://github.com/minonl/dia
+
+
+
+---
+
+<!-- acp-integration.md -->
+
+# ACP 集成与降级设计（2026-10）
+
+> 日期 2026-10-28。问题：通过 ACP 是否更好？fallback 怎么做？配置失败如何降级、体验如何？
+> 结论：**ACP 做主通道（会话级控制），CLI/HTTP/只读做分级回退；所有降级必须显式可见，不许静默。**
+
+---
+
+## 1. ACP vs 其他接法
+
+| 接法 | 能做什么 | 稳定性 | 适用 |
+|---|---|---|---|
+| **ACP（JSON-RPC stdio）** | 会话创建/提示/事件流/权限请求/恢复/分叉 | 协议 v1，仍在演进 | **交互式会话、跨宿主** |
+| CLI one-shot | 单次任务、退出码 | 高 | **基准/canary/批处理** |
+| HTTP API | 任意操作（opencode `api`） | 中（daemon 版本绑定） | 查询/管理 |
+| 只读会话库 | 观察历史 | 最高 | **采集/审计** |
+| 插件 hook | 深层拦截/观测 | 低（API 断代） | 仅观测 |
+
+**为什么 ACP 更好**：它把"会话"作为一等对象（new/prompt/update/permission/resume/fork），跨 opencode/dsh 通用；CLI 只能拿最终文本，HTTP 绑定单个宿主。
+
+**为什么不能只用 ACP**：批处理/canary 用 one-shot 更稳；观察历史不该依赖运行时；ACP 客户端本身可能坏。
+
+---
+
+## 2. 本机实测（2026-10-28）
+
+| 宿主 | 启动 | initialize | session/new | 关键能力 |
+|---|---|---|---|---|
+| **dsh**（`@deepseek-ai/dsh-acp-app`） | `dsh --profile dia-acp` 常驻等输入 | ✅ protocolVersion 1，agentInfo `deepseek-harness-acp 0.0.1` | ✅ 返回 sessionId + configOptions | session close/list/resume；mcp http；prompt 不支持 image/embedded |
+| **opencode**（`opencode acp`） | 常驻 | ✅ protocolVersion 1 | ✅ 返回 sessionId + configOptions | loadSession/fork/delete/list/resume；mcp http；prompt 支持 image/embedded |
+
+**实测坑（必须处理）**：
+
+1. **dsh stdout 会混入日志**：`[llm-deepseek-account] model listing ...` 出现在 JSON 之前 → 客户端必须**逐行过滤非 `{` 开头**，并为协议行设超时。
+2. dsh `session/new` 会触发模型目录网络请求；离线时可能阻塞/失败 → 需要超时 + `degraded_reason`。
+3. 两个服务端都**不主动输出**，必须先发 `initialize`；握手超时 = 不可用。
+
+---
+
+## 3. Fallback 阶梯（显式，不静默）
+
+```
+L0 ACP（首选，会话级）
+  ↓ 握手失败/超时/协议错
+L1 CLI one-shot（`dsh headless` / `opencode run`）
+  ↓ 命令缺失/版本不符
+L2 HTTP API（opencode `api`）
+  ↓ 服务未运行/鉴权失败
+L3 只读会话库（observe-only）
+  ↓ 连读都失败
+L4 拒绝执行（exit 30/31/32）
+```
+
+规则：
+- **每一级降级都写 `degraded_reason` + 审计**；`dia status` 可见，不许悄悄换。
+- **高危动作不降级**：写文件/外发/权限变更在 L1 以下一律拒绝（或转 draft）。
+- **只读永远可用**：采集/审计不依赖 ACP。
+- 用户可用 `--backend acp|cli|api|readonly` 强制指定；强制失败即报错，不回退。
+
+---
+
+## 4. 配置失败 → 怎么降级、体验如何
+
+### 4.1 失败分类与退出码
+
+| 码 | 含义 | 触发 | 降级 |
+|---|---|---|---|
+| 0 | OK | — | — |
+| 2 | 用法错误 | 参数缺失 | 无 |
+| 30 | **degraded** | ACP 失败已回退 | 继续，但标注 |
+| 31 | 配置/鉴权 | 缺凭据、版本不符 | 停用该后端 |
+| 32 | 协议 | 握手超时、非法 JSON、stdout 污染过多 | 回退一级 |
+| 33 | 能力缺失 | 需要的能力不在 capabilities 里 | 拒绝该动作 |
+
+### 4.2 用户体验（文字示意）
+
+```
+$ dia status
+dsh       ACP  ok      v0.2.1-rc.2  session/new ok   (last 10-28 11:03)
+opencode  ACP  ok      v2.1.3       loadSession ok   (last 10-28 11:04)
+model     base stale   指纹 14 天未更新（建议 dia model incident）
+
+$ dia run --session s1 -- bash -lc "npm test"
+! ACP 不可用（handshake timeout）→ 已回退 CLI one-shot
+! 本次为降级执行，写操作需人工确认
+exit=0
+
+$ dia doctor
+FAIL  dsh ACP: handshake timeout (3.0s)
+  → 修复：dsh --profile dia-acp --dump-config 检查 acp-app 是否在 bundles
+  → 或：dia run --backend cli 继续（只读/批处理可用）
+```
+
+原则：
+- **一句话说清降级**，再给**修复命令**；
+- 降级后**不假装完整**：`status` 标 `degraded`，报告里带 `degraded_reason`；
+- 不阻塞用户：采集/审计继续，执行转草稿或人工。
+
+### 4.3 配置形态
+
+```yaml
+backends:
+  dsh:
+    prefer: acp
+    acp: { profile: dia-acp, handshake_timeout_ms: 3000 }
+    fallback: [cli, readonly]
+  opencode:
+    prefer: acp
+    acp: { command: "opencode acp", handshake_timeout_ms: 3000 }
+    fallback: [api, readonly]
+```
+
+---
+
+## 5. 实现建议
+
+1. **自己写薄 ACP 客户端**（TS，约 200 行）：只需 `initialize` / `session/new` / `session/prompt` / 事件读取 / `session/close`；JSON-RPC over stdio。
+2. **容错**：逐行过滤非 JSON；握手/首事件/总预算超时；能力缓存到 `capabilities.json`（90 天）。
+3. **acpx 只做对照/兜底**：`acpx`（0.21.1，MIT）可验证我们的客户端行为，不作为主依赖（pre-1.0）。
+4. **配置探测**：启动时跑一次 `initialize`，把 `agentCapabilities` 落盘；能力缺失（如 image）直接标 `unsupported`，不猜。
+5. **降级可测**：人为杀掉 ACP 进程 / 注入日志行 / 改坏 profile，E2E 必须看到 `degraded` 与回退路径。
+
+---
+
+## 6. 与现有设计的关系
+
+- 与 `host-control-surface.md` 的 L0/L1 分层一致：ACP 是 L0 的会话接口。
+- 与 `model-baseline-sidecar.md` 的 canary 一致：canary 默认走 CLI one-shot（稳），交互走 ACP。
+- 与 `security-sandbox.md` 一致：降级不等于放开权限；高危动作仍需 waiver/人批。
+
+---
+
+## 7. 待验证
+
+- ACP `session/prompt` 的事件流格式与权限请求（`session/request_permission`）在两家是否一致。
+- dsh ACP 在离线（模型目录不可达）时的失败形态。
+- 长时间会话的 resume/fork 语义（两家能力不同：opencode 有 fork，dsh 只有 resume）。
+
+
+---
+
+<!-- architecture.md -->
+
+# 架构：框架 / 场景入口 / kit
+
+> 日期 2026-10-27。本文回答一个问题：**什么该留在 dabo-agent，什么该抽到独立框架。**
+> 依据：yan-agent 实测数据 + `dabo-agent:docs/research/system-survey.md`（外部引用）。
+
+---
+
+## 0. 结论
+
+三层，各管一件事：
+
+```
+framework（独立项目）  ← 通用能力，无业务数据
+   ↑ 被订阅                    ↑ 被订阅
+yan-agent（工作场景入口）   dabo-agent（个人场景入口）  ← 只放本域数据、人格、工具、策略
+   ↓ 订阅                      ↓ 订阅
+kits（知识 / 技能 / 工具内容）  ← 可被两个域共同订阅，默认无执行权
+```
+
+**判定口径**：
+- 两个域都要用 → 进 framework；
+- 只有一个域用 → 留在该域；
+- 可以被不同域按需装 → 打成 package。
+
+---
+
+## 1. 现状测量（yan-agent，2026-10-27）
+
+| 指标 | 值 | 说明 |
+|---|---|---|
+| 知识文件 | 103 个 / 910KB | rules 26 / workflows 16 / repos 1 / tools 等 |
+| 全库 token 估算 | **≈245k** | 不可能全量注入 |
+| 索引 `index.md` | 87 行 / 15.6KB / **≈4.2k tokens** | 可注入 |
+| **索引覆盖** | **74/103（72%）** | **28% 的文件从索引走不到** |
+| **`review_by`** | **0/103** | 复审机制设计了，**从未落地** |
+| 内部链接 | 118 条，**断 9 条（7.6%）** | 链接会烂 |
+| 近重复内容 | **0 组** | 不是"重复"问题 |
+| 常驻 daemon | 16 个 launchd | 已有独立调度的事实标准 |
+
+> 结论：你说的"人读 md 不行了"，实测根因是**索引覆盖不全 + 复审没执行 + 链接会烂**，
+> **不是文件格式**。换数据库解决不了这三件事。
+
+---
+
+## 2. 职责矩阵（谁拥有什么）
+
+| 能力 | framework | yan | dabo | package |
+|---|---|---|---|---|
+| 预设注入（opencode/dsh 渲染） | ✅ 实现 | 提供 preset 内容 | 提供 preset 内容 | — |
+| 知识索引 / 检索 / 复审队列 | ✅ 实现 | 提供知识 | 提供知识 | ✅ 知识 kit |
+| 定时任务 / 调度 | ✅ 实现（launchd 生成） | 声明任务 | 声明任务 | — |
+| 安全：预算 / 审计 / 冻结 / 豁免 | ✅ 实现 | 声明策略 | 声明策略 | — |
+| 会话采集与脱敏 | ✅ 实现 | 可选开 | 默认开 | — |
+| kit 管理（add/lock/verify） | ✅ 实现 | 订阅清单 | 订阅清单 | ✅ 被订阅 |
+| 人格 / 域规则 | ❌ | ✅ | ✅ | 可提供片段 |
+| 业务工具 | ❌ | ✅ | ✅ | ✅ 工具 kit（无执行权） |
+| 业务数据（公司/个人） | ❌ **永不** | ✅ | ✅ | ❌ |
+
+硬约束：
+1. framework **不存业务数据**，读路径由域传参。
+2. 域**不实现通用能力**（不自己写检索/审计/调度）。
+3. kit **默认无执行权**；装包只落盘，执行需显式批准（ClawHavoc 教训）。
+
+### 2.1 宿主适配（entry adapter，H0 补）
+
+H0 抽样发现三层缺一个承接处：**宿主客户端/插件/本机环境**。它归**入口层的 adapter 子层**，不是第四层内核：
+
+```
+framework ← adapter → domain/kit
+（framework 永不反向依赖 adapter）
+```
+
+- **职责**：Electron/DSH 客户端插件、宿主配置页、编辑器/浏览器插件安装、宿主专属 UI 适配。
+- **不放进 framework**：adapter 依赖宿主版本，生命周期与引擎不同；放内核会让框架重新变胖。
+- **不放进 kit**：kit 默认无执行权；宿主插件需要显式授权与宿主 API。
+- **版本**：adapter 随宿主版本走；framework/domain 只暴露稳定契约。
+- **验收**：`docs/research/h0/report.md` 的 3 条宿主任务必须有明确 adapter 归属；50 样本复验时按此口径重跑。
+
+---
+
+## 3. 知识存储：md 还是 sqlite？
+
+| 方案 | 优点 | 缺点 | 适配度 |
+|---|---|---|---|
+| **A. md + 索引（现状）** | git diff 可审、人可改、可移植、LLM 直读、零依赖 | 无排名/元数据查询；索引靠人维护（实测 72%）；复审靠自觉（实测 0/103） | 中 |
+| **B. sqlite 作主存** | FTS5 排名、结构化查询、原子更新、多域 tag | **无 diff、无法 PR 审阅、合并冲突、需要工具才能读、迁移成本、LLM 不能直读**、备份变二进制 | 低 |
+| **C. md 为唯一事实源 + 派生 sqlite/FTS5 索引** | 保住 A 的优点，补上检索/元数据/复审队列；索引可删可重建 | 需要构建步骤；存在"索引过期"风险（可用"删库重建结果一致"测试消除） | **高** |
+
+**推荐 C**，规则写死：
+
+1. **只有 md 可写**；`index.db` 是派生物，删掉必须能重建，且重建结果可复现（测试断言）。
+2. 检索、复审队列、断链检查、索引覆盖统计，全部由工具生成，不靠人手维护。
+3. SQLite 只放两类东西：**派生索引** + **会话/回合等状态数据**，不放"人类知识"。
+4. 复审不再要求人写 `review_by`：用 `git log -1` 的修改时间 + 显式 `review_by` 覆盖，自动生成到期队列。
+
+**行业佐证**：Hermes 用 SQLite 存消息、用 md 存记忆与技能；OpenClaw 用 SQLite 存会话、md 存记忆。
+**没有一家把人类知识的主存放进数据库**。
+
+---
+
+## 4. 抽取顺序：先在 yan 上"绞杀"，dabo 做第二消费者
+
+不做"先写完框架再迁移"（那是瀑布，且没有真实使用）。用 strangler：
+
+1. **定义契约**（framework 对外接口）：`kb search/get/lint`、`task add/list/due`、`audit append/verify`、`freeze/thaw`、`persona render`、`kit add/verify`。
+2. **新项目里实现最小版**，直接读 yan 的现有知识目录（只读），跑出与现状一致的索引/检索结果。
+3. **yan 切换**：先把 `yan-kb` 的检索切到 framework，其余保持不变（可回退）。
+4. **dabo 接入**：只写自己的 preset + 域知识 + 策略，通用能力全部来自 framework。
+5. **出 kit**：把 yan 里可复用的知识/技能打成 kit，两个域按 lockfile 订阅。
+
+判据：
+- 切换前后同一查询结果集一致（抽样 20 条）；
+- 索引重建两次结果哈希一致；
+- yan 的一周真实使用无回归；
+- dabo 能只靠"preset + 域数据"跑通同一套门禁。
+
+---
+
+## 4.1 执行后端模式（2026-10-28 补充）
+
+dia 不拥有运行时；执行后端按场景选：
+
+| 模式 | 后端 | 适用 |
+|---|---|---|
+| 共享 daemon | opencode 用户级 server | 交互式、长会话 |
+| 私有 server | `opencode serve --standalone` | 需要隔离 |
+| 嵌入式 | `@opencode/sdk`（内存 router） | 无端口、版本锁定 |
+| one-shot | `dsh headless` | 批处理 / canary / 基准 |
+
+判据：同一任务在任一后端跑出的审计/成本/结果必须可比较（同一 `task_id`）。
+
+## 5. 第一个真实任务（解决"零使用"）
+
+**采集本机 dsh / opencode 会话 → 脱敏 → 归一化为回合 → 生成知识候选**。
+
+| 步 | 做法 | 判据 |
+|---|---|---|
+| 读 | dsh: `~/.dsh/sessions/*/session-*/session.v4.jsonl.zstd`；opencode: `~/.local/share/opencode/opencode.db` | 能列出会话数与时间范围 |
+| 脱敏 | 凭据/token/内网域名/工号 → 占位符；规则可测试 | 样例集 100% 命中；误伤 <5% |
+| 归一 | 统一成 `episode{ts, domain, task, actions[], outcome}` | schema 校验 |
+| 候选 | 只产"候选"，不自动写知识 | 候选必须人工确认 |
+
+隐私边界：**dabo 域默认开采集；yan 域默认关**（工作会话不出本域）；跨域只共享方法，不共享数据。
+
+---
+
+## 6. 对现有 dabo 设计的影响
+
+| 现 design 章节 | 处理 |
+|---|---|
+| §5 团 / §5.2 档位 | **移出**或删；先做"预设组合"，H4/H5 未过不动 |
+| §6 四层记忆 | 压成 **knowledge（md）+ evidence（episodes/logs）**；预算逻辑进 framework |
+| §7.1 gateway 形态 | 通用调度进 framework；dabo 只声明任务 |
+| §10 安全（审计/冻结/豁免） | **进 framework**；dabo 只写策略值 |
+| §15 拥抱变化（adapter/probe/migration） | **进 framework**；dabo 只选目标 |
+| 人格 / 协议 / 域知识 / 业务工具 | **留在 dabo** |
+
+---
+
+## 7. 早期待定 → 2026-11-03 结论
+
+1. **名字 / 位置**：叫 `dia`，仓库 `minonl/dia`（private），装到 `~/.local/share/dia` + `~/.local/bin/dia`。
+2. **知识存储**：按 C 方案落地——md 主存 + 派生 sqlite/FTS5 索引（`dia kb index/search/query`），索引可删可重建。
+3. **抽取顺序**：yan 先行、dabo 第二消费者，均已成 dia persona（`dia persona add`），工作域 / 个人域各一套知识根与数据根。
+4. **kit 最小粒度**：**仍未定**。实际只用到 `add/list/verify/remove`，大部分内容由 persona 的
+   `files/skills/dirs/config` 内联承担；`kit show/update/gc` 未实现。
+
+
+---
+
+<!-- cli.md -->
+
+# dia CLI 词表（动作规范）
+
+> 日期 2026-10-28。原则：**动作成对、名词分层、不混轴。**
+> 名词：`persona`（可被选中的 agent 定义）、`kit`（知识/技能/工具内容）、`profile`（dsh 宿主组合，不对外当命令）。
+
+---
+
+## 1. 动词矩阵
+
+| 动作 | 含义 | 反义/配套 | 示例 |
+|---|---|---|---|
+| **add** | 从 git/本地取回 → 校验 → 渲染 → 登记 lock/deps | **remove** | `dia persona add dabo --from git+... --ref <sha>` |
+| **remove** | 注销 + 删除带 `managed-by: dia` 的产物 | add | `dia persona remove dabo` |
+| **create** | **本地生成**一个新骨架（`dia.json` + 最小文件） | （无；不是安装） | `dia persona create mybot` |
+| **update** | **换内容**（ref→新 commit）+ 重渲染；旧版本备份；运行中会话不切换 | — | `dia persona update dabo --ref <sha>` |
+| **render** | **不换内容**，只把已安装版本重渲染到宿主（宿主升级/文件漂移） | — | `dia persona render dabo --host dsh` |
+| **verify** | 清单/哈希/版本校验 | — | `dia persona verify dabo` |
+| **list / show** | 列出 / 看详情 | — | `dia persona list` |
+| **path** | 打印**生效版本目录**（服务/脚本取代码的稳定入口） | — | `dia persona path yan` |
+| **add / remove**（kit） | 同上，作用于内容 | — | `dia kit add git+...` |
+
+**不要用**：
+- `install/uninstall`（与 add/remove 重复，且暗示系统级安装）；
+- `preset`（宿主概念，不当作名词）；
+- `pkg`（npm 语义，暗示依赖/执行）。
+
+---
+
+## 2. 名词与子命令
+
+> **2026-11-03 注**：下面的 `kit create/update/show`、`patch`、`persona activation` 是**目标态**；
+> 实际已实现的命令与证据见 §4.1（`persona activation`、`patch` 当前是 `unknown command`）。
+
+```
+dia persona add|remove|create|update|render|verify|list|show
+dia kit     add|remove|create|update|verify|list|show
+dia patch   create|add|list|verify|revert|export
+dia persona activation <id> --mode next-session|active-additive|active-all|manual
+```
+
+**默认行为约束**：
+- `add` 只新增/渲染，**不改默认 agent**、不碰 yan；
+- `remove` 只删 `managed-by: dia` 的文件，用户手改过的拒绝删除；
+- `create` 不联网、不执行脚本，只写骨架；
+- 所有写动作支持 `--dry-run`。
+- **按能力热更新**：T3 增量可 `--apply active`；破环性变更只允许 `--apply next-session`；`--activate-now` 需 `--i-am-human`。
+
+---
+
+## 3. 退出码
+
+| 码 | 含义 |
+|---|---|
+| 0 | OK |
+| 2 | 用法错误 |
+| 30 | degraded（已回退/部分宿主缺失） |
+| 31 | 配置/鉴权失败 |
+| 32 | 清单/冲突（E_MANIFEST / E_CONFLICT） |
+| 33 | 能力缺失（capabilities 不支持该动作） |
+
+---
+
+## 4. 示例
+
+```bash
+# 安装 dabo 人格（只新增，不改默认）
+dia persona add dabo --from git+https://github.com/minonl/dabo-agent.git --ref <sha> --dry-run
+dia persona add dabo --from git+... --ref <sha>
+
+# 从零写一个新人格
+dia persona create mybot --dir ~/repos/mybot
+
+# 宿主升级后重渲染
+dia persona render dabo --host dsh
+
+# 校验/卸载
+dia persona verify dabo
+dia persona remove dabo
+```
+
+---
+
+## 4.1 实现状态（2026-11-03 复核）
+
+> 判定方式：命令实跑 + `bun test tests`（286 tests / 39 files 全绿）+ 代码入口。写"未实现"的项当前是 `unknown command`。
+
+| 命令 | 状态 | 证据 / 备注 |
+|---|---|---|
+| `persona add` | **已实现** | 本地目录、`git+https://…`、`--ref`、`--host opencode\|dsh`、`--dry-run`、`--force`（覆盖已存在产物，覆盖前备份）；渲染 + `dia.lock` |
+| `persona list / verify / remove` | **已实现** | verify 校验内容哈希 + 自带内容产物（files 复制、skills 软链）；remove 按 lock 回收，手改的 skip |
+| `persona show <id>` | **已实现** | 生效版本 + 最近 5 次切换审计 |
+| `persona use <id>[@ver]` | **已实现** | 生效指针 `state/active.json` + 审计 `active.jsonl`；scope 先读指针，无指针回退最新 |
+| `persona path [<id>[@ver>]]` | **已实现** | 生效版本目录；`--json` 出 `{id,version,dir,source,commit}`；未装即非 0 退出（消费方大声失败） |
+| `persona check <id>` | **已实现** | 上游比对 same / differs / unknown / local-only；exit 0/1/3，内容被改 exit 2 |
+| `persona update <id>` | **已实现** | 从 lock 记录的 source+ref 重装，并把 active 指向新版本；本地源亦可 |
+| `persona default <id>` | **已实现** | 改宿主 `default_agent`：备份原文件 + 记原值，`--unset` 精确还原；非严格 JSON 直接拒绝 |
+| `persona create / render` | **已实现** | `create` 出骨架；`render --check` 只比对不写盘（跳过宿主自写文件，如 dsh `cordis.yml` / `package.json` / 锁文件）；`render` 只覆盖 persona 产物，不整树重建宿主 profile |
+| `kit add / list / verify / remove` | **已实现** | 复制/软链/记账；冲突写盘前全量检查（`E_CONFLICT`）；`src/kit.ts` + `tests/kit.test.ts` |
+| `env list / check / run` | **已实现** | 白名单注入、不回显值、`--redact`、密钥不进 argv；清单由 persona 声明（`src/env.ts` + `tests/env.test.ts`） |
+| `deps list / record` | **已实现** | `list` = 登记 + 实测派生视图（required 缺失 exit 2）；`record` = 只追加一行（`--id/--kind/--version` 必填）；`src/deps.ts` + `tests/deps*.test.ts` |
+| `doctor` | **已实现** | 组合自检：persona verify / **persona.render（宿主产物只读漂移，warn + 修复命令）** / default_agent / kit / knowledge（**索引新鲜度三态**，过期给重建命令）/ dsh preset / **deps 登记校验** / **platform 版本（读 `docs/platforms/registry.json`）** / wt；exit 0/1/2。不指定 persona 且装了多个 → **逐个自检**（条目加 `<id>.` 前缀），不再整体 `E_SCOPE` |
+| `wt …` | **已实现（需安装包）** | 转发 `packages/wt/bin/dia-wt`；未装时 `E_WT`（exit 33），`install.sh` 会分发 |
+| `kb index/search/query/get/lint/path/review` | **已实现** | persona 作用域下索引过期自动重建；显式 `--root` 保持「缺索引即报错」 |
+| `kb <域命令>` | **已实现（委派）** | 未命中内置 → persona `commands` → 委派；argv 透传、exit code 原样 |
+| `<persona-cmd>` / `cmd <name>` | **已实现** | 一级委派（内置优先）；`dia cmd` 只查外部命令，可绕开同名内置 |
+| `task add/list/status/done` | **已实现** | done 需 judge + evidence |
+| `team run --mock / --acp / --dsh`、`team gate/accept/reject` | **已实现** | 状态机 + 门禁；成功/失败路径均跑通 |
+| `job …` | **已实现** | 转发 `packages/job`（launchd/cron/schtasks） |
+| `patch …` | **未实现** | 当前 `unknown command`；设计见 `docs/patching.md` |
+| `ingest / audit / freeze / run / resume / price` | **已实现** | D0 阶段交付 |
+
+证据入口：`bun test tests`；`tests/kit.test.ts`、`tests/scope.test.ts`、`tests/env.test.ts`、`tests/active-doctor.test.ts`。
+
+## 5. 与安装文档的关系
+
+- 清单格式与安全规则见 `docs/persona-install.md`；
+- 入口与默认 agent 规则见 `docs/entrypoints.md`。
+
+
+---
+
+<!-- dependency-registry.md -->
+
+# 外部依赖索引与原始记录维护（2026-10）
+
+> 日期 2026-10-28。回答两件事：**依赖怎么登记/验证/淘汰**，**原始记录怎么保留/重建/删除**。
+> 依据：CycloneDX 1.7 / SPDX 3.0.1 / npm lockfile / semver / PEP 387 / PostgreSQL PITR / Prometheus storage / GDPR 17 / NIST AU-11。
+
+---
+
+## 1. 依赖登记（`deps.jsonl`，只追加）
+
+每个依赖一行；**升级不改旧行，追加新行**（历史可追溯）。
+
+| 字段 | 类型 | 必填 | 说明 | 依据 |
+|---|---|---|---|---|
+| `id` | `kind:name@ver` | ✓ | 全局唯一 | CycloneDX `bom-ref` / SPDX `spdxId` |
+| `kind` | enum | ✓ | `host_cli / npm / bundle / endpoint / model / datastore / daemon` | CycloneDX 区分服务与组件 |
+| `version` / `resolved` | str / uri | ✓ | 实际解析结果 | npm lockfile |
+| `integrity` | `sha512-…` / commit | ✓（有产物时） | 内容哈希；**不能只靠名字** | npm `integrity`；semver §3 |
+| `role` | `required/optional/degradable` | ✓ | 缺失时的行为 | 设计"可缺，缺了降级" |
+| `fallback` | str | degradable 必填 | 降级路径 | 同上 |
+| `verified_at/by/method/result/evidence` | RFC3339/str/enum/pass\|fail\|unknown/path | ✓ | **验证三元组 + 证据** | SPDX `verifiedUsing`；CycloneDX citations |
+| `support` / `removal_after` | `active|deprecated|eol|unknown` / date | ✓ / deprecated 必填 | 淘汰宽限期 | npm deprecate；PEP 387 |
+| `depends_on` | [id] | ✓（可空） | 依赖图 | CycloneDX dependency graph |
+
+**局限（必须写进 README）**：SBOM 只回答"有什么、谁引入"，不回答"能不能跑"；lockfile 有 hash 无来源证明；`dpkg -V` 只做 md5 且依赖已有记录。
+
+### 单一事实源：`docs/deps.jsonl`
+
+一行一个 JSON 对象，**只追加**；同一 `id` 以最后一行为准（升级/复核都追加新行，不改旧行）。
+字段即上表；没有的字段省略，不写占位。
+
+```json
+{"id":"host_cli:opencode@2.2.5","kind":"host_cli","version":"2.2.5","resolved":"command:opencode","integrity":"unknown","role":"required","verified_at":"2026-11-03","verified_by":"min","method":"smoke","result":"pass","support":"active","evidence":"docs/platforms/registry.json"}
+```
+
+规则：
+
+1. `resolved` 用**可移植写法**（`command:opencode`、`~/...`），不写死某台机器的绝对路径。
+2. 人读视图由 `dia doctor` 派生（`deps` 项，`--json` 给机器）；**本文不抄登记数据**。
+3. `dia doctor` 判定：required 缺失 = `fail`；版本/路径漂移 = `warn`；可选未装 = note（不拉红）。
+4. 追加用 `dia deps record`（`--id/--kind/--version` 必填；`verified_at` 自动填当天，`method=manual`）；
+   看现状用 `dia deps list [--json]`（登记 + 实测，required 缺失 exit 2）。
+
+---
+
+## 2. 生命周期判据
+
+| 步 | 判据 |
+|---|---|
+| 登记 | id 唯一 + source + integrity；缺就记 `unknown`，不猜 |
+| 探测 | 存在 + 版本符合 + smoke 通过 → `active`；版本不符 → `degraded`；required 缺失 → **非 0 退出**（exit 30） |
+| 启用 | `verified_at` ≤90 天 且 integrity 复核一致 |
+| 升级 | 新 id（版本/hash 变），旧行保留；**禁止原地改写** |
+| 废弃 | `support=deprecated` + `removal_after` ≥1 个 minor 周期 + 有替代 |
+| 移除 | 无 inbound `depends_on` + 有回滚路径 + 写审计 |
+
+---
+
+## 3. 原始记录维护
+
+```
+raw（不可变，只追加） → derived（可重建索引/摘要） → pointer（可删）
+```
+
+| 策略 | 做法 | 依据 |
+|---|---|---|
+| 压缩 | 事件日志 + 周期 checkpoint；重建 = 快照 + 重放 | PostgreSQL PITR |
+| 保留 | **按类别设期限**，不是全局一刀切；到期先降采样再删 | NIST AU-11 |
+| 删除 | 加密擦除（销毁密钥）+ tombstone，不改链；不可豁免时走 GDPR 17(3) 例外 | GDPR 17 |
+| 校验 | `prev_hash` 哈希链 + 每日摘要（可检出删行/回填） | 日志完整性实践 |
+| 验证 | 月度 replay + **restore drill**（临时 HOME 恢复 → doctor 全绿 → 重放 N 条） | PostgreSQL PITR |
+
+**本机现状（2026-10-28）**：dsh sessions 146MB/244 个、opencode.db 477MB/34 会话，**都没有统一保留策略**；先登记，再定 TTL。
+
+---
+
+## 4. 失败模式
+
+| # | 失败 | 触发 | 对策 |
+|---|---|---|---|
+| D1 | 漂移 | 只按命令名探测 | 用 hash/resolved 判定，不用名字 |
+| D2 | 静默升级 | unpinned + 无 hash | pin + 记录升级与验证 |
+| D3 | 源被删 | unpublish | 本地镜像 + hash；弃用优于下架 |
+| D4 | 哈希不符 | 内容被改 | 按篡改处理，隔离 + 审计，**不重算后接受** |
+| D5 | 保留过度 | 无到期动作 | `review_by` + 降采样 + 删除演练 |
+
+---
+
+## 5. 对 dia 现有设计的 5 条修正
+
+| # | 现状 | 修正 | 判据 |
+|---|---|---|---|
+| M1 | doctor（**待实现**）目前只看"命令在不在 + 版本" | 输出 `verified_at / method / by`；>90 天标 `STALE`；缺 integrity 标 `UNVERIFIED` | doctor 输出可被 `--json` 解析 |
+| M2 | **现状：冻结只写元数据快照，不含任何文件**；目标才是打包会话 | SQLite 需 `VACUUM INTO` 或连同 `-wal/-shm` 一起打包，否则丢已提交事务 | 恢复后行数一致 |
+| M3 | audit 只 append-only，无防篡改（**未实现**） | 加 `prev_hash` 链 + 每日摘要；删行/回填可检出 | 删一行后 `audit verify` 报链断 |
+| M4 | 截断只留索引，无重建路径 | 截断前先落 raw 归档（只写一次）+ 定义 replay 判据 | 能从归档还原被截条目的索引行 |
+| M5 | 工具只有 retired，无 deprecated 宽限 | 补 `support` + `removal_after`，禁止直接删 | 移除前必须有替代 + 回滚 |
+
+---
+
+## 6. 未验证 / 缺口
+
+- SLSA provenance 逐字段（本机不可达）
+- NIST SP 800-92 保留章节原文（PDF 不可读）
+- Nix 输入寻址原文（未验证）
+- opencode/dsh 自身是否有 TTL/GC：**未找到官方保留策略**
+
+
+---
+
+<!-- ecosystem-integration.md -->
+
+# 生态与组合：可复用性调研（2026-10）
+
+> 日期 2026-10-28。问题：dia 的包和集成面应该长什么样，才能同时服务 opencode / dsh（未来 OpenClaw/Hermes/Pi）？
+> 结论先行：**没有可执行插件的统一 ABI；唯一跨家通用的是 `SKILL.md`。跨家项目全是"manifest → codegen"，且都很年轻。dia 只做两只宿主 + codegen。**
+
+---
+
+## 1. 五家扩展模型
+
+| 宿主 | 插件形态 | 技能形态 | 安装 | 版本/锁 | 证据 |
+|---|---|---|---|---|---|
+| **opencode** 2.1.3 | JS/TS 包（V2 分 server/tui/gui/rpc 四 part）；npm 或本地目录 | AgentSkills 目录（`.opencode/skills`、`.claude/skills`、`.agents/skills`） | `opencode plugin add/list/check/update/remove` | 精确版本即 pin；无签名（未找到） | A（本机 help + 官方 docs） |
+| **OpenClaw** | 代码包 `openclaw.plugin.json`，可自带 skills | AgentSkills + `metadata.openclaw`（gating/installer） | `openclaw plugins install`、`skills install` | `.clawhub/lock.json` + `--pin` + digest | A/C |
+| **Hermes** | Python 目录 `plugin.yaml` + `__init__.py`；平台插件在 `plugins/platforms/` | `.hermes/skills`、`.agents/skills`（需 trust） | `hermes plugins install`；skills `search/update/tap` | **40 位 commit SHA 钉死**、official/verified/community 分级、`removed.yaml` | A |
+| **Pi** | TS extension（jiti 同进程加载） | `~/.pi/agent/skills`、`.agents/skills` | `pi install npm:@x@1.2.3` | project trust + tag | A |
+| **dsh** 0.2.1-rc.2 | bundle = npm/本地包 + `cordis.patch.yml` 声明层（纯声明可无代码） | 自有 skills 目录 + skill-discovery 插件 | `dsh plugin --profile P add <pkg>`（转发 pnpm）；plugin_manager 每次审批 | `pnpm-lock.yaml` | A（本机源码） |
+
+**关键事实**：
+- opencode **V1→V2 是断代**（"V1 implementations do not run in V2"），配置键与 hook API 全变。
+- Pi 的扩展**与宿主同进程、同 OS 权限**（官方 security.md 自认）。
+- dsh 的 bundle 可以**纯声明**（只有 `cordis.patch.yml`，无代码），也可以带 npm 依赖；yan 已用它装了 5 个包。
+- 本机 dsh 事故（yan 侧记录）：patch 覆写 preset 会导致全部 agent 掉工具，需冷启动。
+
+---
+
+## 2. 跨家复用项目（都在很早期）
+
+| 项目 | 连接 | 机制 | ★ / 下载 | 日期 | 备注 |
+|---|---|---|---|---|---|
+| **AgentPlugins**（sigilco，Apache-2.0） | Claude / Codex / OpenCode / Pi | 统一 manifest → 生成各家插件 | 11★ / npm 11 周下载 | 2026-10-08 | 目标最接近我们；**不含 dsh** |
+| **everyharness** | 12 家（含 Hermes/OpenCode/Pi） | manifest + drift validate | 38★ / 10 周下载 | 2026 | 有 validate 概念，可借鉴 |
+| **plugsdk** | 多宿主 | 18 类 hook 抽象 | 101 周下载 | 2026 | — |
+| **pluxx** | MCP → 4 家 | 把 MCP 转成宿主原生 | 小 | 2026 | — |
+| **Tome** | 17 家 | MCP + rules | 小 | 2026 | — |
+| **rulesync** | OpenCode / Claude 等 | 配置/规则**双向同步**（非可执行插件） | **1558★** | 2026-10-27 | 成熟度最高，但只同步配置，且有损 |
+| `hermes-opencode-acp` | Hermes ↔ opencode | `opencode acp` 子进程后端 | 10★ | 2026 | 本文档 §4 |
+
+**结论**：
+1. **可执行插件没有统一 ABI**，所有跨家方案都是"编译/生成"，不是"运行时加载"。
+2. 这些项目全在 10–40★ 量级，**唯一成熟的是配置同步（rulesync）**。
+3. **没有任何项目支持 dsh** —— 这是我们的空位，但空位小，不值得为它发明标准。
+
+---
+
+## 3. 安装与信任（决定包设计）
+
+| 宿主 | 安装时是否执行代码 | 签名/哈希 | 已知事故 |
+|---|---|---|---|
+| opencode | **是**（npm 启动即执行） | 无（未找到） | #59251 插件名被当包安装、#58574 静默丢弃、#58045 V2 模块无效 |
+| OpenClaw | 是（installer 真跑 brew/npm/go/uv/download） | ClawHub digest + pin | **ClawHavoc**：341→824 恶意 skill，靠"伪造前置依赖"诱导执行 |
+| Hermes | 是 | SHA pin + 分级 + 拉黑 + capability 声明 | Desktop 插件**无沙箱** |
+| Pi | 是（同进程） | project trust | 官方："full system access" |
+| dsh | 是（pnpm） | lockfile | patch 覆写 preset 事故 |
+
+**对 dia 的硬规则**：
+- 包**默认无执行权**；安装只落盘（不跑 install script）。
+- 必须声明 `capabilities`（tools/hooks/env/network），启用需人工批准。
+- 内容哈希进 `dia.lock`；`dia persona verify` / `dia kit verify` 可复现。
+
+---
+
+## 4. 集成面：ACP 是事实标准，MCP 只是工具层
+
+### 4.1 ACP 服务端（谁能被驱动）
+
+| 宿主 | 入口 | 状态 | 证据 |
+|---|---|---|---|
+| opencode | `opencode acp`（stdio） | 官方，可用 | A（本机 help） |
+| OpenClaw | `openclaw acp`（stdio → Gateway WS） | 官方；`loadSession` 部分实现、per-session MCP 不支持 | A |
+| Hermes | `hermes acp` | 官方，可用 | A |
+| dsh | `dsh-acp-app`（JSON-RPC stdio） | 官方包；社区另有 `deepseek-harness-acp`(53★)、`dsh-acp-interactive`(87★) | A/C |
+| Pi | 需 `pi-acp`（747★，MVP）→ 内部 `pi --mode rpc` | 社区，可用但会小破坏 | C |
+
+### 4.2 ACP 客户端（谁能驱动别人）
+
+- **openclaw/acpx（3395★，MIT）**：通用 ACP 客户端，内置 `opencode`（`npx opencode-ai acp`）、`pi`（`npx pi-acp`）、`openclaw` 目标。**这是最成熟的一块，不该重写。**
+- 编辑器/客户端生态：Zed、`vscode-acp`(406★)、`obsidian-agent-client`(2462★)、`acp-ui`(502★)、`agentic.nvim`(643★)、`wechat-acp`(851★)。
+- SDK：TS(266★) / Python(341★) / Rust(230★) / Kotlin(97★) / Java(78★)，另有 TCK。
+
+### 4.3 编排器（多引擎）
+
+| 项目 | 连接 | 机制 | ★ | 状态 |
+|---|---|---|---|---|
+| **AionUi** | OpenClaw/Hermes/opencode/Pi + 20 余 CLI，Team Mode | ACP + MCP stdio | 33832 | 桌面应用，可用 |
+| **orca** | Codex/Claude/opencode/Pi，每任务独立 worktree | CLI + worktree | 108130 | 可用 |
+| **cc-switch** | 五家 provider/MCP/Skills 配置 | 纯配置渲染 | 149424 | 可用（不是桥） |
+| **codeg** | 20 个 agent + 任意 ACP，会话聚合 | ACP + 结构化渲染 | 4156 | 可用 |
+| **claw-orchestrator** | 六引擎含 dsh | `engine:'acp'` 预设 + 验收判据 | 601 | 可用 |
+| **harness-remote** | 六家，远程接管原生 session | 会话控制面 | 425 | 可用 |
+
+### 4.4 空位（没人做）
+
+1. **Hermes ↔ dsh / Pi ↔ dsh / Hermes ↔ Pi**：没有专用桥。
+2. **跨引擎会话移交**（A 引擎的 session 交给 B 续跑）：只有 `harness-remote` 在单引擎内做。
+3. **纯 CLI 的多引擎团队编排**：AionUi 是桌面应用，其余多是单任务启动器；**没有一个"无 GUI、按角色分工、带验收判据"的 CLI 编排器**。
+
+### 4.5 风险
+
+- `acpx` 自述 **pre-1.0**，CLI 会变。
+- `pi-acp`、dsh 的两个 ACP 桥都是单人/低星项目，不能当硬依赖。
+- **ACP 同名歧义**：Agent Client Protocol vs Virtuals 的 Agent Commerce Protocol（后者 `openclaw-acp` 已废弃）。选型只认 `agentclientprotocol`。
+
+### 4.6 对 dia 的位置
+
+- **先做 ACP server**（能被任何客户端驱动），而不是自己实现 client 去驱动五家。
+- 需要调用别人时，**用 `acpx` 作为外部可执行**，dia 只负责策略/审计/会话记录，不内嵌 ACP 协议栈。
+- dia 的机会是 **4.4 的第 3 条**：CLI-only、按角色、带验收判据的编排——但这是"编排层"，不是框架核心，应放在 dia 之上而不是 dia 里面。
+
+## 5. Persona / Kit 格式（v0）
+
+```
+persona/
+├── dia.json                  # schema/kind=persona/id/version/hosts/capabilities/entry/kits
+├── agents/<id>.md            # opencode agent
+├── platform/dsh/<id>-persona/  # dsh bundle
+└── dia.lock                  # 生成物：逐文件 sha256
+
+kit/
+├── dia.json                  # kind=kit
+├── skills/<name>/SKILL.md    # AgentSkills 原样
+├── knowledge/**.md
+├── bin/                      # 可选工具（默认无执行权）
+└── dia.lock
+```
+
+命令：
+
+```
+dia persona add <id> --from <git-url> --ref <sha>
+dia persona render <id> --host opencode|dsh
+dia persona verify|remove|list
+dia kit add|verify|remove|list
+```
+
+**渲染而非运行时适配**：只维护 opencode 与 dsh 两只宿主；每次 render 比对哈希，宿主 API 变了就重渲染，而不是写兼容层。
+
+## 6. 明确不做
+
+1. 不做运行时插件适配层（opencode V2 仍在动，等于给自己加第二个漂移源）。
+2. 不做公共市场（ClawHavoc 的教训）。
+3. 不为 dsh 发明私有标准；dsh 就用它的 bundle 格式。
+4. 不在安装时执行任何脚本。
+
+---
+
+## 7. 待验证 / 缺口
+
+| 项 | 状态 |
+|---|---|
+| dsh bundle 的 `cordis.patch.yml` 完整 schema 与冲突规则 | 部分（本机 yan-preset/watchdog 可参考） |
+| opencode V2 插件 API 的稳定性 | 已知在动（三条 issue） |
+| ACP client 侧成熟度 | 仅社区项目（10★） |
+| 跨家可执行插件的真实需求 | **未验证**（没有用户案例） |
+
+> 结论：**包格式现在就该定，但只做"manifest + skills + knowledge + lock"四件；执行交给宿主的原生机制。**
+
+
+---
+
+<!-- ecosystem-positioning.md -->
+
+# 生态定位：我们落在哪，接谁、不接谁
+
+> 日期 2026-10-28。
+> 一句话：**dia 不做通道、不做运行时、不做记忆产品；dia 做"进化的控制面"——观测、审计、基准、门禁。**
+> 长期形态（superagent / agent-team 工厂、fleet 对接）见 [`vision.md`](vision.md)；本文的"不做"边界仍然有效。
+> 通道用 dws-hub，执行用 dsh/opencode，其他 agent 只当可选后端。
+
+---
+
+## 1. 各家真正擅长什么（不是宣传语）
+
+| 工具 | 真正擅长 | 代价 / 风险 | 证据 |
+|---|---|---|---|
+| **dws-hub**（本地） | 钉钉 Stream 长连接、消息落盘、launchd 常驻 | 只覆盖钉钉；需桥接层 | 本机 launchd + plist |
+| **dsh** | 插件树（Cordis）、事件溯源会话、沙箱/审批/断点、ACP | 生态小、文档少 | 本机源码 |
+| **opencode v2** | 会话 daemon、project/location 作用域、TUI/客户端生态、SDK | 单点共享 daemon、版本断代 | 本机 + 官方文档 |
+| **OpenClaw** | **多通道接入**（WhatsApp/Telegram/Slack/Discord…）、常驻 gateway、automations | 重；供应链事故（ClawHavoc）；CVE-2026-25253 | 取证文档 |
+| **Hermes** | **长期记忆 + 自建技能闭环**（3575 字符硬顶、Curator） | 重；两套执行路径；CVE 未修复、厂商未回应 | 取证文档 |
+| **Pi** | **极简 coding harness**：核心小、扩展优先、TS 原生、prompt cache、ACP（`pi-acp`） | 无内建沙箱/审批；fail-open；无通道 | 取证文档 |
+
+**Pi 的好点**（回答你的问题）：不是记忆，也不是通道，而是**"薄内核 + 扩展"**：
+- 核心极小，能力靠 extension 拼；
+- 同进程扩展（灵活但危险）；
+- 模型目录 + prompt cache 做得细；
+- `pi-acp` 让它能被 ACP 驱动。
+它适合当**编码执行体**，不适合当常驻消息入口。
+
+---
+
+## 2. 常驻入口：用 dws-hub，不用别的
+
+| 方案 | 能给你什么 | 代价 | 结论 |
+|---|---|---|---|
+| **dws-hub + launchd + dsh/opencode** | 本地、已在跑、可控、可审计 | 需要写一个 bridge（消息→任务→回复） | **推荐** |
+| OpenClaw | 多通道开箱即用 | 引入第二套运行时/技能/安全面 | 不现在接 |
+| Hermes | 通道 + 记忆 + 技能 | 同上，且有未修复 CVE | 只做研究参考 |
+| Pi | 极简编码 | 无通道、无审批 | 可当编码后端（ACP） |
+
+**推荐链路**：
+
+```
+钉钉消息 → dws-hub（已有长连接）→ inbox 落盘
+        → dia bridge（launchd/定时或事件触发）
+        → 任务（ledger）+ 审计（dia run）
+        → 执行后端：dsh headless（批处理）/ opencode 会话（交互）
+        → 草稿回复（draft-only）→ 人工确认 → dws 发送
+```
+
+**为什么不直接用 OpenClaw 的 gateway**：
+- 它的价值是"多通道"，我们只需要钉钉一条；
+- 它自带运行时/技能/记忆，会和 dia 的策略层重复；
+- 安全面大（CVE + 供应链），与我们"审计优先"冲突。
+
+---
+
+## 3. dia 的生态位
+
+```
+通道（dws-hub）→ 控制面（dia）→ 执行体（dsh/opencode/ACP 后端）→ 证据/基准/知识
+```
+
+dia 只做四件事：
+1. **观测与记录**：会话、工具、失败、成本（不复制真相，只索引）。
+2. **审计与止血**：seam 上的判定、冻结、豁免、证据。
+3. **基准与漂移**：ModelSpec、baseline、事故 canary、观察名单。
+4. **门禁与进化**：判据、独立验证、假设台账、回滚。
+
+**不做**：通道实现、会话运行时、模型服务、技能市场、记忆产品。
+
+---
+
+## 4. 未来对接策略：适配，不吞并
+
+| 对象 | 怎么接 | 前提 |
+|---|---|---|
+| OpenClaw | 当 **ACP 端点/通道适配器**；只读收消息，草稿回复 | 不引入其技能市场；审计覆盖其工具调用（做不到就只观测） |
+| Hermes | 当 **ACP 端点**；只借鉴记忆/技能机制，不接管 | 版本固定；CVE 未修复前不跑高权限 |
+| Pi | 当 **编码执行体**（`pi-acp`） | 只跑隔离任务；无审批，需外层 gate |
+| dsh | 主执行体 | 已定 |
+| opencode | 交互式会话后端 | 已定 |
+
+**接入判据（任一条不满足就不接）**：
+1. 能被 ACP 或 CLI 黑盒驱动；
+2. 工具调用可被审计（至少可观测）；
+3. 版本可钉、可回滚；
+4. 不要求我们复制它的记忆/技能体系。
+
+---
+
+## 5. 一句话回答
+
+- **常驻启动**：用 **dws-hub + launchd + dsh/opencode**，不引入 OpenClaw/Hermes/Pi。
+- **会话转发**：dws-hub 负责通道，dia 负责策略与证据；转发是 bridge 的活，不是 agent 的活。
+- **生态位**：**个人进化的控制面**，不是又一个 agent 框架。
+- **未来对接**：只做 ACP/CLI 适配器，不吞并它们的运行时。
+
+
+---
+
+<!-- entrypoints.md -->
+
+# 用户入口：人在哪进，agent 叫什么
+
+> 日期 2026-10-28。
+> 一句话：**入口仍是 opencode/dsh（和 yan 一样），但 agent 名是 `dabo`，不是 `dia`；`dia` 是控制面命令，不是人格。**
+>
+> **2026-11-03 复核**：终端入口已落地（`~/.config/opencode/agents/dabo.md` + `~/.dsh/profiles/dabo`）；
+> IM bridge 仍未写；文中出现的 `dia status` / `dia model` **不存在**，观测入口目前是 `dia doctor`。
+
+---
+
+## 0. 三个名字别混
+
+| 名字 | 是什么 | 用户会怎么遇到 |
+|---|---|---|
+| **dabo** | 个人域 agent（人格 + 域知识 + 工具） | 在 opencode/dsh 里选 agent |
+| **yan** | 工作域 agent | 同上（已有） |
+| **dia** | 框架/控制面（知识、审计、基准、门禁） | 命令行 `dia ...`，不是聊天对象 |
+
+所以：**不会出现"选 dia agent 聊天"**；用户选的是 `dabo` 或 `yan`。
+
+---
+
+## 1. 入口矩阵
+
+| 入口 | 形态 | 跑什么 | 现状 |
+|---|---|---|---|
+| **终端（主）** | `opencode`（agent=dabo）/ `dsh`（profile=dabo） | 交互式会话 | **已渲染**（yan 同构，profile 3091；dabo 端口动态） |
+| **IM（异步）** | 钉钉 → dws-hub → dia bridge | 建任务 → 后端执行 → 草稿回复 | bridge 未写 |
+| **自动化** | launchd → `dsh headless` / `dia run` | 批处理、canary、巡检 | 部分有 |
+| **控制面** | `dia doctor` / `audit` / `kb` / `price` | 观测、审计、知识、计价 | 已有（`status` / `model` 未实现） |
+
+**没有第四种"dia 自带界面"**：dia 不拥有运行时，也不做 TUI。
+
+---
+
+## 2. 终端入口：和 yan 完全同构
+
+```
+opencode:  ~/.config/opencode/agents/dabo.md     （persona + 工具 + permission）
+dsh:       profile bundle: dabo-preset           （dsh-agent-preset + persona + 域插件）
+```
+
+选择方式：
+- opencode：切 agent 到 `dabo`（或 `opencode --agent dabo`）。
+- dsh：profile 选择 / preset `dabo`。
+
+**与 yan 的差别只在内容**：`dabo` 用个人域知识与策略；机制一样。
+
+---
+
+## 3. IM 入口：不是另一个 agent
+
+```
+钉钉消息 → dws-hub（通道，常驻）
+        → dia bridge（消息 → 任务；不做语义）
+        → 选后端（dsh/opencode/ACP）
+        → 产出草稿 → 人工确认 → 发送
+```
+
+- bridge 不扮演 agent，不写人格；
+- 回复默认 **draft-only**；
+- 会话记录进同一套 episodes/audit。
+
+---
+
+## 4. 配置失败时的入口体验
+
+| 失败 | 用户看到 | 行为 |
+|---|---|---|
+| dabo preset 未渲染 | `dia doctor` 报 `preset dabo missing`；opencode 里看不到 `dabo` | **不静默回退到默认 agent**；提示渲染命令 |
+| ACP 不可用 | `dia run` 报错，不静默回退 | 交互可用，审计降级（degraded 状态未实现） |
+| dws-hub 未运行 | bridge 未写，无入口 | IM 入口不可用，终端入口不受影响 |
+| 策略未加载 | **拒绝高风险动作**（不是回退到无策略） | 只读/草稿可用 |
+
+原则：**入口可以少，策略不能悄悄没。**
+
+---
+
+## 5. 落地顺序
+
+1. 渲染 `dabo` preset（opencode md + dsh bundle），先能在终端里选到；
+2. 写 `dia bridge`（IM 入口），默认 draft-only；
+3. `dia doctor` 增加入口自检：preset 是否存在、ACP 是否握手、dws-hub 是否心跳。
+
+
+---
+
+<!-- evolution-process.md -->
+
+# 进化：dia 的第一性定位
+
+> 日期 2026-10-28。本文不是功能清单，是**过程定义**。
+> 生态位（框架/插件/ACP）是自然落点，不是目标；能力只有在过程需要时才被引入。
+
+---
+
+## 1. 一句话
+
+> dia 维护的不是"一个 agent"，而是一个**可观测、可回溯、可自我调整的进化过程**。
+> 人和电子脑是这个过程的两个引擎，长期磨合的产物才是产出。
+
+判据不是"功能做完了"，而是：**下一次同类问题，系统是否比上次少犯一次错、少花一次时间、少一次人工介入。**
+
+---
+
+## 2. 循环（七段，缺一段就不叫进化）
+
+```
+        ┌────────────── 意图锚点 Intent（人工，只读）──────────────┐
+        │                                                          │
+        ▼                                                          │
+   观测 Observe ──> 记录 Record ──> 蒸馏 Distill ──> 评审 Review ──┤
+        ▲                                              │           │
+        │                                              ▼           │
+   调整 Adjust <── 度量 Measure <── 尝试 Try <──────────┘           │
+        │                                                          │
+        └────────────── 历史锚点 History（只追加）──────────────────┘
+```
+
+| 段 | 做什么 | 产物 | 归属 |
+|---|---|---|---|
+| **观测** | 会话、失败、用户纠正、外部生态变化 | `observations`（原始，脱敏） | agent |
+| **记录** | 归一为 episode；不可变 | `episodes.jsonl` | agent |
+| **蒸馏** | 从 episode 提候选经验/假设，**不是结论** | `candidates` / `hypotheses` | agent 起草 |
+| **评审** | 双引擎：证据分级 + 对抗 + 裁决 | `review` 记录 | 人 + agent |
+| **尝试** | 最小改动/实验，可回滚 | `experiments` / `evo-*` | agent 执行 |
+| **度量** | 指标 + 回归 + 意图漂移 | `metrics` | 脚本 |
+| **调整** | 采纳/回滚/归档；写回历史 | `history` | 人批 |
+
+**两个锚点**：
+- **意图**（为什么做）：人工维护，agent 只读；任何改动与意图冲突 → 必须人工裁决。
+- **历史**（发生过什么）：只追加，不覆盖；"铭记历史"不是口号，是**不可变日志 + 可检索**。
+
+---
+
+## 2.1 V 型协作结构（补充模型）
+
+```
+                人（顶端：意图 / 价值 / 裁决 / 停手）
+               /                                  \
+      下降臂（尝试/探索/试错）          上升臂（请示/汇报/交还决策）
+               \                                  /
+                谷底：任务目标（可能触底，也可能永远触不到）
+```
+
+- **AI 在两臂之间跑线**：下降 = 推进尝试；遇到无法绕开的障碍 = 沿上升臂回到人请示；人给决策后再下降。
+- **触底**不是唯一成功：到达某一深度并**记录障碍类型**，也是有效产出。
+- **上升不是失败**，是**决策采样**：每次请示都在标注"哪类障碍必须由人裁定"。
+- **深度**是连续量（0–100%），不是二元成败；同一任务族的历史深度分布，比"成功/失败"更有信息。
+
+### 2.1.1 多维状态：角色 × 任务图 × 观测效应
+
+V 型是二维投影。真实状态至少是三元组：
+
+```
+State = (T, D, O)
+  T：任务图（不是任务列表）
+  D：深度矩阵 D[观测者][任务节点] ∈ [0,1]
+  O：观测事件及其对 T/D 的影响
+```
+
+#### 维度一：角色 = 观测角度
+
+| 观测者 | 看到什么 | 常见偏差 |
+|---|---|---|
+| 人 | 目标价值、外部约束、停手时机 | 低估实现细节的深度 |
+| 主 agent | 计划与已完成步骤 | 高估推进（把"做了"当"有效"） |
+| 子 agent | 自己负责的分量 | 局部最优、看不到全局权重 |
+| 系统/脚本 | 可度量指标 | 只测可测的，漏掉意图 |
+
+**规则**：不取平均。`Δ = max(D[o][t]) - min(D[o][t])`。
+对齐优先级 = **`Δ × 该判定的错误成本`**（Horvitz 1999），阈值**预注册**；
+**不设拍脑袋的 0.3**（原阈值无文献依据，已撤回）。
+另：`Δ≈0` 不能证明"都对"——也可能是**共谋**（Lee & See 2004）；必须配合盲复核。
+
+#### 深度不是标量：按四类功能分别记
+
+Parasuraman/Sheridan/Wickens (2000) 的 types×levels：**信息获取 / 信息分析 / 决策 / 执行**各自定级。
+禁止输出单一"深度分"；矩阵必须是 `D[observer][task][function]`。
+
+#### 维度二：任务图（会生长、会消失、会聚合、会发散）
+
+任务不是固定列表，是有生命周期的图：
+
+```yaml
+task:   { id, parent, origin, weight, status }
+# origin: original | derived | merged | split | observation-induced
+# weight: 该节点占目标的比例（可随时间变化）
+```
+
+- **新增**：agent 发现的新前提（如"先修 CI 才能发版"）；
+- **消失**：前提被证伪、或目标变更；
+- **聚合**：其他任务并入（范围变大）；
+- **发散**：一个节点裂成多个（范围变大但更清晰）；
+- **观测诱发**：因为我们观察/度量而新增的任务（见下）。
+
+**规则**：`派生比 = Σweight(derived + observation-induced) / Σweight(original)`。
+派生比持续升高 = 目标在漂移，必须先压缩/收敛，不许继续扩张。
+
+#### 维度三：观测效应（系统自己成为变量）
+
+观测不是免费的：一次度量可能
+1. 改变任务图（新增"验证/记录/清理"任务）；
+2. 改变深度估计（看到更多细节 → 深度反而下降）；
+3. 改变后续行为（被观测者知道被观测）。
+
+因此每次观测都记一条事件：
+
+```yaml
+event: { type: observe|add|remove|merge|split|reweight, cause, actor, ts,
+         intent_id, judge_id, upstream_artifact_ids,   # provenance（MHC tracing）
+         sa_level: L1|L2|L3,                            # 情境意识层级（可选）
+         effect: { added: [], removed: [], reweighted: [] } }
+```
+
+**规则**：`观测诱发变更率 = 有 effect 的观测 / 总观测`。
+过高 → 降低观测频率或改成抽样；否则系统会陷入"为了看清楚而制造更多工作"的循环。
+
+#### 由此新增的指标
+
+| 指标 | 公式 | 用途 |
+|---|---|---|
+| 观测分歧 Δ | max-min 深度（按任务×功能） | 按 `Δ × 错误成本` 排序对齐 |
+| 派生比 | derived+observation-induced 权重 / original 权重 | 升高 = 目标漂移 |
+| 任务图 churn | (add+remove+merge+split) / 周 | 过高 = 结构不稳 |
+| 观测诱发变更率 | 有 effect 的观测 / 总观测 | 过高 = 观测成本失控 |
+| 聚焦熵 | 注意力在各节点上的分布熵 | 过高 = 失焦 |
+
+### 2.1.2 存储原则：不重复存放会话
+
+```
+真相层（不归 dia 所有）：
+  opencode  session/message/part  →  ~/.local/share/opencode/opencode.db
+  dsh       session.v4.jsonl.zstd →  ~/.dsh/sessions/<workspace>/
+
+索引层（dia 所有，可重建）：
+  state/events.jsonl     只追加：任务图变更 / 深度上报与复核 / 观测影响 / 决策
+  state/index.db         派生索引（FTS/聚合视图），删掉可重建
+  state/snapshots/       有期限的完整备份（默认 30 天，只为回放/回填）
+
+引用：raw_ref = {source, session_id, part_id?}
+```
+
+**规则**：
+
+1. **不复制 transcript**：dia 只存引用 + 事件；原文永远回源读。
+2. **索引可重建**：删除 `index.db` 与 `snapshots/`，能从"源会话 + events"重建出同样的视图（哈希一致）。
+3. **备份有期限**：完整备份只为"源被删/升级不兼容"时回放，默认 30 天，到期自动清；它不是事实源。
+4. **视图是聚合**：`task_graph` / `depth_matrix` / `Δ` / `derived_ratio` / `obs_effect_rate` 都是事件流上的投影，不单独存事实。
+
+事件 schema（v0）：
+
+```yaml
+id: <hash>
+ts: ISO
+actor: human | agent | subagent | system
+type: task.added | task.removed | task.merged | task.split | task.reweighted
+    | depth.reported | depth.reviewed
+    | observation.effect
+    | decision.made
+task: { id, parent, origin, weight }
+depth: { observer, task, value, basis }
+effect: { added: [], removed: [], reweighted: [] }
+ref: { source, session, part? }
+```
+
+### 2.2 不完整过程也是产出
+
+每次 attempt 记录：`{task, depth, obstacle, decision_needed, human_decision, cost, evidence, judge_version}`。
+
+三类可复用资产：
+1. **深度先验**：这类任务通常能到多深、在哪一层卡住；
+2. **障碍清单**：哪类障碍必须回人（而不是继续试）；
+3. **决策日志**：人当时怎么裁定、依据是什么。
+
+**判据公开（"公示"）**：同一套判据可以对历史 attempt 重新评分——所以旧的失败在新判据下可能变成有效证据。
+这也是"铭记历史"的实际用法：不是留着日志，而是**能重打分**。
+
+### 2.3 实例爆炸 → 系统性索引压缩
+
+三层，越往下越贵、越少：
+
+| 层 | 内容 | 保留 | 压缩方式 |
+|---|---|---|---|
+| **原始** | observations / episodes | TTL 30 天 | 按签名去重 |
+| **先验** | 聚类后的深度/障碍先验 | 长期 | 同族 ≥N 触发；保留深度分布 + 代表样例指针 |
+| **决策** | 人的裁定与理由 | 永久 | 只追加，不改写 |
+
+压缩后只保留：`签名 / 深度分布 / 障碍类型 / 代表样例指针 / 判据版本`。
+目标：存储 O(instances) → O(priors)，检索与决策成本不随实例数线性增长。
+
+## 3. 两个引擎的分工
+
+| | 人脑 | 电子脑 |
+|---|---|---|
+| 强项 | 意图、价值判断、阈值、承担责任 | 规模观测、一致性检查、快速起草、反复重试 |
+| 职责 | 定"为什么"、批"能不能"、裁决冲突 | 做"看见"、"记录"、"提候选"、"跑实验" |
+| 失败模式 | **忘记初心**（意图漂移）、疲劳漏看 | **优化代理指标**（刷分）、讨好人类、记忆腐烂 |
+| 对策 | 意图锚点 + 定期复核 | 对抗审计 + 独立证据 + 回归门禁 |
+
+**磨合**的定义：不是"人机对话变顺"，而是**同样的判断，第二次比第一次更快、更一致、更有据**。
+
+---
+
+## 4. 进化指标（不做 productivity 指标）
+
+| 指标 | 定义/公式（必须能从事件算） | 健康信号 |
+|---|---|---|
+| 观测覆盖率 | 被记录的事件 / 实际发生的事件 | ↑ |
+| 经验产出率 | candidates / 100 episodes | 稳定，不追求高 |
+| **推翻质量** | `有效推翻 / (有效推翻 + 误报)`；单看推翻率不采纳（防 Goodhart） | 稳定且 >50% |
+| 重试成功率 | 失败后重试成功 / 总重试 | ↑ |
+| 回归率 | 改动导致旧能力退化 / 总改动 | ↓ |
+| **意图漂移** | 与意图锚点冲突的决策数；**意图变更的 actor 必须是人**（agent 写入数 >0 即失败） | 0 |
+| 信任度 | 审计通过率、豁免率、冻结次数 | 豁免率 ↓ |
+| 人工介入率 | 需要人处理的步骤 / 总步骤 | ↓，但**意图变更 100% 由人发起** |
+| **校准** | 自报 vs 盲复核的 ECE / Brier；ICC(2,k) | 替代"深度达成"；盲复核必须异源 |
+| 深度达成 | 任务族的四类功能中位深度 | 分开报，不合成单一分数 |
+| 请示质量 | 回人的障碍里"必须人裁定"的比例（其余应继续试） | ↑ |
+| 部分产物复用率 | 被后续 attempt 引用的失败 attempt / 总失败 | ↑，但需配下游返工率 |
+| 压缩比 | 先定义"信息量 vs token"，否则不测 | ↑，但检索命中率不能掉 |
+| 检索命中率 | 先验被正确召回 / 总召回请求 | ≥90% |
+| 边际深度 | 每次尝试带来的深度增量 | 趋近 0 时应停止/换路 |
+| 共谋信号 | ①人推翻"秤"通过结论的次数 ②人回答 agent 问题的平均字数 ③连续无分歧任务数 | ①=0；②≥20 字；③<10 |
+
+> 不进指标的东西：功能数量、代码行数、提交数。
+> **规则**：没有对应事件（`core/events.yaml`）与公式的指标，不进表；宁可不测，不测空话。
+
+---
+
+## 5. 能力引入的规矩（针对"拿来主义"）
+
+**任何外部能力（库、插件、协议、别人的引擎）都先当假设，不当结论。**
+
+引入前必须有一份 **REUSE ADR**（见 `docs/review/reuse-review.md`），至少包含：
+
+1. 主张（我们要复用它做什么）
+2. 证据级别（A 源码/官方 / B 官方博客 / C 第三方 / D 传闻）
+3. **本地探测结果**（命令 + 输出；没跑就写"未验证"）
+4. 失败模式（它坏了/变了/被弃用，我们怎么办）
+5. 耦合代价（版本、许可证、维护者数量、退出成本）
+6. 裁决：`adopt` / `adapt` / `reject` / `defer`（defer 必须写复查日期）
+
+没有本地探测的复用，只能标 `defer`，**不许进主路径**。
+
+---
+
+## 4.1 请示与打断（理论约束）
+
+- **请示三件套**：不确定性 / 候选及代价 / 推荐项（Horvitz 1999）。
+- **打断预算**：每人每时段上限，超限转异步队列。
+- **顶端只保留三类决策**：目标选择、冲突裁决、异常接管。
+- **自动化升级时**同步提高人的手动演练配额（Bainbridge 1983 / OOTL）。
+
+## 4.2 共谋（必须可判）
+
+`Δ≈0` 有两种解释：都准，或都错。判别只能靠**盲复核 + 第三方抽检**；
+"人推翻秤结论的次数"必须为 0，但该指标**不得进个人考核**（Campbell 定律）。
+
+## 5.1 认知分工：知其然，不知其所以然
+
+- 人负责 **why**：什么值得做、什么算好、什么时候停。
+- 电子脑负责 **how**：试、量、记、压缩。
+- 系统**不承诺理解因果**，只承诺"可复用的行为先验"；因果解释由人补，或作为假设去验证。
+- 这不是缺陷，是分工：**局部优化由机器做，全局意图由人守**。
+
+## 6. 与现有能力的关系（能力是仪器，不是目的）
+
+| 已有/在建 | 在循环里的位置 |
+|---|---|
+| ingest（会话采集） | 观测 |
+| episodes + 脱敏 | 记录 |
+| candidates（候选） | 蒸馏的输入 |
+| hypotheses（H1–H8） | 蒸馏的产物 / 评审对象 |
+| audit / freeze | 信任与边界（度量的一部分） |
+| kb（知识库） | 历史锚点的检索面 |
+| pkg / render | 把"调整"落到宿主 |
+| ACP / 编排 | 让两个引擎能接上，不是目的 |
+
+---
+
+## 7. 失败判据（什么时候承认定位错了）
+
+1. 连续 4 周，观测覆盖率不升、候选采纳率为 0 → 过程没跑起来。
+2. 连续 4 周，人工介入率 100% 且没有下降 → 电子脑没形成能力。
+3. 出现"为了用框架而用框架"的功能 → 生态位变成了目的，回到本文 §1。
+4. 意图锚点 3 个月没被引用过一次 → 初心已经丢了。
+
+
+---
+
+<!-- history/framework-bootstrap.md -->
+
+> **已归档（2026-11-03）**：本文的启动/分发方案（release tarball + `agentctl` + `framework.lock`）未采用；
+> 实际是 `bun run build` + `bash install.sh`。保留作为早期决策记录，不要按它部署。
+
+# 框架启动方案（bootstrap）
+
+> 日期 2026-10-27。配合 `docs/architecture.md`。
+> 目标：先把"会话采集 + 知识检索"这条最小闭环跑起来，再谈其他。
+>
+> **2026-11-03 现状**：分发**没有**按本文的 A 方案做（无 release tarball、无 `agentctl`、无 `framework.lock`）。
+> 实际是 `bun run build` + `bash install.sh` → `~/.local/share/dia` + `~/.local/bin/dia`；
+> 版本只有 `package.json` 的 0.0.1，未发布。本文保留早期选型过程，**不要按它部署**。
+
+## 1. 仓库与分发
+
+### 1.1 布局
+
+```
+framework/
+├── bin/dia.js                # 唯一入口（Node/Bun）
+├── packages/                 # TS 包：core / kb / job / cli
+├── packages/                 # 内置包（可选）
+├── tests/                    # unittest + shell
+└── docs/
+```
+
+### 1.2 分发选项
+
+| 方案 | 优点 | 缺点 | 适合 |
+|---|---|---|---|
+| **A. GitHub Release tarball + `install.sh` + sha256** | 零依赖、离线可用、私有仓用 `gh` 下载、版本可钉 | 需要 `gh` 或 token；无自动更新 | **当前首选** |
+| B. 私有 npm（GitHub Packages） | 版本语义清晰、可锁 | 需要 npm 登录与 token；对 bash/TS 项目是多余依赖 | 以后出 TS 插件时 |
+| C. 公开 npm | 安装最省事 | 代码公开 | 若决定开源 |
+| D. git submodule / subtree | 无发布流程 | 两个域版本耦合，回滚困难 | 不推荐 |
+
+**推荐 A**：`gh release download <tag> -R <org>/framework` → 解压到 `~/.local/share/framework/<version>` → `~/.local/bin/agentctl` 软链。
+每个域持有 `framework.lock`：`{version, sha256}`；`agentctl self-check` 校验完整性。
+
+## 2. 第一个任务：会话采集（ingest）
+
+### 2.1 输入（本机实测）
+
+| 源 | 位置 | 规模 | 读取方式 |
+|---|---|---|---|
+| dsh | `~/.dsh/sessions/<escaped-workspace>/session-<uuid>/session.v4.jsonl.zstd` | 241 个 / 146MB | `node:zlib` zstd 流式解压后逐行 JSON |
+| opencode | `~/.local/share/opencode/opencode.db`（SQLite） | 449MB / 34 会话 / 7377 消息 / 30201 片段 | `sqlite3` **只读 URI**，按 session 逐条流式读 |
+
+依赖兜底：`zstd` CLI 优先；没有则用 Python ≥3.14 的 `compression.zstd`；都没有 → 跳过并写 `degraded_reason`。
+
+### 2.2 流程
+
+```
+读 → 脱敏 → 归一（episode）→ 去重 → 候选
+```
+
+- **脱敏（必须先于落盘）**：token/密码/私钥/内网域名/邮箱/手机号/工号 → 占位符。
+  规则集放 `rules/redact.txt`，每条形如 `正则 → 标签`；样例集 100 条，命中率与误伤率进测试。
+- **归一 schema**：
+  ```json
+  {"schema_v":1,"episode_id":"sha256","source":"dsh|opencode","domain":"dabo|yan",
+   "workspace":"<hash>","project":"<hash|null>","workspace_id":"<id|null>",
+   "directory_hash":"<hash>","path_hash":"<hash>",
+   "ts_start":"...","ts_end":"...","turns":N,
+   "tools":[{"name":"bash","count":2,"ok":1}],
+   "summary":"<脱敏后摘要>","raw_ref":"<source>:<session-id>"}
+  ```
+- **不存原始消息**：只存脱敏摘要 + 指针；要看原文按 `raw_ref` 回源（默认关闭）。
+- **去重**：`episode_id = sha256(source|session_id|first_ts|last_ts)`；同一会话重跑不重复。
+- **候选**：只产出 `candidates.jsonl`（"可能值得沉淀的做法"），**不自动写知识库**。
+
+### 2.3 域与隐私
+
+| 域 | 默认 | 说明 |
+|---|---|---|
+| dabo | **开** | 个人会话，默认采集 |
+| yan | **关** | 工作会话，需 `--domain yan --i-own-this` 显式开启；产物不出本域 |
+
+跨域只共享**方法**（代码/规则），不共享**数据**（episodes 分目录、不同密钥可选）。
+
+### 2.4 判据
+
+1. 能列出两个源的会话总数与时间范围，且与源一致（±0）。
+2. 抽样 20 个 episode：`raw_ref` 能回源、时间戳落在原会话区间内。
+3. 脱敏样例 100 条：命中率 100%，误伤 <5%（误伤 = 正常文本被替换）。
+4. 同一输入跑两遍：`episode_id` 集合完全一致（幂等）。
+5. 只读验证：跑完后源文件 mtime 与大小不变（`stat` 前后对比）。
+6. 无网络：`ingest` 期间零出网（用 `lsof` 或审计断言）。
+
+## 3. 第二个任务：知识检索（kb）
+
+最小接口：
+
+```
+agentctl kb index [--root <dir>]        # 重建派生索引（可重复执行，结果哈希一致）
+agentctl kb search "<q>" [--tag ...]    # FTS5 检索，返回路径+片段
+agentctl kb lint                        # 索引覆盖/断链/复审到期/超预算
+agentctl kb get <path> [--section ...]  # 取正文（按需读）
+```
+
+判据：
+- 与 yan 现状抽样 20 条查询结果一致（路径集合相同，顺序可不同）；
+- 删除 `index.db` 后重建两次，`sha256` 一致；
+- lint 能准确报出当前 yan 库的 29 个未索引文件与 9 条断链（作为基线测试）。
+
+## 4. 首个里程碑（1–2 天）
+
+1. 建 framework 私有仓 + 骨架 + CI（ubuntu + macos）。
+2. `agentctl kb index/search/lint` 指向 yan 知识目录（只读），跑出基线数字。
+3. `agentctl ingest` 采集 dabo 域会话（先小样本 5 个），产出脱敏 episode。
+4. 把上面 6 条判据写成测试。
+
+
+---
+
+<!-- host-control-surface.md -->
+
+# 宿主控制面：黑盒边界与内部 seam（2026-10）
+
+> 日期 2026-10-28。问题：把 opencode（含 v2）与 dsh 当"黑盒宿主"时，我们能在哪些边界上控制它们？
+> 结论先行：**优先黑盒（CLI/HTTP/ACP/配置/会话只读）；插件 seam 只用于观测；永不 patch 宿主。**
+
+---
+
+## 0. 三层边界
+
+| 层 | 形态 | 稳定性 | 用途 |
+|---|---|---|---|
+| **L0 黑盒** | CLI、HTTP API、ACP、配置文件、会话存储（只读） | 高（有版本契约） | 启动、查询、注入配置、读真相 |
+| **L1 插件 seam** | 宿主内部的 hook/事件/生命周期 | 中（API 会断代） | 观测、轻量改写、审批 |
+| **L2 侵入** | patch 宿主源码 / fork | 低 | **禁止** |
+
+---
+
+## 1. opencode（v2 为重点）
+
+### 1.0 v2 拓扑（重要修正）
+
+opencode v2 **不是"TUI 里跑 agent"**，而是 daemon 化：
+
+```
+TUI / CLI / Web / SDK  ← 都是客户端
+        │  同一 HTTP 契约（OpenAPI 3.1）
+        ▼
+用户级共享后台 server（daemon）
+  ├─ sessions / config / permissions / tool execution
+  ├─ LocationServiceMap（每 workspace 的 fs/tools/agents/providers/MCP）
+  └─ durable event log + projections + pending inbox
+```
+
+- 默认自动发现/启动**一个用户级共享 server**；`--standalone` 起私有 server；`--server` 连远端。
+- 桌面版用 **Electron utility-process sidecar** 跑同一个 server（不是通用插件沙箱）。
+- 官方 issue #43898 明确："one shared OpenCode process for all workspaces and clients"，并承认多 workspace 隔离/公平性**没有契约**。
+- `opencode-forge`（第三方，13★，MIT）是 server+TUI 双面插件，做自主循环/worktree 沙箱；**不是核心能力**。
+
+**含义**：
+1. 会话与 TUI 进程分离 → 我们读会话不必附着 TUI。
+2. 共享 daemon 是单点：一个 workspace 的重负载会影响所有客户端（#43898 实测 TUI 卡顿）。
+3. 需要隔离时只有三种选择：`--standalone`（私有 server）、`--server` 远端、或嵌入式 SDK（`@opencode/sdk`，内存 router，无监听）。
+
+### 1.0.1 会话分区：Project / Location / Workspace
+
+| 概念 | 定义 | 证据 |
+|---|---|---|
+| **Project** | 工作目录的身份：Git 仓跟随 worktree 根；非 Git 目录在 V2 各自成 project（V1 统一为 `global`） | 官方指南 + 本机 DB `project_id` 分布 |
+| **Location** | 每次请求的目录上下文：fs/tools/agents/providers/MCP 都挂在 `LocationServiceMap` 下 | V2 spec |
+| **Workspace** | 可选、实验性：session 可绑定 `workspace_id`（worktree） | 测试代码 + 本机 `workspace_id` 全为 NULL |
+
+**行为**：
+- `opencode ~/proj` → 切到该 project；`opencode`（不指定）→ 默认 location（server cwd）。
+- TUI 的 `/sessions` 与 `opencode session list` 都**只列当前 project 的顶层会话**；子会话不出现。
+- `session list` **没有 `--all`**；要跨 project 只能走 API：`GET /api/session`（支持 `scope/directory/path/workspaceID/roots`）。
+- `--continue` 只挑"记录目录 = 当前目录"的最新顶层会话。
+- V1 的 `global` project 会话在 V2 picker 里**看不到**，需要 `GET /api/session` 或 move API 修。
+
+**对 dia 的含义**：
+1. 采集不能只靠 `session list`——会漏跨 project/迁移会话；必须用 API 或直接读 DB，并记录 `project_id/directory/path/workspace_id`。
+2. **Project 不是安全边界**：共享 daemon 拥有全部会话，API 可跨 project 读；隔离要靠 `--standalone`/`--server`。
+3. `workspace_id` 目前为空（实验特性）；不要把"session 绑定 worktree"当成现成能力。
+
+### L0 黑盒
+
+| 能力 | 入口 | 证据 |
+|---|---|---|
+| 任意 API 调用 | `opencode api <operation | METHOD path>`（OpenAPI 操作） | 本机 `--help` · A |
+| 会话管理 | `opencode session ...` | 本机 · A |
+| MCP 管理 | `opencode mcp ...` | 本机 · A |
+| 插件管理 | `opencode plugin add/list/check` | 本机 · A |
+| ACP 服务 | `opencode acp` | 本机 · A |
+| 配置 | `opencode.jsonc`、`agents/*.md`、`plugins/` | 本机 · A |
+| 真相读取 | `~/.local/share/opencode/opencode.db`（只读） | 本机 · A |
+
+### L1 插件（V2）
+
+| 能力 | 形式 | 状态 |
+|---|---|---|
+| 工具前后 | `ctx.tool.hook("execute.before"/"after")` | 官方 V2 |
+| 会话上下文/压缩 | `ctx.session.hook("context"/"compaction")` | 官方 V2 |
+| 事件订阅 | `ctx.event.subscribe()` | 官方 V2 |
+| Agent 注册/改写 | `ctx.agent.transform()` | 官方 V2 |
+| 权限 | `permission.hook("evaluate")` | **实测返回值不生效**（yan-oc-guard 注释，A 级） |
+| shell 前后 | `shell.hook("before")` | 本机插件在用 |
+
+**结论**：opencode 只适合做**观测 + 审计**，不适合做强制拦截；强制控制必须由外部（dia run / dsh）承担。
+V1→V2 是断代（"V1 implementations do not run in V2"），插件 API 必须按版本探测。
+
+---
+
+## 2. dsh
+
+### 1.0 v2 拓扑（重要修正）
+
+opencode v2 **不是"TUI 里跑 agent"**，而是 daemon 化：
+
+```
+TUI / CLI / Web / SDK  ← 都是客户端
+        │  同一 HTTP 契约（OpenAPI 3.1）
+        ▼
+用户级共享后台 server（daemon）
+  ├─ sessions / config / permissions / tool execution
+  ├─ LocationServiceMap（每 workspace 的 fs/tools/agents/providers/MCP）
+  └─ durable event log + projections + pending inbox
+```
+
+- 默认自动发现/启动**一个用户级共享 server**；`--standalone` 起私有 server；`--server` 连远端。
+- 桌面版用 **Electron utility-process sidecar** 跑同一个 server（不是通用插件沙箱）。
+- 官方 issue #43898 明确："one shared OpenCode process for all workspaces and clients"，并承认多 workspace 隔离/公平性**没有契约**。
+- `opencode-forge`（第三方，13★，MIT）是 server+TUI 双面插件，做自主循环/worktree 沙箱；**不是核心能力**。
+
+**含义**：
+1. 会话与 TUI 进程分离 → 我们读会话不必附着 TUI。
+2. 共享 daemon 是单点：一个 workspace 的重负载会影响所有客户端（#43898 实测 TUI 卡顿）。
+3. 需要隔离时只有三种选择：`--standalone`（私有 server）、`--server` 远端、或嵌入式 SDK（`@opencode/sdk`，内存 router，无监听）。
+
+### 1.0.1 会话分区：Project / Location / Workspace
+
+| 概念 | 定义 | 证据 |
+|---|---|---|
+| **Project** | 工作目录的身份：Git 仓跟随 worktree 根；非 Git 目录在 V2 各自成 project（V1 统一为 `global`） | 官方指南 + 本机 DB `project_id` 分布 |
+| **Location** | 每次请求的目录上下文：fs/tools/agents/providers/MCP 都挂在 `LocationServiceMap` 下 | V2 spec |
+| **Workspace** | 可选、实验性：session 可绑定 `workspace_id`（worktree） | 测试代码 + 本机 `workspace_id` 全为 NULL |
+
+**行为**：
+- `opencode ~/proj` → 切到该 project；`opencode`（不指定）→ 默认 location（server cwd）。
+- TUI 的 `/sessions` 与 `opencode session list` 都**只列当前 project 的顶层会话**；子会话不出现。
+- `session list` **没有 `--all`**；要跨 project 只能走 API：`GET /api/session`（支持 `scope/directory/path/workspaceID/roots`）。
+- `--continue` 只挑"记录目录 = 当前目录"的最新顶层会话。
+- V1 的 `global` project 会话在 V2 picker 里**看不到**，需要 `GET /api/session` 或 move API 修。
+
+**对 dia 的含义**：
+1. 采集不能只靠 `session list`——会漏跨 project/迁移会话；必须用 API 或直接读 DB，并记录 `project_id/directory/path/workspace_id`。
+2. **Project 不是安全边界**：共享 daemon 拥有全部会话，API 可跨 project 读；隔离要靠 `--standalone`/`--server`。
+3. `workspace_id` 目前为空（实验特性）；不要把"session 绑定 worktree"当成现成能力。
+
+### L0 黑盒
+
+| 能力 | 入口 | 证据 |
+|---|---|---|
+| 启动 profile | `dsh --profile <name>` | 本机 · A |
+| 组合树查询 | `--dump-config` / `--dump-default-config` | 本机 · A |
+| 插件安装 | `dsh plugin --profile <p> add <pkg>`（转发 pnpm） | 本机 · A |
+| ACP | `dsh-acp-app`（JSON-RPC stdio） | 包描述 · A |
+| 会话真相 | `~/.dsh/sessions/**/session.v4.jsonl.zstd` | 本机 · A |
+| 会话控制 | `dsh-api-session-controller`（remote commands / cold reads / live transport） | 包描述 · A |
+
+### L1 插件 seam（Cordis bundle）
+
+| 能力 | 包 | 说明 |
+|---|---|---|
+| 执行前决策 | `tools/pre-execute`（watchdog） | 可判定/记账 |
+| 审批拦截 | `approval/request` | 可回 `allowed-once` |
+| 结果处理 | `tools/result` | 清理/记录 |
+| 循环控制 | `dsh-agent-loop` | 步数/停止条件 |
+| 重试 | `dsh-llm-retry` | 次数/退避/`providerRetryAfterMs` |
+| 压缩 | `dsh-compaction-basic` + `tool-result-pruner` | 阈值/保留/无模型裁剪 |
+| 权限预设 | `dsh-permission-presets` | sandbox-mode + approval 两轴 |
+| 沙箱 | `dsh-sandbox*` | 文件效果，fail-closed |
+| 断点 | `dsh-session-checkpoint-policy` | 模型请求/工具副作用前 |
+| 重复调用 | `dsh-repeat-tool-reminder` | 防死循环 |
+| 会话事件 | `dsh-session`（event-sourced，fold/fork） | 只追加、可重放 |
+
+**结论**：dsh 是**可强制**的一侧：pre-execute + approval + sandbox + checkpoint 都在插件边界上，且 fail-closed。
+
+---
+
+## 3. 能力矩阵（我们要的控制 × 宿主）
+
+| 控制需求 | opencode L0 | opencode L1 | dsh L0 | dsh L1 |
+|---|---|---|---|---|
+| 启动/停止会话 | ✅ `session` / `api`（共享 daemon） | — | ✅ CLI | — |
+| 读会话真相 | ✅ sqlite 只读 / API | ✅ 事件 | ✅ 文件 | ✅ event store |
+| 注入配置 | ✅ config/agents | ✅ transform | ✅ profile/patch | ✅ bundle |
+| **拦截工具调用** | ❌ | ❌（hook 不生效） | ⚠️ 外部 wrapper | ✅ pre-execute/approval |
+| 观测工具调用 | ❌ | ✅ | ⚠️ | ✅ |
+| 强制沙箱（文件） | ❌ | ❌ | ⚠️ 仅 dsh 内 | ✅ sandbox |
+| 断点续跑 | ❌ | ⚠️ | ⚠️ | ✅ checkpoint |
+| 成本/重试控制 | ❌ | ⚠️ | ⚠️ | ✅ llm-retry |
+| ACP 驱动 | ✅ server | — | ✅ server | — |
+
+---
+
+## 4. 决策规则
+
+1. **能走 L0 就不走 L1**：配置/CLI/ACP 有版本契约；插件 API 会断代。
+2. **强制控制放 dsh**：opencode 的 permission hook 只能观测（实测），不要把安全承诺建在它上面。
+3. **L1 只做观测与审计**：除非有官方文档明确"可阻断"，否则一律按"观测"实现，并用一次实跑验证。
+4. **永不 L2**：patch 宿主会导致升级即坏（dsh patch 覆写 preset 已出过事故）。
+5. **每条控制面都要登记**：进 `deps.jsonl` 的 `kind: host_cli` 条目，记 version + verified_at。
+
+---
+
+## 4.1 轻量复用的两种接法（推荐）
+
+| 接法 | 做法 | 优点 | 代价 |
+|---|---|---|---|
+| **A. 共享 daemon**（默认） | dia 调 `opencode api` / `service status`；不自己起进程 | 零额外进程、会话可复用 | 单点、公平性无契约、版本耦合 |
+| **B. 嵌入式 SDK** | `@opencode/sdk` 的 `OpenCode.create()`，内存 router，无 HTTP 监听 | 无端口、隔离好 | 依赖 TS/Bun + 版本锁定 |
+| **C. 私有 server** | `opencode serve --port ...` 每域一个 | 隔离与故障边界清晰 | 多进程、资源占用 |
+| **D. dsh one-shot** | `dsh headless` 每任务一次 | 最轻、无常驻 | 无会话连续性 |
+
+**选择规则**：
+- 交互式长会话 → A（共享 daemon）或 C（需要隔离时）；
+- 批处理/canary/基准 → D（dsh one-shot）；
+- 需要"无端口" → B（嵌入式 SDK），但只在版本锁定时用。
+
+## 5. 对 dia 的直接含义
+
+- **控制层**：dia 的 `run`/freeze/audit 走 L0（CLI + 配置 + 会话读取）；dsh 内用 L1 观测。
+- **opencode 侧**：只承诺"观测与审计"，不承诺拦截；文档必须写清（doctor 待实现）。
+- **跨版本**：opencode V1/V2、dsh rc 版本都进能力探测；探测失败 → 降级为 L0 只读。
+
+
+---
+
+<!-- kit-install.md -->
+
+# Kit：内容包安装（persona 的第二个半边）
+
+> 日期 2026-10-30。前置：`docs/persona-install.md`（persona = 人格，kit = 内容）。
+> 本文只定 **kit 的清单格式、渲染规则、生命周期、边界**；实现拆到 P1/P2/P3。
+>
+> **2026-11-03 实现状态**：只有 `dia kit add / list / verify / remove`；本文出现的 `kit show`、`kit update`、
+> `kit gc`、`kit create` 仍是设计。persona 自带的 `files/skills/dirs/config` 内联内容已由 `persona add` 承担。
+
+---
+
+## 0. 一句话
+
+**persona 决定「你是谁」，kit 决定「你会什么」**：人格 md 之外的一切静态内容——知识树、skill、PATH 命令、
+宿主配置文件、运行时目录——都由 kit 声明式分发，dia 负责复制、记账、校验、回滚。
+
+---
+
+## 1. 现状缺口（为什么需要它）
+
+`dia persona add yan` 现在的产物只有 `~/.config/opencode/agents/yan.md`（3522 字节）。而 yan 的最小可用状态还差：
+
+| 缺的东西 | 现在由谁做 | 后果（干净机器上） |
+|---|---|---|
+| `core/knowledge`（2.3M） | `install.sh` 软链 `core/AGENTS.md` | 人格里写的「先查库」查不到 |
+| `yan-kb` / `yan-worktree` 等 PATH 命令 | `install.sh` → `scripts/install-cli` | `yan-kb --scene S1` 直接 command not found |
+| `core/skills/yan-onboarding` | 软链到各宿主 skill 目录 | onboarding 不会触发 |
+| `~/.config/opencode/AGENTS.md` | 软链 `core/AGENTS.md` | 全局规则不生效 |
+| 宿主配置（default_agent / permission） | `ensure-permission.py` 改 JSON | 权限白名单缺，读写被拦 |
+| 数据根目录树 | `install.sh` mkdir | 首次运行写失败 |
+
+结论：**persona 装完是"哑"的**；kit 就是把这些补上，且要能 `verify` / `remove`。
+
+---
+
+## 2. 清单：`dia.json`（kind=kit）
+
+```json
+{
+  "schema": 1,
+  "kind": "kit",
+  "id": "yan-core",
+  "version": "0.1.0",
+  "root": ".",
+  "files": [
+    { "from": "core/AGENTS.md", "to": "~/.config/opencode/AGENTS.md" },
+    { "from": "core/AGENTS.md", "to": "~/.codex/AGENTS.md" }
+  ],
+  "skills": [
+    { "from": "core/skills/yan-onboarding", "name": "yan-onboarding", "mode": "link" }
+  ],
+  "bin": [
+    { "from": "scripts/yan-kb", "name": "yan-kb" },
+    { "from": "scripts/yan-worktree", "name": "yan-worktree" }
+  ],
+  "dirs": [
+    "~/.yan-agent/cache",
+    "~/.yan-agent/backups",
+    "~/.yan-agent/tasks",
+    "~/.yan-agent/observability"
+  ],
+  "config": [
+    {
+      "file": "~/.config/opencode/opencode.json",
+      "jsonc": true,
+      "set": { "permission.external_directory": { "~/.yan-agent/**": "allow" } }
+    }
+  ],
+  "knowledge": ["core/knowledge"],
+  "requires": { "dia": ">=0.1.0" }
+}
+```
+
+字段语义：
+
+| 字段 | 语义 | 渲染方式 |
+|---|---|---|
+| `root` | 包内**运行根**：bin / knowledge / AGENTS.md 相对它解析 | 安装后 rider 根 = `<DATA>/kits/<id>/<version>/<root>` |
+| `files` | 单文件 → 目标路径 | **复制**（内容哈希记账） |
+| `skills` | 目录 → 宿主 skill 目录 | `mode: link` 软链回 kit 根（单源）；`copy` 独立复制 |
+| `bin` | 脚本 → `~/.local/bin/<name>` | **软链**回 kit 根（脚本靠自身 realpath 推根，见 §3.2） |
+| `dirs` | 运行时目录 | `mkdir -p`，**remove 时不删**（可能已有用户数据） |
+| `config` | 宿主 JSON 配置合并 | P2 实现；写前记录原值，remove 按记录还原 |
+| `knowledge` | 声明给 `dia kb` 用的知识根 | 不复制，只在 `dia kit show` 里暴露绝对路径 |
+
+**为什么 `root` 而不是逐文件列**：yan 的脚本自己解析 `REPO_DIR`（`scripts/yan-kb` 靠 `SELF_DIR/..`），
+如果只把 `scripts/yan-kb` 单文件搬到 `~/.local/bin`，它找不到 `core/knowledge`。整棵树进 kit 根，软链回原处，脚本零改动。
+
+---
+
+### 2.1 persona 可自带内容（内联 kit）——已定案（2026-10-30）
+
+```json
+{
+  "schema": 1, "kind": "persona", "id": "yan", "version": "0.1.0",
+  "entry": { "opencode": "platform/opencode/files/opencode-agent-yan.md" },
+  "files":   [{ "from": "core/AGENTS.md", "to": "~/.config/opencode/AGENTS.md" }],
+  "skills":  [{ "from": "core/skills/yan-onboarding", "name": "yan-onboarding", "mode": "link" }],
+  "dirs":    ["~/.yan-agent/cache", "~/.yan-agent/tasks"],
+  "knowledge": ["core/knowledge"],
+  "data_root": "~/.yan-agent",
+  "commands": [{ "name": "scene", "entry": "scripts/kb-domain.mjs", "env": { "YAN_DATA_ROOT": "~/.yan-agent" } }],
+  "kits": ["../shared/leyan-skills"]
+}
+```
+
+persona 与 kit 用**同一套内容字段**（`files/skills/bin/dirs/commands/knowledge/data_root`），差别只在所有者：
+
+| | 谁的内容 | 路径基准 | 生命周期 |
+|---|---|---|---|
+| persona 自带 | 该人格专属（规则、知识、域命令） | persona 根 | 随 persona 装/卸 |
+| 独立 kit | 跨人格/第三方复用（共享 skill 包） | kit 根 | 独立装/卸，可被多 persona 引用 |
+
+**为什么要有这一层**：把 `core/knowledge` 搬进 `kits/yan-core/` 要改 46 处脚本、65 个 md 的硬编码路径，
+收益只是"目录好看"。内联后 persona 根就是内容根，历史路径零改动；复用需求一旦出现，再拆独立 kit 即可。
+
+实现上两者共用 `kit.renderContent(baseDir, targetDir, manifest)`：persona 传 `baseDir = targetDir = persona 树`，
+kit 传 `baseDir = 包内目录, targetDir = DATA/kits/<id>/<version>`。
+
+---
+
+## 3. 安装管线
+
+```mermaid
+flowchart TD
+  A[dia persona add yan --from git+... --ref sha] --> B[clone 到缓存, 校验 dia.json]
+  B --> C{persona.kits 引用?}
+  C -- 无 --> D[渲染人格 md]
+  C -- 有 --> E[对每个 kit 解析: 包内相对路径 / git+ URL]
+  E --> F[校验 kit 清单: schema/id/version/路径不越界]
+  F --> G[复制整棵树到 DATA/kits/id/version]
+  G --> H{冲突检查: 目标存在且非 dia 管理?}
+  H -- 冲突 --> X[E_CONFLICT, 不写任何文件]
+  H -- 干净 --> I[files 复制 / skills 软链 / bin 软链 / dirs mkdir / config 合并]
+  I --> J[写 kit.lock: 每产物 sha256 + 原值快照]
+  J --> D
+  D --> K[写 persona dia.lock, 记录 kits 版本]
+  K --> L[dia persona verify: 内容哈希 + 产物哈希全对]
+```
+
+### 3.1 复制还是软链
+
+| 类别 | 选择 | 理由 |
+|---|---|---|
+| kit 内容树 | **复制**到 `DATA/kits/` | 与 persona 一致；源仓可移动/删除；`verify` 有稳定基准 |
+| `bin` | **软链**到 kit 根 | 脚本必须能反推 `REPO_DIR`；复制单文件会打断 |
+| 内部 skill | **软链**到 kit 根 | 与 `install.sh` 现有行为一致（`core/skills/yan-onboarding`） |
+| `files`（AGENTS.md 等） | **复制** | 宿主只读文件；软链会让宿主读到 `.git` 里的脏状态 |
+
+### 3.2 bin 软链为什么能工作
+
+`scripts/yan-kb` 解析真实路径链（`while [ -L ... ]`）→ `<DATA>/kits/yan-core/0.1.0/scripts/yan-kb`，
+`SELF_DIR/..` 即 kit 根，`core/knowledge` 就地可读。**不需要**任何 `YAN_REPO_DIR` 环境变量，也不需要 install-cli 生成启动器。
+
+### 3.3 幂等与升级
+
+- 同 `<id>@<version>` 重装：内容哈希一致 → 无写入，返回 `unchanged`；
+- 换版本（`dia kit update`）：旧目录保留（多版本共存），产物按 lock 备份后重写，`dia kit gc` 清理非当前版本；
+- persona 与 kit 版本联动：persona 的 `dia.lock` 记录 `kits: {"yan-core": "0.1.0"}`，`persona verify` 一并校验。
+
+---
+
+## 4. 生命周期与退出码
+
+| 命令 | 行为 | 关键约束 |
+|---|---|---|
+| `dia kit add <src> [--ref]` | 取回 → 校验 → 复制 → 渲染 → lock | 不执行任何脚本 |
+| `dia kit list` | 已装 kit + 版本 + 产物数 | 只读 |
+| `dia kit verify <id> [--version]` | 内容哈希 + 每个产物哈希 | 不一致 → exit 21（`E_HASH`） |
+| `dia kit update <id> --ref` | 新版本 → 备份旧产物 → 重渲染 | 破坏性变更提示 |
+| `dia kit remove <id>` | 只删 hash 匹配的产物；手改过的**拒绝删并列出** | exit 0 附 `skipped[]` |
+
+沿用 persona 的退出码：`E_MANIFEST` 20 / `E_HASH` 21 / `E_CONFLICT` 32 / `E_HOST` 33 / `E_SOURCE` 34（新增：源不可达）。
+
+---
+
+## 5. 边界（明确不做）
+
+1. **不执行安装脚本**：kit 里写 `install.sh` 也不跑（与 persona 同）。
+2. **不装第三方包**：`npx skills add` 出来的 leyan-skills 等**不由 kit 管**；kit 只声明 `requires.npx` 并在缺失时 `W_` 告警。
+3. **不管卸载服务**：launchd/cron 任务归 `dia job`，kit 不创建任务。
+4. **不写默认 agent**：`default_agent` 只允许通过 `config` 显式声明（P2），且必须可回滚；kit 不猜。
+5. **不碰用户手改**：产物哈希不匹配一律 skip，不覆盖、不删除。
+
+安全（沿用 persona §4）：来源白名单（git host + owner）、`--ref` 解析成 commit sha 落 lock、路径不得越出包根、`--dry-run` 列出将写入的每个路径。
+
+---
+
+## 6. 命令面：装完之后的命令不是 `yan-kb`
+
+安装只是让内容到位；**入口也要归一**，否则 kit 只是把旧脚本换个地方放。
+
+### 6.1 原则：一个入口 `dia`，加 persona 作用域
+
+```bash
+dia --persona yan kb query "MR 合并"      # 显式作用域
+DIA_PERSONA=yan dia kb query "MR 合并"    # 会议/脚本里设一次
+```
+
+作用域解析链（`--persona` > `DIA_PERSONA` > 唯一已装 persona）：
+
+```text
+--persona yan
+  → DATA/personas/yan/<ver>/dia.lock.kits          # 该人格引用了哪些 kit
+  → kit.knowledge → <kitroot>/core/knowledge        # 知识根
+  → kit.data_root → ~/.yan-agent                    # 运行时数据（db/backups/tasks）
+  → 不在 persona 作用域里时，退回 `--root` / cwd（旧行为）
+```
+
+**为什么要 `--persona` 而不是 `--root`**：`--root` 只解决"读哪棵树"，解决不了"用哪个数据根、哪些域命令可用、
+哪个 db 文件"。这些是人格的属性，不是目录的属性。
+
+### 6.2 映射表（旧 → 新）
+
+| 旧命令 | 新命令 | 备注 |
+|---|---|---|
+| `yan-kb "意图"` | `dia kb query "意图"` | 默认 path：KB 物理进 dia，命令名跟着进 |
+| `yan-kb --scene S1` | `dia kb scene S1` | 域语义，经委派（§6.3） |
+| `yan-kb --rule R25` | `dia kb rule R25` | 同上 |
+| `yan-kb --auto "…"` | `dia kb auto "…"` | 同上；UNKNOWN 仍 exit 5 |
+| `yan-kb record gap\|decision\|note` | `dia kb record …` | 委派到 yan 实现（写入目标文件是域事实） |
+| `yan-kb report` / `path` / `claims` / `baseline` / `alerts` | `dia kb <同名>` | 前两个内置，其余委派 |
+| `yan-kb doctor` | `dia doctor --persona yan` | 组合自检归 dia |
+| `yan-worktree create\|clean\|check\|scope\|route` | `dia wt create\|clean\|check\|…` | `packages/wt`，§7 |
+| `yan-task list\|status\|install…` | `dia job <同名>` | 已完成（`packages/job`） |
+| `yan-version` | `dia persona show yan` | 版本 = persona 版本 + lock 里的 commit |
+
+### 6.3 域语义怎么落：子命令委派（`git-foo` 机制）
+
+内置子命令之外，`dia kb` 查 persona 已装 kit 的 `commands` 声明，命中就委派：
+
+```json
+"commands": [
+  { "name": "scene",    "entry": "core/knowledge/scripts/kb-scene.mjs",    "runtime": "bun|node" },
+  { "name": "rule",     "entry": "core/knowledge/scripts/kb-rule.mjs" },
+  { "name": "auto",     "entry": "core/knowledge/scripts/kb-auto.mjs" },
+  { "name": "record",   "entry": "core/knowledge/scripts/kb-record.mjs" }
+]
+```
+
+行为约定：`argv` 原样透传、`cwd` 不变、`YAN_*` 等 persona 环境变量由 dia 注入、**子进程 exit code 原样返回**
+（`--auto` 的 UNKNOWN=5 语义不能丢）。
+
+好处：`dia` 不需要认识 scene/rule/claims；域实现仍住在 yan 仓，随 kit 版本走；命令面只有一个。
+
+### 6.4 不做 shim：一步切换
+
+**决策（2026-10-30，用户拍板）**：不留 `yan-*` 转发 shim，安装产物里**没有任何 `yan-` 前缀命令**。
+
+1. `yan-kb` / `yan-worktree` / `yan-task` / `yan-doctor` 等脚本从 yan 仓**删除**，逻辑进 dia（`packages/*`）或作为
+   kit 的 `commands` 扩展；不是保留转发。
+2. 因此迁移验证只在**开发侧**做一次对照（同一份数据新旧各跑一遍，比对输出），对照脚本随老代码一起删，不随包分发。
+3. 文档引用就地改写（`yan-kb` 131 处 / `yan-worktree` 99 处 / `yan-task` 282 处），与代码删除同一个 MR/commit。
+4. **扫描门禁**：yan 仓 CI 加一条 `grep -rE "\byan-(kb|worktree|task|doctor|env|ref|mr|schedule|version)\b"`
+   白名单外命中即失败——防止回潮。
+
+---
+
+## 7. worktree：`dia wt`（`packages/wt`）
+
+`yan-worktree` 1160 行、5 套测试（`check`/`clean`/`prune-merged`/`route`/`scope`）。归属 `packages/wt`（monorepo 先例：`packages/job`）。
+
+| 抽取项 | 处理 |
+|---|---|
+| `YAN_DATA_ROOT` / `tasks/scopes` | 参数化为 `DIA_WT_DATA_ROOT`（persona 注入 `~/.yan-agent`） |
+| `~/repos/leyan` 默认 | `DIA_WT_REPOS_ROOT`，缺失时不猜、报错 |
+| `YAN_SESSION_ID` | `DIA_SESSION` |
+| 直推 vs MR（`my_namespaces`/`direct`/`mr`） | **留 yan 域**，经 §6.3 委派（`dia wt route` → yan 扩展） |
+| `route_config_json` 里的 python3 heredoc | 换 Node JSON（`packages/job` 同款，dia 禁止 python） |
+
+**已落地（2026-10-30）**：`packages/wt/bin/dia-wt`（bash，与 `packages/job` 同模式）+ `packages/cli` 的 `dia wt` 转发 + `install.sh` 分发。
+env 全部改 `DIA_WT_*` / `DIA_SESSION`；7 处 python3 全部换成 Node（含 node_modules 扫描器），包内 python 归零。
+测试 4 套原样迁移全绿（check 27 / clean 20 / prune-merged 31 / route 26）；`scope` 16 项全绿，**其中「与 yan 权限层串联判定」1 项已移出**——
+那是 yan 域契约，不属于 dia wt。levm 上 `create → status → clean` 实跑通过。
+
+验收：**开发侧一次性对照**（旧脚本 vs `dia wt`，同仓同分支跑一遍
+`create/check/clean` 比对输出与 `git worktree list`）——因为 worktree 有分支与文件系统副作用，切错不便宜。
+对照完成后旧脚本即删，不随包分发。
+
+---
+
+## 8. 与 yan-agent@next 的对接（迁移顺序）
+
+```mermaid
+flowchart LR
+  subgraph 现在
+    Y1[yan-agent@next<br/>install.sh 装全部]
+  end
+  subgraph 目标
+    P[dia.json persona: yan<br/>entry = 人格 md]
+    K[dia.json kit: yan-core<br/>files/skills/bin/dirs/config]
+    D[dia persona add yan]
+    D --> P
+    D --> K
+  end
+  Y1 -.拆.-> P
+  Y1 -.拆.-> K
+```
+
+| 阶段 | 动作 | 门禁 |
+|---|---|---|
+| **K1** | kit 清单 + 复制/软链/记账/verify/remove（不含 `config`） | 隔离 HOME：`kit add` → `verify` → `remove` 无残留 |
+| **K2** | `config` 合并（opencode.json permission / default_agent），带原值快照回滚 | remove 后 opencode.json 与装前逐字节一致 |
+| **K3** | yan@next 落地 `dia.json`(persona) + `kits/yan-core/dia.json`（含 `commands` 委派） | 干净 VM：`dia persona add yan --from <gitlab> --ref <sha>` 后 `dia --persona yan kb scene S1` 可跑 |
+| **K4** | 删 `install.sh` / `uninstall.sh` / `scripts/yan-*`，入口只剩 `dia persona add` + `dia job bootstrap` | 仓内 `grep -rE "\byan-(kb|worktree|task)\"` 仅剩知识文档里的新命令名 |
+
+**验收（K3 定义「装好了」）**：
+1. 干净 HOME（无 `~/.yan-agent`、无 `yan-kb`、无 `agents/yan.md`）；
+2. `dia persona add yan --from <gitlab-url> --ref <sha>` 单命令完成；
+3. `cd /tmp && dia --persona yan kb scene S1` 出场景卡（证明知识根 + 数据根 + 委派都对）；
+4. `dia persona verify yan` → ok；`dia kit verify yan-core` → ok；
+5. `dia persona remove yan` → `~/.yan-agent` 运行数据保留、所有渲染产物消失、无断链。
+
+---
+
+## 9. 实施状态（2026-10-30）
+
+| 阶段 | 状态 | 证据 |
+|---|---|---|
+| K1 kit 安装器 | ✅ | `src/kit.ts` + 9 例单测 |
+| K1.5 作用域 + 委派 | ✅ | `src/scope.ts`、`dia --persona yan kb scene S1` |
+| K2 persona 内联内容 | ✅ | `renderContent(baseDir, targetDir)` 两处复用 |
+| K3 yan@next 形态 | ✅ | `feat/dia-persona` 分支；levm 实装通过 |
+| K4 worktree → `packages/wt` | ✅ | 7 处 python→node；5 套测试；`dia wt create/status/clean` levm 通过 |
+| K4 删旧命令面 | ✅（部分） | 删 yan-kb / yan-worktree / yan-task / 旧安装器；CI 门禁上线 |
+| K4 未迁移项 | ⏳ | `yan-mr` / `yan-release` / `yan-env` / `yan-ref` / `yan-schedule` / `yan-doctor` / `yan-version` / `yan-data-root` 仍在仓内、不随 persona 安装 |
+| P2 默认 agent | ✅ | `dia persona default <id>`（备份 + 原值记录 + `--unset`） |
+| P2 生效版本指针 | ✅ | `dia persona use <id>[@ver]` + `state/active.jsonl` 审计；scope 先读指针 |
+| P2 组合自检 | ✅ | `dia doctor`（0 全绿 / 1 warn / 2 fail） |
+| P2 凭据注入 | ✅ | `dia env list\|check\|run`（白名单、不回显、redact、不进 argv） |
+| P2 上游比对 | ✅ | `dia persona check`（same/differs/unknown/local-only）+ `update` 从记录源重装 |
+
+---
+
+## 10. 待拍板（实现前需要人确认）
+
+1. **kit 与 persona 是否同仓**：本文假设同仓、persona 用相对路径引用（`"kits": ["./kits/yan-core"]`）。若要支持独立 kit 仓（`git+…`），清单里就写 URL，实现多一条解析分支。
+2. **`config` 合并放 P1 还是 P2**：放 P1 能一次装到「开箱可用」，但要引入 JSONC 读写与回滚记账；放 P2 则先装内容、权限靠用户手动或旧 install.sh 兜一次。
+3. ~~命令面切换的节奏~~ **已定**：不留 shim，一步切（§6.4）。
+4. **`dirs` 的 remove 语义**：本文取「不删」（可能已有任务/备份数据）。若要删，需 `--purge-data` 且二次确认。
+
+
+---
+
+<!-- migrations/kb-golden.md -->
+
+# K0：kb 查询 golden（20 条）
+
+> 2026-10-30。原始 query 只落在 yan 数据根，不提交到 dia 仓。
+
+- 来源：`~/.yan-agent/observability/kb-calls-2026-10.jsonl`（3002 条）
+- 抽样：`seed=30`，按 mode 分层（query/scene/rule/auto）
+- 输出：`~/.yan-agent/observability/kb-golden-20.json`
+- 本仓只记录方法、计数、哈希：
+  - 数量：20
+  - mode：query 9 / scene 6 / rule 3 / auto 2
+  - `query_hash`：`7279ffeea514…`
+- 用途：K1 `dia kb query` 的 parity 基准；**不是** CI 固定夹具（避免把工作域文本带进 public 仓）。
+
+复现：
+
+```sh
+bun experiments/kb-golden.ts <kb-calls.jsonl> <out.json>
+```
+
+
+## K2.2 100 条基准（2026-10-30）
+
+- 命令：`bun experiments/kb-bench.ts <kb-calls.jsonl> 100`
+- 样本：100 条真实 query；原始数据只在 `~/.yan-agent/observability/kb-bench-100.json`
+- 结果：
+  - answerable 87
+  - 规则召回 **121/132 = 91.67%**
+  - answerable zero-hit **0**
+  - top1 与旧实现一致 **75/87 = 86.21%**
+  - dia top1 落在旧命中集合 **84/87 = 96.55%**
+  - CLI p50/p95：旧 51.0/114.6ms，dia 57.1/82.2ms
+- 结论：召回/排序达到 K2.2 质量门槛；绝对 p95 60ms 未达，但相对旧实现更快，延迟门槛需按环境改为相对基线，不能静默改口径。
+
+
+---
+
+<!-- migrations/no-python.md -->
+
+# Python 清理：Node/Bun 项目不收 Python
+
+> 日期 2026-10-30。目标：dia 仓库不把 Python 作为运行时/工具链依赖。
+
+## 现状
+
+| 区域 | 状态 |
+|---|---|
+| `experiments/*.py` | ✅ 已迁到 `experiments/*.ts`（Bun） |
+| `src/` / `packages/kb` / `packages/cli` | ✅ 无 Python |
+| `packages/job/bin/dia-job` | ✅ 已改用 `lib/json.mjs`（Node/Bun 内置 JSON） |
+| `packages/job/tests` | ✅ 测试夹具已改 Node |
+
+## 迁移记录
+
+`packages/job` 是从 bash 调度器继承的 OS 适配层，原先用 `python3` 做 JSON 解析。
+现已改为 `lib/json.mjs`：只用 Node/Bun 内置 JSON，不新增 workspace 包/解析器。
+
+## P3 完成（2026-10-30）
+
+1. ✅ `packages/job/lib/json.mjs`：labels/entries/get/set/del/rows/fields/backfill/selfcheck-rows/expected/bootstrap-rows；
+2. ✅ `packages/job/bin/dia-job` 无 `python3`；
+3. ✅ `packages/job/tests` 夹具改 Node；
+4. ✅ `rg -n 'python3?|\.py\b' packages/job` 为 0；
+5. 运行时要求：Node 或 Bun（`engines` 已声明）。
+
+## 当前结论
+
+- dia 全部 Python 清零（含 job）；
+- JSON 适配层不新增包，只用内置 JSON；
+- JSONC/JSON5 未默认引入，按 `no-python` 策略按需 opt-in。
+
+
+## JSON / JSONC / JSON5 兼容策略
+
+不新写 JSON 解析器，也不把 JSON 支持做成 workspace 包；只用 Node/Bun 内置 JSON + 一层薄适配。
+
+| 文件 | 规则 |
+|---|---|
+| `*.json`（registry/state/`dia.json`） | **严格 JSON**；机器写入，不接受注释/尾逗号 |
+| `*.jsonc`（人工配置，若引入） | 允许注释/尾逗号；读取兼容，写回 canonical JSON 并提示“注释会丢失” |
+| `*.json5` | **不默认支持**；单引号/无引号键/NaN 会扩大歧义面，只在明确需求时 opt-in |
+| `key=value` 配置 | 继续用现有 env/config 格式，不改成 JSON |
+
+实现约束：
+
+- 不写自定义 parser，不用 `eval`；
+- JSONC 若落地，使用固定版本的成熟解析器（如 `jsonc-parser`），并只对 `.jsonc` 生效；
+- job 的 `registry.json` / `state.jsonl` 永远 strict JSON，JSONC 只用于用户配置；
+- 写入始终原子化，不能因为兼容格式破坏状态文件。
+
+**结论**：兼容优先做 `JSON` + `JSONC`；`JSON5` 先不做，避免为了“宽松”把机器状态也弄脏。
+
+
+---
+
+<!-- migrations/yan-agent-current.md -->
+
+# yan-agent 切到 dia：本机现状与剩余迁移
+
+> 2026-11-02 初版，**2026-11-03 复核**。yan-agent 远端 main 已合入 `yan-agent@next`（dia persona 形态）。
+> 本文记录本机切换结果和**还没迁完**的部分；事实源仍是本机实际路径。
+
+## 已完成
+
+- yan-agent 本地备份：`~/.yan-agent/backups/yan-agent-<ts>/repo.bundle`
+- `dia persona add yan --from ~/.yan-agent/repos/yan-agent` 成功
+- `~/.config/opencode/agents/yan.md` 为 dia 渲染版
+- `~/.config/opencode/AGENTS.md`、`~/.codex/AGENTS.md` 已切到 dia 版
+- `opencode default_agent` 仍为 `yan`
+- `dia doctor --persona yan`：`verdict: ok`
+- `dia --persona yan kb scene S1/S2`、`query` 实测可用
+- 本地兼容 shim（不进仓库）：
+  - `yan-kb` → `dia --persona yan kb`
+  - `yan-worktree` → `dia wt`
+  - `yan-mr` / `yan-release` / `yan-schedule` → `dia --persona yan cmd ...`
+  - `yan-task` → `dia-job`
+
+## 还没完成
+
+| # | 缺口 | 影响 | 下一步 |
+|---|---|---|---|
+| 1 | ✅ dsh host 已补：`platform/dsh/yan-persona`（端口 3091），`doctor` preset 可加载 | — | — |
+| 2 | `yan-env` 仍是旧实现 | 凭据注入仍走旧脚本，未接 `dia env`（`dia env list/check/run` 已可用，白名单/redact/不进 argv） | 评估 `dia env` 后 shim/迁移 |
+| 3 | `yan-version` / `yan-ref` 仍是旧实现 | `dia persona show/use/path` 已覆盖"生效版本"；旧脚本未收口 | 按 `active-ref-design.md` 的剩余消费方迁移 |
+| 4 | `yan-data-root` / `yan-data-sync` 仍是旧脚本 | 数据根契约未统一（`dia` 的 scope 已能注入 `DIA_DATA_ROOT_SCOPE`） | 评估是否进 dia 或保留域脚本 |
+| 5 | 本地 untracked `scripts/yan-kb|yan-task|yan-worktree` | 旧文件仍可能被误用 | 观察一轮后删除，统一走 shim |
+| 6 | 仓库 README/rules 仍写旧命令 | 文档与 AGENTS 漂移 | 批量改 `yan-kb`→`dia --persona yan kb`、`yan-worktree`→`dia wt` |
+| 7 | ✅ launchd 已复核：清 `--help`/`demo-isolated`，selfcheck 指向稳定 shim | 缺失 0；`dia job list` 无测试残留 | — |
+| 8 | `dia persona check` 显示 local-only | 未跟踪上游 commit | 需要上游 ref/更新策略 |
+| 9 | **安装落后来源仓**：persona 装的是 `83fbaa9`，`~/.yan-agent/repos/yan-agent` main 已是 `8d10cc5` | 差的提交是 dsh profile 根 `cordis.yml` 修复 | `dia persona add yan --from ~/.yan-agent/repos/yan-agent --force`（先备份） |
+
+## 本机验证命令
+
+```sh
+dia persona list
+dia persona show yan
+dia doctor --persona yan
+dia --persona yan kb scene S1
+dia --persona yan kb query "评审请求"
+dia --persona yan cmd mr --help
+dia wt status
+dia job list
+```
+
+## 原则
+
+- 不再恢复 legacy-yan-cli；已经切到 dia。
+- 旧命令只保留稳定 shim，不直接依赖仓库里的 untracked 文件。
+- 每次迁移一项，跑上面的验证命令，不一次改完。
+
+
+---
+
+<!-- migrations/yan-agent-next.md -->
+
+# yan-agent@next：迁移到 dia 框架
+
+> 日期 2026-10-29。目标：yan-agent 的“通用能力”沉到 dia，“工作域内容”留在 yan-agent；
+> `yan-task` 作为独立私有包/仓维护。本文只定迁移边界与阶段，不搬代码。
+
+---
+
+## 1. 结论（先给判断）
+
+1. **调度器单独建私有仓 `dia-job`**，不塞进 dia 内核：
+   - 它不是“知识/审计/任务账本”，而是 **OS 调度适配器**（launchd / cron / schtasks）；
+   - 1075 行、4 后端、测试会真实操作 launchd，生命周期与 dia 不同；
+   - yan-agent 与 dabo 都要用；放 dia 内核会让“瘦框架”重新变胖。
+2. **dia 只吸收“调度契约”**：`dia.json` 声明 jobs，`dia job`/`dia schedule` 调外部 `yan-task` 包；
+   dia 不实现 launchd/cron。
+3. **yan-agent@next 只留域内容 + shim**：知识、技能、工作域 CLI（`yan-mr` 等）和安装入口；
+   通用实现一律委托 dia 或独立包。
+4. **先做 phase 1（抽取 yan-task）**，通过双跑与契约测试后再动 yan-kb/yan-worktree。
+
+---
+
+## 2. 现状盘点（2026-10-29）
+
+| 脚本 | 行数 | 性质 | 归属判断 |
+|---|---:|---|---|
+| `scripts/yan-task` | 1075 | OS 调度 + 任务登记 + 自愈 | **独立私有包** |
+| `scripts/yan-worktree` | 1160 | git worktree 生命周期 | 先留域，phase 3 评估进 dia/包 |
+| `scripts/yan-kb` | 130 + 4561 mjs | 知识检索 shim + 域语义 | 通用 `index/query/get/lint` 进 dia；`scene/rule/claims/baseline/alerts/record` 留 yan；见 `docs/migrations/yan-kb.md` |
+| `scripts/yan-env` | 231 | env 白名单注入 | 通用安全能力，phase 3 进 dia |
+| `scripts/yan-version` | 323 | yan 版本/发布流程 | 留 yan 域（工作发布语义） |
+| `scripts/yan-ref` | 30 + 446 mjs | 稳定路径/生效指针 | 通用，phase 3 评估进 dia |
+| `scripts/yan-mr` | 20 + mr-wait | GitLab MR 等待 | 留 yan 域（工作 GitLab） |
+| `scripts/yan-schedule` | 19 + schedule.mjs | 节假日/大促窗口（不是后台任务） | 留 yan 域 |
+| `scripts/yan-data-root`/`sync` | 64 | 数据根/同步 | 进 dia 数据根契约 |
+| `scripts/yan-doctor` | 138 | 组合自检 | yan 域组合；单项检查调 dia |
+| `core/knowledge` / `core/skills` | 2.3M / 12K | 工作域知识与技能 | **留 yan 域**（可打 kit） |
+| `platform/dsh` / `opencode` | 219M | 宿主渲染与运行时 | 留域；通用渲染进 dia persona |
+| `core/perm` / `dws-hub` / `channel` | — | 工作域权限/通道 | 留 yan 域 |
+
+---
+
+## 3. 三层归属（迁移后）
+
+```
+dia（框架）
+  kb / ingest / audit / freeze / run / task ledger / persona / team / pricing
+  + data-root 契约 + job 契约（声明式；不实现 OS 调度）
+      ↑ 被依赖
+dia-job（独立私有 GitHub 仓：`minonl/dia-job`）
+  list/status/install/uninstall/run/stop/logs/doctor/selfcheck/bootstrap/registry/gc
+  macOS launchd / Linux cron / Windows schtasks；无 yan 业务知识
+      ↑ 被 yan-agent / dabo 调用
+yan-agent@next（工作域入口）
+  core/knowledge、core/skills、工作域策略、yan-mr/yan-schedule
+  只保留 shim：yan-kb → dia kb；yan-task → 独立包；yan-* 安装入口
+dabo-agent（个人域入口）
+  个人知识/人格/策略；复用同一 dia + yan-task
+```
+
+**硬规则**：
+- framework 不出现 `local.dia-job`、`yan-`、工作域路径、工作知识；
+- dia-job 不出现 yan 业务任务名（`failed-task-report`/`nm-check` 留在 yan-agent 的 manifest）；
+- yan-agent@next 不复制通用实现，只做参数/策略/内容。
+
+---
+
+## 4. yan-task 抽取设计
+
+### 4.1 先解耦
+
+当前硬编码（需参数化）：
+
+| 现状 | 目标 |
+|---|---|
+| `YAN_DATA_ROOT` / `~/.yan-agent` | `DIA_JOB_ROOT` 或 `~/.local/share/dia-job`；旧根用全局 config 显式指定 |
+| `local.dia-job-<name>` label | `--label-prefix`（默认 `local.task-`）；迁移时映射旧 label |
+| `yan_main_checkout_of` / `yan_path_stability` / `yan_cmd_path_class` | 路径策略回调/参数；默认“当前 checkout” |
+| `yan-ref` 调用 | 可选 resolver；未配置时用绝对路径 |
+| `yan-task` 自有任务（selfcheck/update/...） | 移到 yan-agent manifest，不进包 |
+
+### 4.2 契约（v1，兼容现有 CLI）
+
+```text
+yan-task list|status|doctor|platform
+yan-task install <name> --cmd '<shell>' [--interval N|--calendar HH:MM] [--desc D] [--type periodic|bounded|service]
+yan-task uninstall <name>
+yan-task run|stop|logs <name> [-n N]
+yan-task selfcheck [--dry-run]
+yan-task bootstrap
+yan-task registry
+yan-task gc [--days N] [--dry-run]
+```
+
+退出码保持 0/1/2/3/4/5（现有契约）；`--json` 后补。
+
+### 4.3 迁移阶段
+
+| 阶段 | 动作 | 门禁 |
+|---|---|---|
+| P0 | 冻结 CLI/退码/state 格式；把现有测试作为 golden | 现有 `yan-task-*.test.sh` 全绿；记录 `list/status/doctor` 输出 |
+| P1 | 新私有仓 `dia-job`：拷脚本 + `platform.sh` 子集 + 测试；参数化 root/label/path | 新仓测试全绿；旧仓 shim 委托；双跑输出 diff 为空 |
+| P2 | dia 接 job 契约：`dia.json.jobs` + `dia job list/status` 调外部包 | dia 测试；未装包时明确报错，不静默 |
+| P3 | 迁移已安装 launchd：旧 label → 新 label（保留映射/回滚） | 本机 `selfcheck` 不重建重复任务；`launchctl print` 对账 |
+| P4 | yan-agent@next 去通用实现，只留 shim/manifest | `grep` 无 launchctl/cron；旧命令全部转发 |
+| P5 | 双跑 1 周，默认切 next；旧分支保留回滚 | 任务成功率/漏跑率不升；回滚演练通过 |
+
+---
+
+## 5. yan-agent@next 的代码边界
+
+**保留**：
+- `core/knowledge/**`（工作规则/流程/坑）
+- `core/skills/**`（工作技能）
+- `core/perm`、`core/dws-hub`、`core/channel`（工作域通道/权限）
+- `scripts/yan-mr`、`scripts/yan-schedule`（工作语义）
+- `platform/{dsh,opencode}/**`（宿主渲染内容）
+- `install.sh` / `install-cli`（只装 shim + 域内容）
+
+**迁出**：
+- `scripts/yan-task` → 私有 `yan-task` 仓
+- `scripts/yan-kb` 的通用实现（index/query/get/lint 基础项）→ dia `kb`；`scene/rule/claims/baseline/alerts/record` 留 yan；yan 只留路由 shim
+- `scripts/yan-env` → dia 通用 env 注入（phase 3）
+- `scripts/yan-ref`、`yan-worktree` → 评估后进 dia 或独立包（phase 3）
+- 通用数据根逻辑 → dia 契约
+
+**验收（next 分支）**：
+1. 同一份 `core/knowledge` 下，`yan-kb --scene S1` 输出与旧版逐字节一致；
+2. `yan-task list/status/doctor` 输出与旧版一致（除路径前缀）；
+3. `yan-mr` 仍能等 MR（工作域）；
+4. `install.sh` 后 `PATH` 里的 `yan-*` 全部是 shim，`grep -R launchctl scripts/` 为空；
+5. 回滚：`git switch main` + `install.sh` 恢复旧链接，任务不重复。
+
+---
+
+## 6. 风险
+
+| 风险 | 处理 |
+|---|---|
+| launchd 测试会操作真实用户域 | 保留 `YAN_TASK_NO_LAUNCHD=1` 测试开关；迁移阶段先 dry-run |
+| 旧 label 迁移产生重复任务 | 先 `list` 对账；新 label 前缀可配；提供 `adopt`/回滚 |
+| bash 3.2 / Windows 差异 | 包内保留现有平台探测；CI 加 macOS + Linux；Windows 只做模板 |
+| yan-ref / 路径稳定性耦合 | 抽成可选 resolver；默认绝对路径，不强制依赖 |
+| 两个域重复维护 | yan-task 独立版本；dia 只声明 job，不复制实现 |
+| 历史数据/任务名 | manifest 留在 yan-agent；包只认 name/cmd/schedule |
+
+---
+
+## 7. 下一步（需要人拍板）
+
+1. **是否现在创建私有 GitHub 仓 `yan-task`**（推荐）：
+   - 先放 P0 的契约测试与脚本副本，不接生产；
+   - 保持 private，CI 只跑无 launchd 的单测。
+2. 若同意，phase 1 的验收命令：
+   - 新仓 `bash tests/run.sh`（从旧 `yan-task-*.test.sh` 迁）；
+   - 旧仓 `scripts/yan-task list|status|doctor` 与新仓输出 diff；
+   - `YAN_TASK_NO_LAUNCHD=1` 下 install/uninstall 幂等。
+3. yan-agent@next 分支/仓库命名与默认切换时间，另定。
+
+
+---
+
+## 8. 命名落定（2026-10-30）
+
+- 仓/包/CLI：**`dia-job`**（私有 `minonl/dia-job`）
+- `yan-task` 保留一个 release 的兼容 shim：`exec dia-job "$@"`
+- P1 基线已推送：`8720aed`（`yan-task` 行为兼容 fork；`tests/bootstrap.test.sh` 16 PASS、`tests/ref-cmd.test.sh` 25 PASS）
+- P2.1（完成，`9bfead8`）：`DIA_JOB_ROOT` / `DIA_JOB_LABEL_PREFIX` / `DIA_JOB_OWN_TASKS` / 路径策略全部参数化；`lib/policy.sh` 不再依赖 yan `platform.sh`；`install.sh` 装到全局 `~/.local/share/dia-job`，配置读 `~/.config/dia-job/config`。
+- 2026-10-30：yan-agent `scripts/yan-task` 已换成 shim，只转发全局 `dia-job`；拒绝 worktree 路径。只读验证 `list/status/doctor/selfcheck --dry-run` 通过，未执行写 launchd 的任务。
+
+
+---
+
+<!-- migrations/yan-kb-parity.md -->
+
+# yan-kb 兼容设计 v2（grill 后）
+
+> 2026-10-30。触发：9 条 query golden 上，旧实现规则召回 10/12、top1 5/9；
+> dia top1 5/9、1/9 零命中。现有方案只能证明“调用切换”，不能证明“能力兼容”。
+> 本文件定义兼容边界、质量门禁、单引擎架构与 K2.1–K2.4 计划。
+>
+> **2026-11-03 复核**：`yan-agent` main 已切 dia 引擎（`dia.json` 的 `kb` 命令委派到 `scripts/kb-domain.mjs`，
+> 默认 `YAN_KB_ENGINE=dia`），文中「仅切 next / main 仍旧」是当时状态；`YAN_KB_ENGINE=old` 保留为临时回滚。
+
+---
+
+## 1. 先定义“兼容”
+
+不能把三个层混成一个：
+
+| 层 | 目标 | 判据 |
+|---|---|---|
+| **CLI 契约** | 必须兼容 | 子命令、退出码、`--json` 字段、`--full/--bytes` |
+| **检索质量** | 必须不倒退 | 必召回、recall@3、zero-hit、top1 不降 |
+| **数据/插件契约** | 真正目标 | 索引 schema、query 原语、稳定输出 schema |
+
+**不要求**：命中顺序逐字一致。旧实现的排序依赖域知识（规则/场景卡），逐字一致等于把域搬进 dia。
+**要求**：旧实现能命中的 query，dia 不能变成零命中；answerable golden 上 zero-hit 必须为 0。
+
+---
+
+## 2. grill 发现的真问题
+
+| # | 问题 | 证据 | 结论 |
+|---|---|---|---|
+| G1 | `query` 把整句当 FTS phrase，fallback 按 token 数排序 | `search()` 引号 phrase + `LIKE '%q%' ORDER BY tokens DESC` | 中文长句结构性零命中；top1 上不去 |
+| G2 | 索引缺失被当成“零命中” | `openDb` 新开空库；`search` 不校验 `docs`/`indexed_at` | 假零命中，必须 unknown |
+| G3 | 非原子建索引 | `DROP` 后逐条 insert，无事务/无 rename | 并发读可见空/半截 |
+| G4 | 9 条样本不足 | top1 ±1 就翻盘；旧 zero-hit 在全量 query 中 23.5% | 至少 40 条，最好 100 条 |
+| G5 | 双跑只看 exit code | `yan-kb-engine.test.sh` 只验调用 | 必须比较路径集合/必召回，不得静默 pass |
+| G6 | 索引正文落在 `~/.cache` | 全量正文、明文、路径不可配 | 迁到可配数据根；public 前审核 |
+
+---
+
+## 3. 目标架构
+
+```text
+yan-kb (domain adapter, 留 yan-agent)
+  ├─ scene/rule/auto/claims/baseline/alerts/record   → domain mjs
+  ├─ index/get/lint/review/path                      → dia kb
+  └─ query:
+       generic query → dia kb query
+       scene/rule     → 生成 dia 查询原语（--id / --weight），不重排
+
+dia packages/kb (single engine)
+  ├─ query planner: 归一化 → ID 直通 → term AND/OR → FTS / fallback → 加权排序
+  ├─ index: meta(schema/docs/built_at/max_mtime/tokenizer/root_hash)
+  ├─ atomic build: temp db + transaction + rename
+  └─ output: engine_version + hits[{path,score,why,tier}] + index{...}
+```
+
+**单一引擎铁律**：迁移期后，query 算法只能存在于 `packages/kb`；`yan-kb` 不得保留第二份打分。
+`YAN_KB_ENGINE` 改名/收窄为 `YAN_KB_QUERY_ENGINE=old|dia`，只控制 query；`index/get/lint` 固定 dia。
+
+---
+
+## 4. 质量门禁（切默认前必须全绿）
+
+### 4.1 golden 集
+
+- 从真实调用抽 **60 条 query + 20 scene/rule + 20 对抗样本（短词/同义/跨域）**；
+- 两人独立标 expected，分歧仲裁；
+- 原始 query 只放域数据根；dia 仓只存 hash + 结构性断言。
+
+### 4.2 指标
+
+| 指标 | 门槛 |
+|---|---|
+| 必召回（旧有命中 → dia 不得零命中） | **100%** |
+| answerable golden zero-hit | **0/40** |
+| recall@3 | ≥ 旧基线，且 ≥0.90 |
+| top1 | ≥ 旧基线；目标 ≥0.75（40+ 样本） |
+| MRR | ≥0.75 |
+| p95（热、端到端） | ≤60ms |
+| 冷首查 | ≤400ms |
+| 输出 token/次 | 中位 ≤ 旧值 +20% |
+| 确定性（3 次 Jaccard） | ≥0.9 |
+
+### 4.3 kill criteria
+
+任一触发 → **停止切默认**，保留旧 query：
+
+- top1 改善 <5pp 或 recall@3 <0.90；
+- 任何旧有命中变 dia 零命中；
+- p95 热 >80ms 或冷首查 >500ms；
+- 索引 >30MB 或 109 篇构建 >1s；
+- 并发读出现空/半截；
+- 输出 token 中位 >旧+20%。
+
+---
+
+## 5. 分阶段
+
+| 阶段 | 动作 | 门禁 |
+|---|---|---|
+| K2.1 | ✅ 完成：索引 meta、原子构建、`DIA_CACHE_DIR`、stat 指纹（docs+mtimeMs+size）、缺/陈旧索引报 `E_INDEX_MISSING/STALE` | 空/陈旧/root 不符/同秒矩阵通过；85 tests |
+| K2.2 | 🟡 100 query 质量过线；延迟口径待重定 | 召回 121/132=91.67%；零命中 0；top1_equal 75/87=86.21%；p95 dia 82.2 vs old 114.6ms；1 个 waiver |
+| K2.3 | ✅ 双跑脚本 `yan-kb-dual.sh`（yan-agent@next）；默认仍 old | 发现 1 个 known diff：旧命中 `rules/design-doc.md`，dia 未召回；**不切默认** |
+| K2.4 | 🟡 观察期：人工 waiver 已批准（旧 design-doc 误排）；默认仍 old | 2026-10-30→11-06：非 waiver miss=0 且指标不降；否则不切 |
+
+---
+
+## 6. 必须拍板的 3 个决策
+
+1. **兼容定义**：接受“契约 + 质量”而非“命中顺序逐字一致”。（推荐）
+2. **单引擎死线**：给定日期前 query 只保留 dia；不切须书面 blocker + 新日期。
+3. **域语义归属**：scene/rule/claims 不迁 dia；只给 dia 两个通用原语 `--id` 与 `--weight`，等第二个域消费者再抽 `kb-policy` 包。
+
+---
+
+## 7. 不做什么
+
+- 不把 scene/rule/claims/record 搬进 `packages/kb`；
+- 不为排序一致复制一份旧算法；
+- 不用 9 条样本做切换结论；
+- 不在索引缺失/陈旧时返回空列表冒充“无命中”；
+- 不先做 K2.4 再补 K2.1/K2.2。
+
+
+## 8. K2.3 双跑记录（2026-10-30）
+
+- 9 条 golden query：`old_hits` 全部被 dia 覆盖 8/9；`top1_equal` 7/9；
+- 唯一 miss：query `R30.5 评审请求消息模板`，旧实现命中 `rules/design-doc.md`，
+  dia 命中 `rules/notify.md`。旧实现的 R33/design-doc 与 R30.5 语义不一致，疑似旧误排；
+- 在人工裁决前 **不切默认**，旧 query 继续服务。
+- 原始 query 只写本地 `~/.yan-agent/observability/kb-dual-*.jsonl`，不进 dia 仓。
+
+
+## 9. K2.4 观察期（2026-10-30 → 2026-11-06）
+
+- 人工裁决（用户 2026-10-30）：`R30.5 评审请求消息模板` 的旧 `rules/design-doc.md` 命中判为旧实现误排；
+- waiver 记录在 `yan-agent@next:scripts/kb-dual-waivers.json`（query hash + old path + 到期日）；
+- 双跑脚本把该条标为 `WAIVED`，不再计入 miss；
+- **默认仍走 old**；观察 7 天（至 2026-11-06），非 waiver miss 必须为 0，且 top1/zero 不降；
+- 观察期满另立 K2.5 切换任务，不在本轮自动切。
+
+
+## 10. K2.2 100 条结论（2026-10-30）
+
+- 召回 91.67%、answerable zero 0、top1 一致 86.21% → 质量门禁通过；
+- CLI p95 82.2ms（旧 114.6ms），绝对 60ms 门槛未过；**不把它偷偷改成 pass**，延迟口径需按环境改为“相对旧实现不退化”；
+- K2.4 观察期继续，K2.5 不切默认。
+
+
+## 11. K2.5 提前切换（2026-10-30）
+
+用户决定跳过 7 天观察，**仅切 `yan-agent@next`**，main/现网不动：
+
+- `yan-kb query` 默认 `dia`；`YAN_KB_ENGINE=old` 可回滚；
+- 无 `DIA_BIN` 时自动回退 old；
+- `scene/rule/auto/claims` 继续旧实现；
+- `dia kb query --auto-index`：缺/陈旧索引先重建，避免切换后首次查询直接报错；
+- 验证：next 分支 `yan-kb-engine.test.sh` 7 PASS；main 仍为旧实现；
+- 回滚：`YAN_KB_ENGINE=old yan-kb query ...` 或切回 main。
+
+
+---
+
+<!-- migrations/yan-kb.md -->
+
+# yan-kb → dia kb：能力矩阵与迁移计划
+
+> **v2 修订（2026-10-30）**：兼容边界、质量门禁、单引擎架构见 [`yan-kb-parity.md`](yan-kb-parity.md)。
+> 本文的 K2 仅保留为历史阶段；query 切换必须先过 v2 的 K2.1–K2.3。
+
+> 日期 2026-10-30。回答：**当前 dia kb 能替代 yan-kb 的哪些工具？**
+> 结论：能替代 `index/get/lint` 的通用部分；`query` 需要补 parity；
+> `scene/rule/auto/claims/baseline/alerts/record/scene sync` 是 yan 域语义，不迁 dia，也不单独建仓。
+
+---
+
+## 1. 计划原文（先对齐）
+
+`docs/architecture.md`：
+
+- §2 职责矩阵：**知识索引 / 检索 / 复审队列 → framework**；域只提供知识。
+- §3 存储：md 唯一事实源；sqlite **派生索引**；检索、复审队列、断链、覆盖统计由工具生成。
+- §4 抽取顺序：定义契约 `kb search/get/lint` → framework 最小版 → **先切 yan-kb 的检索** → dabo → kit。
+- 判据：同一查询 20 条结果集一致；索引重建哈希一致；yan 一周无回归。
+
+`docs/history/framework-bootstrap.md` §3：
+
+```text
+kb index [--root]
+kb search "<q>"
+kb lint
+kb get <path> [--section]
+```
+
+所以计划从一开始就是：**framework 接管通用 KB 工具，yan-kb 保留域编排**。不是把整个 `yan-kb` 搬进 dia。
+
+---
+
+## 2. 当前实现对照
+
+dia `src/kb.ts` 现在只有：`index / search / lint / get`。
+
+| yan-kb 工具 | dia 现状 | 能否替代 | 说明 |
+|---|---|---|---|
+| `query "<意图>"` | `search` | ⚠️ 部分 | dia 是 FTS/LIKE；yan 有意图路由、排序、digest/full、observe |
+| `--scene` / `--scene-list` | 无 | ❌ | 场景卡属于 yan 知识语义 |
+| `--rule <ID>` | 无 | ❌ | 规则 ID 解析属于 yan 知识语义 |
+| `--auto "<一句话>"` | 无 | ❌ | dispatch/场景路由属于 yan |
+| `path <addr>` | 无 | ⚠️ 可抽 | 知识地址解析可做通用契约 |
+| `claims` | 无 | ❌ | 承诺台账是 yan 域 |
+| `baseline` / `alerts` | 无 | ❌ | dispatch 基线/告警是 yan 域 |
+| `report` / observe | 无 | ⚠️ 可抽 | 调用观测是通用 telemetry，但 schema 未定 |
+| `record gap/decision/note` | 无 | ❌ | 写知识是域策略；不能进 framework 默认写 |
+| `scene sync` | 无 | ❌ | 场景不变量是 yan 域 |
+| `doctor` | 无 | ❌ | yan 组合自检 |
+| `index` | ✅ | ✅ | 通用 |
+| `lint` | ✅（基础） | ⚠️ 部分 | dia 有覆盖/复审/断链；yan 还查 scene/rule 引用、承诺等 |
+| `get` | ✅ | ✅ | 通用 |
+
+**一句话**：`index/get` 可直接替代；`lint` 替代基础部分；`query` 是下一个 parity 项；其余是域语义，不该进 dia。
+
+---
+
+## 3. 修正后的迁移计划
+
+### K0：冻结查询集（无模型，1 天）✅
+
+- 从 yan 真实 `kb-calls.jsonl` 抽 20 条查询（含 scene/rule/auto）；
+- 记录 `path 集合 + 顺序 + exit code` 为 golden；
+- 只读，不改 yan。
+
+### K1：dia kb 补通用契约 ✅
+
+- ✅ `dia kb query`：兼容 `search`，加 `--json/--full/--bytes`；
+- ✅ 复审队列：`dia kb review`（缺失/到期/stale）；
+- ✅ `dia kb path`：doc/workflow/skill/tool 地址 → 绝对路径；可配 `--repo/--skills-dir`；
+- `dia kb observe/report`：可选；先定义 JSONL schema，不急着迁。
+- 判据：20 条查询路径集合一致；索引重建两次哈希一致。
+
+### K2：yan-kb thin shim（进行中）
+
+```text
+yan-kb index   → exec dia kb index --root <yan-core/knowledge>   ✅
+yan-kb lint    → exec dia kb lint --root ...                     ✅
+yan-kb get     → exec dia kb get --root ...                      ✅
+yan-kb query   → 默认旧实现；YAN_KB_ENGINE=dia 显式走 dia       ⚠️ parity 未达
+yan-kb --scene/--rule/--auto/claims/baseline/alerts/record → 本地实现（不动）
+```
+
+> 2026-10-30 实测：`YAN_KB_ENGINE=dia` 对真实 query `R30.5 评审请求消息模板` 返回空，
+> 旧实现有 R33 命中。因此 **query 默认继续走旧实现**，K2 只完成 index/get/lint 路由；
+> query parity 归入 K2.1，不得切默认。
+
+- 不复制实现；`yan-kb` 只做路由和域参数；
+- `index/get/lint` 已切；`query` 双跑显示路径/语义未对齐，暂不切默认。
+
+### K3：一周双跑 + 回滚
+
+- 同一查询新旧输出对比；
+- `YAN_KB_ENGINE=old|dia` 开关；
+- 有回归立即切回；一周无回归才默认 dia。
+
+### K4：只有 dabo 也需要 scene/claims 时才抽包
+
+- 抽 `kb-policy`（私有包）而不是 `yan-kb` 整仓；
+- 否则 scene/claims 永远留 yan-agent@next。
+
+---
+
+## 4. 边界
+
+**迁 dia**：index、query/search、get、lint 基础项、review queue、path、observe（schema 稳定后）。
+
+**留 yan-agent@next**：scene、rule ID、auto dispatch、claims、baseline、alerts、record 写入策略、scene sync、doctor。
+
+**不建 `yan-kb` 独立仓**：它不是一个通用工具，而是“dia kb 引擎 + yan 知识语义”的组合入口。独立会把 yan 的 scenes/rules/claims 一起拖走，dabo 又不需要。
+
+---
+
+## 5. 下一步
+
+1. 先做 K0：20 条真实查询 golden；
+2. ✅ K1 `dia kb query/review/path` 已完成；
+3. K2 只切 `query/index/get`，`--scene` 等不动；
+4. 每次变更附命令与输出，不用“应该可以”结案。
+
+
+---
+
+<!-- model-baseline-sidecar.md -->
+
+# 模型基准与 Sidecar 监控（A+B 一起）
+
+> 日期 2026-10-28。
+> A：**首次使用先跑基准**，用数据决定配置。
+> B：**常驻 sidecar**，用同一套基准对比线上表现，及时发现模型降质/异常。
+> 两者共用一套任务集与指纹，缺一不可。
+
+---
+
+## 1. 为什么必须 A+B 一起
+
+- 只有 A：配置有据，但模型静默升级/降质无人发现。
+- 只有 B：有监控，但没有基线可比，阈值只能拍脑袋。
+- 合起来：**基准 → 配置 → 监控 → 异常 → 重跑基准 → 决策**，形成闭环。
+
+---
+
+## 2. A：首次使用基准
+
+### 2.1 任务来源（公共 + 私有）
+
+| 来源 | 用途 | 说明 |
+|---|---|---|
+| **公共基准 mini 子集** | 首次 baseline | BFCL 50 / τ² 10 / TB2 5；各用自己的 runner，dia 只**导入结果 JSON** |
+| **私有任务（PR + episode 结合）** | baseline + 长期 canary | PR：代码/终端；episode：问答/结构化/工具；自包含、判据脚本化、脱敏、季度轮换 30% |
+| **日期切片题**（LiveCodeBench 新月题） | 事故 canary 补充 | 训练集物理上不含 |
+
+**污染规则**：SWE-bench / Aider / BFCL / tau / GAIA 已高度污染 → **只做首次画像，不做长期健康度**；健康度只看私有 canary。
+详见 `docs/research/benchmarks-survey.md`。
+
+### 2.1.1 基准任务集
+
+每个任务类留 3–5 个 canary（合计 8–12 个），要求：
+
+| 要求 | 原因 |
+|---|---|
+| 有确定性判据（可脚本校验） | 不靠人打分 |
+| 输出短（≤500 token） | 控制成本 |
+| 覆盖四类：长上下文 / 工具密集 / 低成本 / 高可靠 | 与路由类对应 |
+| 不含敏感数据 | 不进第三方训练/日志 |
+| 可轮换（held-out 留 20%） | 防过拟合与缓存 |
+
+### 2.2 运行协议
+
+对每个模型、每个任务：**跑 3 次**（取中位数），记录：
+
+```yaml
+task: { id, class, hash, judge }
+runs: 3
+metrics:
+  success: bool
+  steps: int
+  tool_calls: int
+  tool_arg_errors: int
+  schema_errors: int
+  parse_repairs: int
+  tokens_in/out/cache: int
+  latency_ms: int
+  cost_usd: float
+```
+
+### 2.3 由基准推导配置
+
+| 配置 | 推导规则 |
+|---|---|
+| `context_budget` | `min(声明窗口, 实测安全窗口) × 0.8 − maxOutput` |
+| `max_steps` | 该类任务的 p90 步数 × 1.2 |
+| `retry_policy` | 按失败类型分布：限流多→退避；解析多→修复循环 |
+| `route_class` | 按实测（成功率/成本/延迟）落到四类之一 |
+| `vote_eligible` | 成功率 ≥ 阈值且稳定（用于验收双票） |
+
+**指纹与判据（修正）**：
+
+```
+fingerprint = sha256(suite_id|n|judge_id|judge_ver|temperature|seed|spec_id)
+判据：同 fingerprint 重跑，逐题 pass 集合 Jaccard ≥ 0.95；flaky 题单列
+```
+
+产物：`~/.local/share/dia/baselines/<provider>/<model>@<date>.json`（含 spec_id、fingerprint、任务 hash、指标、配置、判据版本）。
+
+---
+
+## 3. B：Sidecar 监控
+
+### 3.1 形态（已定：事故优先，定时默认关）
+
+- **默认不常驻**：定时任务只提供**模板**（launchd plist / `sidecar --once`），**默认不启用**。
+- **事故触发**：`dia model incident --model X` 立刻跑一轮 canary（3–5 个），对比基线，写 drift。
+- 确认降级后 → 进**观察名单**，再为该模型启用定时监控（模板 + 节拍）。
+- 独立进程，不共享主会话/上下文/凭据；只写监控数据，不改业务状态。
+
+### 3.1.1 观察名单（watchlist）
+
+状态机：
+
+```
+active ──drift──> watch ──确认降级──> degraded ──恢复──> active
+                    │                    │
+                    └── 启用定时监控 ────┘
+```
+
+- `watch`：已进观察名单，定时监控可开启；路由**仍可用**但标注风险。
+- `degraded`：确认降质；路由建议 fallback，**切换需人批**。
+- `retired`：不再使用，保留历史。
+
+状态变更只追加到 `model_state.jsonl`（`{ts, model, from, to, reason, evidence}`）。
+
+### 3.2 漂移判定（三个统计量，TS 自实现，零依赖）
+
+设基线窗口 `n0, p0, μ0, σ0`（冻结），当日窗口 `n1, x1`：
+
+| # | 用途 | 公式 | 判异 |
+|---|---|---|---|
+| 1 | 成功率漂移 | 双比例 z：`z=(p̂1−p0)/√(p̄(1−p̄)(1/n0+1/n1))` | `|z| > 2.58`（99%） |
+| 2 | 趋势（EWMA） | `z_t=λx_t+(1−λ)z_{t−1}`，`λ=0.2` | `|z_t−μ0| > 3σ0√(λ/(2−λ))` |
+| 3 | 降级起点（单侧 CUSUM） | `S⁺_t=max(0,S⁺_{t−1}+(x_t−μ0−kσ0))`，`k=0.5` | `S⁺ > 4σ0`；报警时刻即"由绿转黄"那一格 |
+
+- 类别型（token 分桶/错误类型）补 PSI：`Σ(pᵢ−qᵢ)ln(pᵢ/qᵢ)`，`>0.2` 显著。
+- 样本不足（`n1<10` 或基线 `n0<30`）→ 写"无法判定"，不下结论。
+- 阈值进代码常量（单一事实源），文档不得另写一套。
+
+**为什么不引入库**：Evidently/NannyML 需要 DataFrame + reference 窗口（≥1000 行），Alibi 是 BSL-1.1（非 OSI），whylogs 已停更；三个公式在 TS 里各 10 行，没有引入理由。
+
+### 3.3 异常处置
+
+```
+事故/怀疑 → dia model incident（立刻跑一轮）→ 对比基线
+        → 进 watch（观察名单）→ 启用定时监控 → 确认降级 → degraded
+        → 路由建议 fallback（不静默）→ 人决定：恢复 / 降级 / 替换
+```
+
+- **不自动切模型**：只标记 + 路由建议，切换需人批（与"用户显式选模型 = strict"一致）。
+- 事故模式保留现场：baseline 复跑结果 + 当轮 canary 明细 + 时间点。
+
+---
+
+## 4. 可视化（uptime 时间轴 + 日级热力图）
+
+### 4.1 uptime 时间轴（按模型）
+
+**定义**：`uptime = 当日 canary 通过率`；颜色三态：`≥0.99 绿 / ≥0.95 黄 / 其余红`。
+CUSUM 报警时刻 = 降级的起点，直接标在时间轴上。
+
+```
+Kimi-K2.7-Code   ██████████▓▓▓███  (▓ = watch, ▒ = degraded)
+GLM-5.3          ████████████████
+DeepSeek-V4-Pro  ███████████▒▒███
+```
+
+### 4.2 日级热力图（contribution 风格）
+
+每格一天，深浅 = 当日 drift 事件数 / 偏差幅度；点开（或 `--json`）看当日指标。
+
+### 4.3 输出形态（零依赖）
+
+- `dia model status --chart`：终端文本图；
+- `dia model status --json`：输出 **Vega-Lite spec**（`rect` 分面 = 热力图，`line+band` = uptime 时间轴），可嵌 HTML；
+- `dia model status --svg`：本地渲染静态 SVG（无需浏览器）；
+- 将来要仪表盘再加 `Grafana + Infinity`（读 `/metrics.json`），不是现在的必需。
+
+数据来源：`model_state.jsonl` + `drift_events.jsonl` + `baselines/*.json`。
+
+**不引入**：Alibi（许可）、whylogs（停更）、Phoenix（ELv2）、Braintrust（闭源）、Metabase/Superset/Cachet（ETL 重）。
+
+## 4. 数据结构
+
+```yaml
+baseline:
+  model: provider/name
+  version: <provider 声明或探测>
+  created_at: ISO
+  judge_version: v1
+  config: { context_budget, max_steps, retry_policy, route_class, vote_eligible }
+  tasks: [{ id, class, hash, metrics, runs }]
+  fingerprint: { success_rate, steps_p50, tool_arg_error_rate, schema_error_rate, latency_p50, cache_hit }
+
+drift_event:
+  ts, model, metric, baseline, observed, delta, samples, verdict, action
+```
+
+---
+
+## 5. 与现有组件的关系
+
+| 组件 | 关系 |
+|---|---|
+| `deps.jsonl` | 模型作为 `kind: model` 依赖登记（version/verified_at） |
+| `runtime/calls.jsonl` | 线上成本/延迟/工具错误的来源 |
+| `audit.jsonl` | 异常动作与人工裁决留痕 |
+| `dabo-agent:docs/hypotheses.md`（外部引用） | H13/H14 的判据来自 baseline + sidecar |
+| 路由 | 只用 baseline 得出的 `route_class`，不靠猜 |
+
+---
+
+## 6. 失败模式
+
+| 风险 | 对策 |
+|---|---|
+| canary 太小 → 噪声误报 | EWMA + 连续 N 次；样本不足判"无法判定" |
+| canary 太大 → 成本高 | 输出限 500 token；每天预算上限 |
+| 缓存命中导致假快 | canary 轮换、变化 prompt 前缀 |
+| provider 静默升级 | 记录 version/指纹变化；无法归因时标注"疑似" |
+| canary 泄漏敏感数据 | 任务集固定且脱敏；禁止用真实会话做 canary |
+| 过拟合 canary | 20% held-out；每季度从真实失败补题 |
+
+---
+
+## 7. 实现计划（A+B 同一批）
+
+1. `dia model list`：ModelSpec + 能力探测（声明 + 首次探针，缓存 90 天）。
+1.5 `dia model baseline --from <results.json>`：导入外部 benchmark runner 的结果（不重写 harness）。
+2. `dia model baseline --model X --tasks <yaml>`：跑基准、写 baseline、输出推导配置。
+3. `dia model sidecar --once`：跑 canary、对比基线、写 drift。
+4. `dia model status`：列出每个模型的配置、指纹、最近 drift。
+5. 接入路由与验收投票：只用有 baseline 且 `vote_eligible` 的模型。
+
+**判据**：
+1. 同 fingerprint 重跑，逐题 pass 集合 **Jaccard ≥0.95**；
+2. 人为注入降质（缩短输出上限）能在 **1 轮**内被检出（critical = 工具参数合法率）；
+3. 成本按 `task_id` 归集，重试计入同一任务。
+
+
+---
+
+<!-- model-behavior.md -->
+
+# 模型行为调控（客户端侧）
+
+> 日期 2026-10-28。
+> **边界（用户定）**：只使用各平台提供的通用模型；**不做本地构建/微调**；**不依赖**多数模型不支持的推理与输入输出控制参数；
+> 所有调控都在**客户端本地**完成。
+
+---
+
+## 0. 一句话
+
+> 不改变模型，只改变**模型看到什么、能做什么、输出要被怎样验收**。
+
+模型是黑盒；我们能控制的是它的**输入契约、工具契约、输出契约和过程契约**。
+
+---
+
+## 1. 模型抽象（ModelSpec）
+
+```yaml
+model:
+  id: provider/name            # e.g. example/Kimi-K2.7-Code
+  contextWindow: int           # 必填，缺省按最小安全值（如 32k）
+  maxOutput: int               # 可选，缺省按窗口的 1/4
+  tools: bool|unknown          # 是否支持工具调用
+  json: bool|unknown           # 是否支持结构化输出
+  vision: bool|unknown
+  streaming: bool|unknown
+  cache: bool|unknown          # 前缀缓存
+  source: declared|probed|assumed
+  verified_at: ISO
+```
+
+**规则**：
+- `unknown` 一律按**保守值**处理（不支持/最小窗口），不许"应该支持"。
+- 能力来源必须记录（declared/probed/assumed）；`assumed` 不得进主路径。
+- 本机实测：dsh 只暴露 `contextWindow` / `maxTokens`；opencode CLI 不暴露能力矩阵 → 必须自建探测。
+
+**探测策略（已定）**：声明 + **首次使用探针**（一个极小请求，验证 tools/json/vision），结果写入 `model_fingerprints.jsonl`，缓存 **90 天**；探针失败 → 按不支持处理，不阻断主流程但记录 `degraded_reason`。
+
+**配套**：`docs/host-control-surface.md`（宿主边界）、`docs/model-baseline-sidecar.md`（基准与监控）。
+
+---
+
+## 1.1 五家对照（源码/官方文档，A 级）
+
+| 维度 | opencode | dsh | OpenClaw | Hermes | Pi |
+|---|---|---|---|---|---|
+| 模型目录 | models.dev（232 家）+ 兼容矩阵 | adapter 声明 + 发现接口 | model manifest | `(provider,model)→api_mode/key` | catalog + 覆盖 |
+| 能力字段 | tools/input/output/limit/cache 价 | contextWindow/defaultMaxTokens/inputModalities | contextTokens | 基础 | capabilities/context/cache |
+| 上下文 | AGENTS.md 就近+instructions | maxBytes + omitted/truncated marker | 稳定前缀/易变后缀 | stable→context→volatile | base+context+skills |
+| 工具 | 按启用条件注入指引 | `toolUpdate=addition-only`、失败带 code | **定义跨 turn 冻结** | registry 自注册 | codemode 3000 token 预算 |
+| 输出 | JSON schema 输入修复 | `INVALID_TOOL_OUTPUT` | 未验证 | 强制角色交替 | outputSchema，坏值失败 |
+| 重试 | 10 次，2/4/8→10s 封顶+jitter | per-provider normal 5 次 | auth 轮换/冷却→模型链 | 429/5xx 重试，401/403 立即 | 429/5xx，2/4/8s |
+| 缓存 | cacheKey + cacheFormat | 工具增量声明 | cache boundary + retention | system_and_3 断点 | promptCache short/long |
+| 按模型回归 | **未验证** | **未验证** | **未验证** | **未验证** | **未验证** |
+
+来源：opencode `model-compatibility.ts` / `tool-input-repair.ts` / `model-retry.ts`；dsh 本机源码；OpenClaw `prompt-caching` / `model-failover`；Hermes `prompt-assembly` / `context-compression-and-caching`；Pi `models.md` / `CHANGELOG`。均为 2026-10 · A。
+
+**结论**：五家在"能力表 + 分层前缀 + 工具契约 + 错误码重试"上收敛；差异在缓存语义。
+**空档**：没有一家公开"按模型跑 golden 回归"——这是 dia 的增量（H13/H14 与指纹）。
+
+---
+
+## 2. 六类杠杆（全部与模型无关）
+
+### L1 上下文装配
+
+| 手段 | 做法 | 代价 |
+|---|---|---|
+| 指令层级 | 系统/人设 → 域规则 → 任务 → 工具说明 → 历史 | 层级混乱会被后文覆盖 |
+| 预算分配 | 给 system/tools/history/knowledge/output 分别定额（token 压力比） | 需按模型窗口换算 |
+| 稳定前缀 | 三段：**稳定（人设/规则）→ 上下文（项目/知识）→ 易变（任务/时间）**；时间戳只进末段 | 顺序错就命中率归零（Hermes/OpenClaw 实测） |
+| 截断策略 | 索引 + 按需读；截断留痕 | 检索失败会漏信息 |
+
+### L2 工具接口
+
+- 工具名与描述是**提示词的一部分**：名字动词化、描述写"何时用/何时不用"、参数带例子。
+- **定义跨 turn 冻结**：同一会话里工具列表只增不删、按名排序；增删/乱序会击穿前缀缓存（OpenClaw 做法）。
+- 失败回给模型时带 **code + 摘要**，让模型能自纠（dsh 的 `isError` 文本）；重复同参调用要检测并提醒（dsh `repeat-tool-reminder`）。
+- **参数级校验放在执行前**（不靠模型自觉）；错误信息回给模型时给"可修复提示"。
+- 角色按最小工具集发放（包络），不是给全集。
+
+### L3 输出契约
+
+```
+schema 定义 → 生成 → 解析 → 校验 → 失败则带错误重试（≤2 次）→ 仍失败则降级为自由文本 + 人工复核
+```
+
+- **输入修复**可做（字符串化对象、数字/布尔字符串、删多余键），但必须**回显原文**；坏值不允许被"猜到"（Pi #10897 的教训）。
+- 输出被截断的 tool call 必须显式失败，不能"丢调用留结果"（Pi #11227）。
+
+- **永不信任解析**：解析失败不是异常，是预期分支。
+- 重试必须带**具体错误位置**，不是"请重试"。
+
+### L4 过程控制
+
+- 计划 → 执行 → 自检 → 停止条件；步数/时长/成本预算。
+- 关键写操作前 checkpoint；失败可续跑（对齐 evolution 的 V 模型）。
+- 高风险步骤强制独立复核（不与执行同源）。
+
+### L5 重试与回退
+
+失败分类（必须分开计数）：
+
+| 类型 | 处理 |
+|---|---|
+| 网络/超时 | 指数退避 + jitter；同一请求重试（opencode 10 次、2/4/8→10s 封顶） |
+| 限流 | 读 `Retry-After`（封顶 15min）；否则退避；可切模型 |
+| 鉴权失败（401/403） | **不重试**，立即失败并报配置问题（Hermes 做法） |
+| 空响应/截断 | 缩小上下文或提高 maxOutput；重试一次 |
+| 解析失败 | 带错误位置修复重试（≤2） |
+| 工具报错 | 把 stderr 摘要回给模型；不自动重放破坏性命令 |
+| 模型不可用 | 走 fallback 链；**记录降级**，不静默 |
+
+本机证据：dsh `llm-retry` 已有 `maxRetries` / `delayMs` / `providerRetryAfterMs` / jitter —— 可复用，不重写。
+
+### L6 选择与路由（已定：四类）
+
+- **用户显式选模型 = strict**：不许静默换模型（OpenClaw 做法）；自动路由只在未指定时生效。
+- 会话级 **affinity**（session id）用于缓存路由（opencode）；换模型/换凭据 = 缓存归零，必须记录。
+
+| 类 | 判据 | 默认 | 备选 |
+|---|---|---|---|
+| 长上下文 | 输入接近窗口 / 大量检索 | 大窗口模型 | 压缩后换小窗 |
+| 工具密集 | 多步工具编排 | 工具调用稳的模型 | 单步化后降级 |
+| 低成本 | 批量/低风险 | 便宜模型 | 失败升级 |
+| 高可靠 | 验收/外发/不可逆 | 强模型 + 投票 | 人工接管 |
+
+- **健康闸门（修正）**：`gate(tier, health)`，`health={ok_rate_5m,p95_latency_5m,cost_1h,cooldown_until}`；
+  准入条件 `ok_rate_5m ≥ SLO` 且 `p95 ≤ L` 且 `cooldown_until < now`；回退目标写进审计行。
+- 路由变更必须走实验（H11），不许拍脑袋。
+
+### L7 验收投票（已定：全部验收）
+
+- **每个验收环节**默认 **2 个独立模型投票**（不同 provider 优先），结论不一致 → 回人裁决。
+- 成本护栏：月度投票预算上限；超限时**降级为单票 + 人工复核**，并写 `degraded_reason`，**不许静默单票**。
+- 便宜模型可作第二票，但不得与第一票同源（同一 provider/同一版本不算独立）。
+- 投票记录进 `runtime/calls.jsonl`（`vote_group` + `task_id`），可复算成本与一致率。
+- **tie-break**：两票不一致 → **人裁**，不许第三票自动决定。
+- **同源排除**：judge 不得与被评模型同源（同 provider/同版本），防 self-preference。
+
+---
+
+## 3. 明确不依赖的旋钮（非目标）
+
+| 旋钮 | 为什么不用 |
+|---|---|
+| temperature / top_p / top_k | 不同 provider 语义不同，有的不支持 |
+| frequency/presence penalty | 同上，且难复现 |
+| reasoning_effort / thinking budget | 只有部分模型有；字段名与语义都在变 |
+| seed / stop sequences | 支持度不一，不能作为正确性保证 |
+| logit_bias / logprobs | 多数托管模型不暴露 |
+
+若某个模型支持，只能作为**可选加速**，不能成为流程正确性的前提；使用必须记录在 ModelSpec。
+
+---
+
+## 4. 行为观测与漂移
+
+**失败分类**（每类单独计数，作为模型指纹）：
+
+```
+empty / refusal / schema_violation / tool_misuse / wrong_tool / loop /
+truncated / hallucinated_tool / language_drift / latency / rate_limited
+```
+
+- 每个模型维护**指纹**：失败分布 + 平均步数 + 解析成功率 + 工具参数错误率。
+- 模型版本变化（或 provider 静默升级）→ 跑同一组 golden 任务，指纹偏移超过阈值即告警。
+- 记录在 `deps.jsonl`（模型也属于依赖）+ `model_fingerprints.jsonl`。
+
+---
+
+## 5. 可移植性（跨模型）
+
+1. **提示词按能力类写**（长上下文类/工具类/推理类），不按具体模型写。
+2. **评测按模型跑**：同一 golden 集，每个模型一份结果；不许拿 A 的成绩推断 B。
+3. 模型特有 hack 只放 adapter，不进核心。
+4. 换模型 = 一次迁移实验（shadow），不是改配置。
+
+---
+
+## 5.1 机制归属（已定：只做策略层）
+
+| 机制 | 归属 | dia 的增量 |
+|---|---|---|
+| 重试/退避 | dsh `llm-retry` 或宿主 | 失败分类 + 指纹 |
+| 压缩 | dsh `compaction-basic` / opencode | 预算策略 + 截断留痕 |
+| 模型选择 UI | dsh / opencode | 四类路由规则 |
+| 投票 | **dia 新增** | 独立性与成本护栏 |
+| 指纹/漂移 | **dia 新增** | golden 集 + 告警 |
+| 成本记账 | **dia 新增** | tokens/金额/投票组 |
+
+> 原则同 sandbox：**宿主有的不重写，dia 只加策略与观测。**
+
+## 6. 成本与延迟（客户端可控）
+
+- 前缀稳定（缓存命中）、压缩（threshold/retain）、批处理、按任务预算限流。
+- 成本记账到 `runtime/calls.jsonl`：tokens in/out/cache + 金额（若有价目表）。
+- 预算超限 → 降级（换小模型/减少检索）或暂停请示人；不许静默继续烧。
+
+---
+
+## 7. 实验（待验证）
+
+| # | 假设 | 判据 | 成本 |
+|---|---|---|---|
+| H9 | 工具描述重写能降低参数错误 | 参数错误率 ↓≥20%（同任务集） | 低 |
+| H10 | 带错误位置的修复循环能提升结构化成功率 | 解析成功率 ↑≥15%，重试 ≤2 | 低 |
+| H11 | 任务路由能降成本不降质量 | 成本 ↓≥30%，盲评质量不降 | 中 |
+| H12 | fallback 链能提升限流下的完成率 | 完成率 ↑，降级次数可查 | 中 |
+| H13 | 全部验收双票能降低错误 | 错误率 ↓≥20%，成本 ↑≤2×；一致率可复算 | 中 |
+| H14 | 投票预算护栏不降质量 | 超限降级后错误率不升（盲评） | 低 |
+
+---
+
+## 7.1 我们的增量（五家都没有的）
+
+1. **按模型跑 golden 回归**：每模型一份结果，升级/静默变更时比对指纹。
+2. **投票独立性校验**：第二票必须异源（provider/版本），否则不算独立（Hermes 的 MOA 是多模型混合，但不是验收投票）。
+3. **成本护栏**：投票预算 + 降级留痕；现有五家都没有"投票成本"概念。
+
+## 8. 失败模式（诚实边界）
+
+1. **提示词脆弱**：模型升级后同一提示行为漂移 → 只能靠 golden 集发现。
+2. **能力误判**：把 `unknown` 当支持 → 运行时失败；必须 fail-closed。
+3. **缓存破坏**：动态内容放前缀，成本翻倍。
+4. **重试放大**：对破坏性操作自动重试 = 事故；只允许幂等操作自动重放。
+5. **投票成本**：多模型投票在高频任务上不可持续，只用于高 stakes。
+6. **评测过拟合**：golden 集太小会奖励"背题"；每季度从真实失败补题。
+
+
+---
+
+<!-- monorepo.md -->
+
+# dia monorepo：框架模块的归属
+
+> 日期 2026-10-30。结论：**dia-job 回 dia monorepo，作为 `packages/job`；kb 作为 `packages/kb`。**
+> 域语义（yan 的 scene/claims、dabo 的个人知识）仍留各自域，不因 monorepo 回流。
+
+---
+
+## 1. 为什么改
+
+- `dia-job` 是框架能力（调度适配器），不是独立产品；独立仓导致：
+  - 安装/版本/CI 两套；
+  - `dia` 与 `dia-job` 的契约变更不能原子提交；
+  - shim 需要跨仓找 binary。
+- 但“放回 dia”不等于塞进 `src/`：OS 适配器与核心引擎生命周期不同，必须有**包边界**。
+- monorepo 让两者共享版本、测试、发布，同时保留独立包/可选安装。
+
+## 2. 目标结构
+
+```text
+dia/
+  package.json                 # workspaces: packages/*
+  packages/
+    core/                      # 现有 src：ingest/audit/freeze/task/persona/team
+    kb/                        # 通用 KB：index/query/get/lint/review/path/observe
+    job/                       # 调度适配器：launchd/cron/schtasks
+      bin/dia-job
+      lib/{config,policy}.sh
+      tests/
+      install.sh
+    cli/                       # 可选：dia 命令聚合 core/kb/job
+  docs/
+```
+
+- 初期可保留 `src/` 作为 core，不急着搬；先加 `packages/job`、`packages/kb`，CLI 用 re-export 兼容旧导入。
+- 包管理/工作区：**pnpm workspace**（`pnpm-workspace.yaml`）；运行时/测试/构建仍是 Bun。
+- 任务编排：**Turborepo 后置**（M2 后按需）；不在 M0 引入。
+- Nx：不选（见 §2.1）。
+
+## 2.1 工具选型
+
+| 工具 | 角色 | 适配 | 结论 |
+|---|---|---|---|
+| **pnpm workspace** | 包管理器 + workspace 链接/过滤 | 严格依赖边界、`--filter`、lockfile；与 Bun 运行时不冲突 | **选** |
+| **Turborepo** | 任务图 + 本地/远程缓存 | 配置轻；当前 3 个包、测试很快，缓存收益低 | **M2 后再加** |
+| **Nx** | 全功能 monorepo 平台（生成器/图/插件） | 偏前端/大型全栈；bash 包集成差；引入 daemon/插件体系 | **不选** |
+| Bun workspaces | Bun 原生 workspace | 零额外工具；但过滤/发布/版本生态不如 pnpm 成熟 | 备选 |
+| npm workspaces | 原生 workspace | 慢，功能少 | 不选 |
+| Changesets | 多包版本/发布 | 当前 private、不独立发包 | 需要发布时再加 |
+
+**为什么不是 Bun workspaces**：Bun 负责 `test/build`，但 monorepo 的“包边界/过滤/发布”用 pnpm 更成熟；两者可以共存（pnpm 只做链接与脚本调度，`bun test` / `bun build` 照旧）。
+**为什么 Turborepo 后置**：现在 `bun test` 秒级、包少；Turbo 的价值在缓存和 affected tasks，等包数/CI 时长上来再加，避免先背一层 hash/配置。
+**为什么 Nx 不选**：我们不是前端大仓，不需要 generator/plugin graph；bash `packages/job` 也不是 Nx 的强项。
+
+## 3. 包边界（硬规则）
+
+1. `core` 不依赖 `job`/`kb` 的具体实现；通过接口/CLI 调用。
+2. `job` 不依赖任何域（yan/dabo）路径、知识、任务名；全局配置走 env/`~/.config/dia-job`。
+3. `kb` 只做通用知识引擎；**scene/rule/claims/baseline/alerts/record 留域**（见 `docs/migrations/yan-kb.md`）。
+4. 域（yan-agent/dabo-agent）只依赖包契约，不反向被包依赖。
+5. `job` 的 launchd/cron 写入必须有测试隔离开关；默认 dry-run。
+
+## 4. 迁移阶段
+
+| 阶段 | 动作 | 门禁 |
+|---|---|---|
+| M0 | ✅ 完成：`pnpm-workspace.yaml` + `packageManager` + `packages/job` 空壳 | `pnpm install` 成功；68 tests / build / smoke / e2e（node+bun）通过 |
+| M1 | ✅ 完成：`dia-job` 用 `git subtree` 合入 `packages/job`（保留历史）；根加 `dia job` 路由 | job 4 个测试文件通过；`dia job platform` 可用；独立仓已归档 |
+| M2 | ✅ 完成：`src/kb.ts`/`sqlite.ts` 抽到 `packages/kb`，根做 re-export；K1 query/review 已补 | `bun test` 73；`@dia/kb` 5；build/smoke/e2e |
+| M3a | ✅ 全局安装：`install.sh` 复制 `bin/dist/packages/job`，链接 `~/.local/bin/dia`；job 可选 | `dia version` / `dia job platform` 通过；CI 加 install 测试 |
+| M3b | ✅ CLI 聚合到 `packages/cli`；根 `src/cli.ts` 兼容 re-export | `bun test` 88、build、install、e2e 通过 |
+| M4 | ✅ 已归档 `minonl/dia-job`，README 指向 monorepo | 独立仓 archived |
+
+## 5. 不做
+
+- 不把 yan 的 scene/claims 搬进 `packages/kb`；
+- 不把 dabo 的个人知识搬进 framework；
+- 不为“monorepo”引入 nx/turbo；Bun workspaces 足够；
+- 不在 M1 同时大改 `src` 目录，避免迁移噪音盖过行为回归。
+
+## 6. 当前决定
+
+- `dia-job` 不再作为长期独立仓；先保留到 M1 完成，随后 archive。
+- `yan-kb` 不独立建仓；通用引擎进 `packages/kb`，域语义留 yan-agent@next。
+
+
+---
+
+<!-- overview.md -->
+
+# dia / yan / dabo 现状总览
+
+> **2026-11-03 实测**。本条是三方合起来的「现在长什么样」；`docs/status.md` 管 dia 的阶段与证据，
+> 各域仓库管自己的知识与协议。**没跑过的不写「已验证」**；结论都能用 §6 的命令复验。
+> 长期方向（不是现状）见 [`vision.md`](vision.md)。
+
+---
+
+## 0. 一句话
+
+**dia 是控制面，不是 agent。** 宿主（opencode / dsh）里能选的只有 `yan`（工作域）和 `dabo`（个人域）；
+dia 负责「装谁、跑哪版、知识在哪、动作留不留痕」。
+
+```
+dia （控制面：persona / kit / kb / audit / job / wt）
+ ├── yan   工作域：工作域流程、仓库坑、技能；数据根 ~/.yan-agent    （宿主默认 agent）
+ └── dabo  个人域：个人知识、工具、策略；数据根 ~/.dabo-agent
+```
+
+---
+
+## 1. 三方对照（2026-11-03）
+
+| 维度 | dia | yan | dabo |
+|---|---|---|---|
+| 角色 | superagent / agent-team 生成与维护工具（控制面，无业务数据、无运行时） | 工作域 superagent（工作域 · 偏前端） | 个人助理 superagent（游戏 / 生活 / 个人项目） |
+| 仓库 | `~/repos/github/dia`（`minonl/dia`，private） | `~/.yan-agent/repos/yan-agent` | `~/repos/github/dabo-agent` |
+| 安装产物 | `~/.local/share/dia` + `~/.local/bin/dia` | `~/.local/share/dia/personas/yan/0.1.0` + `~/.config/opencode/agents/yan.md` + `~/.dsh/profiles/yan` | 同构：`personas/dabo/0.1.0` + `agents/dabo.md` + `~/.dsh/profiles/dabo` |
+| 版本 | `0.0.1`（package `private`） | persona `0.1.0` | persona `0.1.0` |
+| 知识根 | —（只读别人的） | persona 树 `core/knowledge` | persona 树 `core/knowledge` |
+| 数据根 | `~/.local/share/dia`（安装/台账/备份） | `~/.yan-agent` | `~/.dabo-agent` |
+| 宿主 | —（被调用） | opencode + dsh（profile 3091） | opencode + dsh（profile；webserver 端口动态，默认回退 1111） |
+| 域命令 | 见 §2 | 16 个（`kb scene/rule/query/...`、`mr`、`release`、`schedule`、`data`） | 2 个（`todo`、`welcome`） |
+| 生效方式 | 命令直跑 | opencode `default_agent=yan`；dsh profile | 显式选 agent / `dsh --profile dabo` |
+| 装态 | — | **落后来源仓 1 个提交**（见 §4-1） | 与来源仓一致 |
+
+---
+
+## 2. dia 能力面（2026-11-03 实测）
+
+**已实现**
+
+| 组 | 命令 |
+|---|---|
+| 知识 | `kb index / search / query / get / lint / path / review`；`--persona` 作用域下自动重建过期索引 |
+| 采集 | `ingest sessions（dsh/opencode）/ ingest git`，脱敏 + 幂等 |
+| 审计 | `audit append / verify / score / tail`；`freeze / thaw`；`guard`；`run / resume` |
+| persona | `add / create / render / list / verify / remove / show / use / path / check / update / default`（含 `--force`、`--dry-run`、`--check`） |
+| 内容包 | `kit add / list / verify / remove` |
+| 自检 | `doctor`（多 persona 逐个自检；`--persona` 单查；exit 0/1/2） |
+| 运行面 | `env list/check/run`、`deps list/record`、`wt …`、`cmd` / 一级委派、`task`、`team run/gate/accept/reject/next`、`job`、`price`、`version` |
+
+**未实现（有设计、无命令）**
+
+| 项 | 现状 | 出处 |
+|---|---|---|
+| `patch …` | `unknown command` | `docs/patching.md` |
+| `persona activation` | 无（只能 `use` / `default`，下次会话生效） | `docs/versioning.md` |
+| `kit create / update / show / gc` | 只有 `add/list/verify/remove` | `docs/kit-install.md` |
+| ~~deps 校验（M1）~~ | **已完成**：`deps.jsonl` + `doctor` 的 `deps` 项（required 缺失 fail / 漂移 warn / 可选未装 note） | `docs/dependency-registry.md` |
+| audit 哈希链（M3） | 未做 | `docs/status.md` D1 |
+| ModelSpec / 基准 sidecar（D2） | 未做（已有 `price` 计价） | `docs/model-*.md` |
+| state 事件 / `(T,D,O)` 视图（D3） | 未做 | `docs/evolution-process.md` |
+| PR canary（D4） | 未做 | `docs/status.md` |
+| IM bridge / ACP server / npm 发布 | 未做 | `docs/entrypoints.md`、`docs/acp-integration.md` |
+
+> 曾经写进文档但**不存在**的命令：`dia status`、`dia model`（观测入口目前只有 `dia doctor`）。
+
+---
+
+## 3. 本机实际状态（复验过的）
+
+```
+$ dia doctor                     → verdict: ok（dabo.* / yan.* 逐项 + default_agent + wt）
+$ dia persona list               → dabo: 0.1.0 / yan: 0.1.0
+$ dia persona check dabo         → same（git main d6b3ff77）
+$ dia persona check yan          → local-only（本地 83fbaa9，来源仓 main 已是 8d10cc5）
+$ dia persona default --show     → yan
+$ dia job list                   → 5 个 launchd 任务（session-diary sync/gc、task selfcheck、job update、yan-reviewer）
+$ dia --persona dabo kb query …  → 只命中 dabo 自己的 core/knowledge
+$ dia --persona yan kb scene S1  → 正常出场景卡
+```
+
+测试与 CI：`bun run test` = 188 tests / 28 files 全绿 + smoke + E2E-1；GitHub Actions ubuntu+macOS 双绿（`4998a1b`）。
+
+---
+
+## 4. 已知缺口（按优先级）
+
+1. **yan 安装落后来源仓 1 个提交**（`83fbaa9` vs `8d10cc5`，内容是 dsh profile 根 `cordis.yml` 修复）。
+   修法：`dia persona add yan --from ~/.yan-agent/repos/yan-agent --force`（先备份）。
+2. **`dia doctor` 的 knowledge 项只查目录存在**，不校验索引新鲜度；`kb` 索引过期要等查询时才自愈。
+3. ~~`deps.jsonl` 与真实环境脱节~~ → 已改为按 `command:` 探测并接入 `doctor`；**追加动作仍手工**（`dia deps record` 未做）。
+4. **本地源 persona 不能 `update`**（`E_SOURCE`），只能用 `add --force` 刷新；`update` 尚未支持本地源。
+5. **yan 旧脚本未迁**：`yan-env`、`yan-version`、`yan-ref`、`yan-data-root`、`yan-data-sync` 仍是仓库脚本
+   （`dia env` / `persona show/use` 已有等价能力，未收口）。
+6. **`verify` 只看内容哈希**，宿主产物漂移要靠 `render --check`（两个命令给不同答案，容易误判）。
+7. **凭据放行粒度**：bw 按账号/collection 分组，任务级最小权限与调用审计都缺；调研见 `docs/security/credentials.md`。
+8. 公开 release 仍 BLOCKED（脱敏 + 历史清洁 + `dia-security` pass，见 `docs/security/public-release.md`）。
+
+---
+
+## 5. 文档地图（按现状分级）
+
+| 级别 | 文档 | 说明 |
+|---|---|---|
+| **现状（可依赖）** | `overview.md`（本文）、`status.md`、`cli.md §4.1`、`persona-install.md`、`monorepo.md`、`team.md`、`pricing.md`、`migrations/yan-agent-current.md` | 与代码/本机一致 |
+| **设计（部分未实现）** | `architecture.md`、`entrypoints.md`、`kit-install.md`、`versioning.md`、`patching.md`、`team-automation.md`、`security-sandbox.md`、`dependency-registry.md`、`acp-integration.md`、`proposals.md` | 保留意图，文首/文中标注实现范围 |
+| **方向（不是现状）** | `vision.md` | 长期定位：superagent/team 工厂、平台版本经验库、fleet（openrig）边界 |
+| **平台经验** | `platforms/registry.json`（数据）+ `platforms/index.md`（规则/用法） | 单一事实源；`dia doctor` 派生人读视图；不记录设备 |
+| **理论 / 研究** | `evolution-process.md`、`model-behavior.md`、`model-baseline-sidecar.md`、`host-control-surface.md`、`ecosystem-*.md`、`research/*` | 供推导，不作为现状 |
+| **留痕** | `migrations/*`（除 current）、`review/*`、`research/h0/*` | 当时结论，可能被后续推翻 |
+
+---
+
+## 6. 复验命令（照抄可跑）
+
+```bash
+dia version && dia doctor
+dia persona list && dia persona check dabo && dia persona check yan
+dia persona render dabo --check && dia persona render yan --check
+dia --persona dabo kb query "边界"        # 必须只命中 dabo 的知识根
+dia --persona yan kb scene S1             # 工作域场景卡
+cd ~/repos/github/dia && bun run test     # 188 tests + smoke + E2E-1
+```
+
+
+---
+
+<!-- patching.md -->
+
+# Patch：对已安装 persona / kit 的本地补丁
+
+> 日期 2026-10-28。参考 npm/patch-package，但**只作用于本地安装副本**，不改上游。
+>
+> **状态（2026-11-03）**：**未实现**，`dia patch` 仍是 `unknown command`。本文是设计。
+> 用途：本地迭代、紧急修复、试验性调整；不替代 `update`。
+
+---
+
+## 1. 命令
+
+```bash
+dia patch create dabo --file changes.diff --reason "..."   # 生成 patch 元数据
+dia patch add dabo --file <patch-dir|diff>                 # 应用到当前安装版本
+dia patch list dabo
+dia patch verify dabo
+dia patch revert dabo --id <patch-id>
+```
+
+- patch 只作用于 `~/.local/share/dia/personas/<id>/<version>/`（或 kits）；
+- **不改上游 git**；升级到新版本时尝试重放，失败即冲突。
+
+---
+
+## 2. 格式
+
+```
+patches/<id>/<patch-id>/
+├── patch.json      # base_version, base_hash, author, reason, files[], created_at
+└── changes.diff    # 统一 diff（仅文本文件）
+```
+
+`patch.json` 必填：
+
+```json
+{
+  "id": "p-20261028-1",
+  "persona": "dabo",
+  "base_version": "1.2.0+abc1234",
+  "base_hash": "sha256:...",
+  "files": ["agents/dabo.md"],
+  "reason": "本地实验：调整排障口吻",
+  "author": "min",
+  "created_at": "2026-10-28T12:00:00Z"
+}
+```
+
+---
+
+## 3. 应用流程（双重闸门）
+
+```
+verify base（版本+hash 必须匹配）
+  → dry-run（只显示 diff）
+  → 硬检查（文件白名单/大小/无二进制/不改 capabilities）
+  → 模型审查（diff 是否引入越权、注入、策略弱化）
+  → 应用 → 更新 dia.lock（记录 patch id）→ render
+  → 审计事件
+```
+
+- **硬检查不过 = 拒绝**；模型只做补充，**不能推翻硬失败**。
+- 允许 patch 改：提示词、知识、技能实现。
+- **不允许** patch 改：`capabilities`、安全策略、版本号、签名/凭据字段（需走 waiver + 人批）。
+
+---
+
+## 4. 升级时重放
+
+`persona update` 到新版本时：
+
+1. 先应用新版本；
+2. 逐个 patch 尝试 `git apply --3way`（无 git 时用自有 3-way）；
+3. 成功 → 记录新 base；失败 → **冲突**，该 patch 标记 `stale`，新版本仍可用，但提示"patch 未应用"；
+4. 冲突不阻断新版本，但 `dia status` 显示 `patch conflict`，并保留旧版本可回滚。
+
+---
+
+## 5. 安全与审计
+
+- patch 文件大小上限（如 256KB）；只允许文本扩展名。
+- patch 内容过 secret 扫描；命中即拒绝。
+- 每个 patch 记录 `applied_at / applied_by / base_hash`；`dia patch list` 可查。
+- patch 也是"变更"，进入审计与回滚链；**不因是本地 patch 就免审计**。
+
+---
+
+## 6. 与版本号的关系
+
+- patch **不改变** persona 版本号；它是本地覆盖层。
+- 若要进入上游：导出 diff → 提 PR → 上游 bump patch/minor → 撤销本地 patch。
+- `dia patch export dabo --id <id>` 输出可提交的 diff。
+
+
+---
+
+<!-- persona-install.md -->
+
+# Persona / Kit 安装：用 dia 从 git 地址装
+
+> 日期 2026-10-28，**2026-11-02 复核**（实现状态以 `docs/cli.md §4.1` 为准）。命名已定：**persona = 可被选中的 agent 定义**，**kit = 知识/技能/工具内容**，**profile = 宿主运行环境（dsh）**。
+> 安装入口统一为 `dia persona ...` / `dia kit ...`，不再使用 `pkg`。
+
+---
+
+## 1. 命令
+
+```bash
+# 取回并注册（私有仓用现有 git 凭据）
+dia persona add dabo --from git+https://github.com/minonl/dabo-agent.git --ref <sha>
+
+# 已存在产物与源不一致（用户手改 / 旧版本安装）→ 覆盖；覆盖前备份到 <data>/backups/persona-<id>-<ts>/
+dia persona add dabo --from <dir> --force
+
+# 查看 / 校验 / 卸载
+dia persona list
+dia persona verify dabo
+dia persona remove dabo
+
+# 生效版本（多版本并存时指定跑哪一版；有审计）
+dia persona show dabo          # 生效版本 + 最近切换记录
+dia persona use dabo@0.1.0 --reason "回滚"
+dia persona path dabo          # 生效版本目录（服务/脚本取代码用）
+
+# 与上游对比 / 升级（从 lock 记录的 source+ref 重装）
+dia persona check dabo         # same/differs/unknown/local-only，exit 0/1/2/3
+dia persona update dabo
+
+# 宿主默认 agent（显式动作，不随安装自动做）
+dia persona default dabo       # 备份原文件 + 记原值；--unset 精确还原
+
+# 作者轴
+dia persona create mybot --dir ~/repos/mybot
+dia persona render dabo --host opencode|dsh [--check]
+
+# 内容包
+dia kit add --from git+https://github.com/minonl/<kit>.git --ref <sha>
+dia kit list / verify <id> / remove <id>
+
+# 作用域（知识根 / 数据根 / 域命令）
+dia --persona dabo kb query "…"
+dia --persona dabo doctor
+```
+
+**渲染目标**：
+
+| 宿主 | 产物 | 是否改默认 |
+|---|---|---|
+| opencode | `~/.config/opencode/agents/dabo.md` | **否**（用户自己切） |
+| dsh | `~/.dsh/profiles/dabo/`（独立 profile；webserver 端口动态，默认回退 1111） | **否**（`dsh --profile dabo`） |
+| 记录 | `deps.jsonl` + `dia.lock` | — |
+
+原则：**只新增，不改 yan；默认 agent 必须显式 `persona default` 才动。**
+
+---
+
+## 2. 清单：`dia.json`（一个文件，`kind` 区分）
+
+```json
+{
+  "schema": 1,
+  "kind": "persona",
+  "id": "dabo",
+  "name": "大波（dabo）",
+  "version": "0.1.0",
+  "hosts": ["opencode", "dsh"],
+  "entry": {
+    "opencode": "agents/dabo.md",
+    "dsh": "platform/dsh/dabo-persona"
+  },
+  "kits": ["core"],
+  "capabilities": {
+    "tools": ["bash", "git"],
+    "network": false,
+    "env": []
+  },
+  "requires": { "dia": ">=0.1.0" }
+}
+```
+
+kit 的完整格式、渲染规则与生命周期见 [`docs/kit-install.md`](kit-install.md)（本文只留最小形态）。
+
+kit 用同一个文件名：
+
+```json
+{ "schema": 1, "kind": "kit", "id": "core", "version": "0.1.0", "skills": ["..."], "knowledge": ["docs/"] }
+```
+
+**为什么不是 `dia.persona.json` / `dia.kit.json`**：两个文件名会让命令按名字猜类型、维护两套入口；`dia.json` + `kind` 更直接。
+**为什么不是 `package.json`**：npm 语义（依赖/脚本/执行）与"安装不执行"冲突。
+
+---
+
+## 3. 安装管线
+
+```
+git clone --depth 1 --ref <sha> → 临时目录
+  → 校验 dia.json（schema/kind/版本/宿主）
+  → 计算内容哈希 → 写 dia.lock
+  → 渲染：
+      opencode：复制 agents/dabo.md（当前原样复制；managed-by 头待实现）
+      dsh：复制 platform/dsh/dabo-persona + 生成独立 profile
+  → 登记 deps.jsonl（待实现）
+  → 不启停服务、不改默认
+```
+
+**幂等**：同 commit 重装无变化；换 commit 先备份旧渲染产物，可 `remove` 回滚。
+
+### 3.1 update 与 render 的区别
+
+| 命令 | 是否换内容 | 做什么 | 何时用 |
+|---|---|---|---|
+| **add** | 首次 | fetch → 校验 → render → lock | 第一次安装 |
+| **update** | **是**（git ref → 新 commit） | 取新版本 → 校验 → 备份旧版 → render → lock | 升级人格/内容 |
+| **render** | **否** | 用已安装版本重新生成宿主文件 | 宿主升级、配置改了、渲染文件被手改/丢失 |
+
+一句话：**update = 换内容 + render；render = 只重画，不换内容。**
+
+`render --check` 只比对宿主文件与 lock，输出 drift，不写盘。
+
+### 3.2 能不能热更新进行中的会话？
+
+**看宿主能力，不一刀切**（详见 `docs/versioning.md` §3）：
+
+| 能力 | 行为 |
+|---|---|
+| T3 原生增量（dsh `in-history` / opencode `agent.transform`） | 新增/移除可通知会话；可按 `--apply active` |
+| T2 事件/预步 | 下一轮注入变更通知；破环性变更仍拒绝 |
+| T1 工具边界 | 下次调用感知（如 MCP 登录） |
+| T0 无钩子 | 只能下次会话 |
+
+**硬规则**：破环性变更（移除工具、签名变化、换 persona 身份）**永远不静默热切**；`--activate-now` 需 `--i-am-human` 且在 T0/T1 下要求 0 活跃会话。`render` 只改文件，不触碰会话。
+
+体验示意：
+
+```
+$ dia persona update dabo --ref <sha>
+staged dabo@v2 (commit abc123)
+  3 active sessions still on v1; new sessions will use v2
+  apply now: dia persona update --activate-now --i-am-human (0 active required)
+```
+
+---
+
+## 4. 安全规则
+
+1. 来源白名单（git host + owner），防误装。
+2. `--ref` 解析后把 **commit sha** 写进 lock。
+3. 逐字节 sha256 只覆盖 **dia 写入且宿主不改写** 的产物（persona 内容、opencode agent md、软链）；
+   **宿主自管目录**（dsh profile）只校验「目录在 + `.dia-managed` 归属」，不比字节——dsh 启动会重写
+   `cordis.yml`、装插件会改 `package.json`。`verify` 失败时用 `issues` 逐条列出原因。
+4. **不执行安装脚本**；dsh 插件也不在安装期执行。
+5. `capabilities` 未声明的工具不授予；网络默认关。
+6. `--dry-run` 显示将写入的文件与差异。
+7. 卸载只删带 `.dia-managed`（id 匹配）的产物；用户手改/归属不符的目录拒绝删除并提示。
+
+---
+
+## 5. 配置失败/降级体验
+
+| 情况 | 用户看到 | 行为 |
+|---|---|---|
+| git 不可达/鉴权失败 | `E_AUTH` + 修复提示 | 不写入任何文件 |
+| 清单缺失/版本不符 | `E_MANIFEST` | 不安装 |
+| 哈希不符 | `E_HASH`（按篡改处理） | 隔离，不覆盖 |
+| 目标 agent 冲突 | `E_CONFLICT`（exit 32） | 不覆盖；先 remove 或手改 |
+| 宿主未安装 | `W_HOST_MISSING` | 只装另一个宿主，记录 degraded |
+| 默认 agent 被改 | — | **禁止**：安装器不写 default 字段 |
+
+---
+
+## 5.1 已实测（2026-10-29）
+
+- `dia persona add --from ~/repos/github/dabo-agent` → 同时渲染 opencode agent + dsh profile；
+- `opencode debug agents` 出现 `dabo`，**默认仍是 `yan`**；
+- `dsh --profile dabo` 启动正常（当时 webserver 3090，避开 3080；2026-11 起 dabo-agent 改为动态端口，默认回退 1111）；
+- yan 的 agent/profile 未改动。
+
+> 2026-11-01 补：`dia persona create` / `dia persona render` 已实现（此前只有文档）。
+> create 生成骨架时**已内置必填 config**（`tool-fs-search.sampleOverCapGlobResults`），
+> render 修产物时先备份到 `<data>/backups/render-<ts>/`；`--check` 只报 drift 不写盘。
+> 2026-11-03 补：dsh profile 是宿主领地——宿主会改 `cordis.yml` / `package.json` / 锁文件，
+> 这些文件**不参与 drift 比对、re-render 也不覆盖**；render 只写入 persona 自己的产物，
+> **不再整树重建 profile**（宿主装的插件目录不会被删）。
+
+## 5.2 opencode 配置：`.json` 与 `.jsonc`（2026-11-01）
+
+opencode 从 **v0.3.100（2025-07-31，PR #1434）** 起支持 `opencode.jsonc`；
+从 **v1.14.49（2026-05-13，PR #26992）** 起，没有配置时默认创建 `opencode.jsonc`。
+宿主的查找顺序是 `["opencode.json", "opencode.jsonc"]`（两者都存在时先读 `.json`）。
+
+因此 `dia persona show|default` 的配置解析规则：
+
+| 优先级 | 来源 |
+|---|---|
+| 1 | `DIA_OPENCODE_CONFIG`（显式路径） |
+| 2 | `~/.config/opencode/opencode.json`（存在即用） |
+| 3 | `~/.config/opencode/opencode.jsonc`（存在即用） |
+| 4 | 都不存在 → 用默认路径 `opencode.json`（`show` 返回「未设置」，`default` 报 `E_CONFIG`） |
+
+两张表都读得懂：读 = JSONC（注释 + 尾逗号）；写 = **只改 `default_agent` 一个键，保留注释与排版**（写回前重新解析校验，坏配置不落盘）。
+
+## 5.3 校验边界：dia 只管自己写的字节（2026-11-01 反思）
+
+**事故**：`dia doctor` 对 dsh profile 目录做整树哈希，而 dsh 首次启动就把 `cordis.yml` 重写成自己的
+header 形态（文件头写着 “Edit cordis.patch.yml, not this file”）→ verify 假红，且提示把原因写成
+「期望 d07d454c 实得 d07d454c」（内容哈希其实一致，真正 drift 的是宿主目录）。
+
+**结论（越界反思）**：安装器的校验职责边界是 **「自己写入的、宿主不改写的产物」**。
+
+| 对象 | 校验方式 | 理由 |
+|---|---|---|
+| persona 内容树 / 复制的 agent md / 软链 | 逐字节 sha256 | 只有 dia 会写，改动 = 真篡改 |
+| 宿主 profile 目录（dsh） | 存在性 + `.dia-managed` 归属 | 宿主自己会重写 `cordis.yml`、改 `package.json` |
+| 默认 agent | 只读、只报告 | dia 契约是「不改默认」，指向别处不算不健康 |
+
+`verify` 现在返回 `issues: string[]`（逐条可读），doctor 直接显示第一条；`remove` 也改为按归属标记判断，
+不再因为宿主改写过就拒绝卸载（否则卸载会留残）。
+
+
+## 5.4 persona 自带命令与知识根（2026-11-01）
+
+persona 可以在 `dia.json` 里声明（不必单独做一个 kit）：
+
+```json
+{
+  "knowledge": ["core/knowledge"],
+  "data_root": "~/.dabo-agent",
+  "commands": [
+    { "name": "todo", "entry": "scripts/dabo-task", "runtime": "bash",
+      "env": { "DABO_ROOT": "~/.dabo-agent" } }
+  ]
+}
+```
+
+调用与语义：
+
+```bash
+dia --persona dabo kb search "台账"   # 知识根 = persona 的 core/knowledge（自动索引到 cache）
+dia --persona dabo todo list          # 委派到 scripts/dabo-task；退出码原样透传
+```
+
+| 项 | 语义 |
+|---|---|
+| `knowledge` | 相对 persona 根；`kb` 命令默认用第一个作为根（`DIA_KB_ROOT`） |
+| `data_root` | 子进程注入 `DIA_DATA_ROOT_SCOPE` / `DIA_DATA_ROOT`（`YAN_DATA_ROOT` 仅保留给既有 yan 配方） |
+| `commands[].runtime` | `bun` / `node`：argv 为 `[entry, <命令名>, ...args]`；`bash`：argv 为 `[entry, ...args]`（**不注入命令名**，脚本自己解析子命令） |
+| `commands[].env` | 注入到子进程（值支持 `~` 展开） |
+| 命名冲突 | 内置命令优先（`dia task` 是内置，persona 里请用 `todo` 这类不冲突的名字） |
+| 隔离 | 命令入口必须在 persona 根内（绝对路径 / `../` 穿越 → `E_DELEGATE_SCOPE`）；若 `env` 写死数据根（如 dabo 的 `DABO_ROOT`），会绕过 `DIA_DATA_DIR` 的测试隔离 |
+
+## 6. 当前缺口
+
+1. dabo-agent 没有 `dia.json`、`agents/dabo.md`、dsh persona bundle。
+2. dia 没有 `persona` / `kit` 命令。
+3. 没有 lock/verify 实现。
+
+## 7. 第一刀
+
+1. dabo-agent 加 `dia.json` + opencode agent + dsh bundle（纯文本，可审）；
+2. dia 实现 `persona add/update/remove/verify/list`（先 git + 两宿主）；
+3. 临时 HOME E2E：装完 `dabo` 可选中、yan 与默认不变、卸载无残留。
+
+
+---
+
+<!-- platforms/index.md -->
+
+# AI 工具平台经验库（规则与用法）
+
+> **单一事实源 = [`registry.json`](registry.json)**：平台支持范围、实测版本、已知坑全部只在 JSON 里。
+> 本文件**不重复**那些数据，只写规则与用法；人读视图由 `dia doctor` 派生。
+>
+> 本目录记录的是 **AI 工具平台**（opencode / dsh / codex / pi / mimocode / zed …），不是设备。
+
+---
+
+## 0. 脱敏规则（写之前先看）
+
+| 可以入仓（公开级） | 不入公共仓（私人仓/数据根） |
+|---|---|
+| 软件名、公开版本号、公开配置键、公开 issue/文档链接 | 内网域名 / IP、账号、凭据、token |
+| 通用路径（`~/.config/...`、`~/.dsh/profiles/...`） | 家庭设备、个人设备清单、组织机构内部标识 |
+| **公开的 hostname**（公开示例 / demo 环境） | **家庭 / 内网 hostname**、任何能反查到个人或组织的组合信息 |
+| 复现命令（用占位符 `<host>` / `<org>` / `<id>`） | 需要脱敏才能写的事实（拿不准就按私人仓处理） |
+
+判据：提交前 `git grep -nE "<内网域名>|<hostname>|<账号>"` 必须为空；拿不准就按"私人仓"处理。
+
+---
+
+## 1. 规则
+
+1. **一条经验 = 版本范围 + 复现命令 + 判据**；没有复现命令的写「未验证」。
+2. 数据只改 `registry.json`；不要在 md / README / 知识库里再抄一份（同步必然漂）。
+3. `range` 只写简单约束（`>=2.0.0 <3.0.0`）；垫脚石版本先写进 `tested[]`。
+4. `supported: false` 的平台只做记录，不参与探测判定。
+
+---
+
+## 2. 怎么改
+
+```bash
+# 1) 只改数据源
+$EDITOR docs/platforms/registry.json
+# 2) 校验 JSON + 单测
+bun test tests/platforms.test.ts
+# 3) 看派生视图（本机探测 + 范围判定）
+dia doctor            # 人读
+dia doctor --json     # 机器读
+```
+
+新增一个平台：在 `platforms` 下加一项，字段见下；先 `supported: false`，等 `dia persona render --host` 真的支持了再翻 true。
+
+| 字段 | 含义 |
+|---|---|
+| `supported` | dia 是否已支持渲染到该平台 |
+| `render` | 渲染目标路径（未支持时 `null`） |
+| `probe` | 探测命令参数（默认 `--version`） |
+| `range` | 支持范围（简单约束；`null` = 不判） |
+| `tested` | 实测过的版本（用来垫脚，不参与判定） |
+| `notes` | 已知坑（一行一条，能复现的写命令） |
+
+---
+
+## 3. 派生视图
+
+`dia doctor` 每次按注册表探测本机平台，输出 `platform:<name>`：
+
+- 装了且在范围内 → `ok`
+- 没装 → `warn`（渲染不需要宿主，运行才需要；不判红）
+- 版本超出 `range` → `warn`（附支持范围）
+
+安装版从 `~/.local/share/dia/registry/platforms.json` 读（`install.sh` 分发）；开发态回退到仓库 `docs/platforms/registry.json`；
+也可用 `DIA_PLATFORMS_FILE` 显式指定。
+
+
+---
+
+<!-- pricing.md -->
+
+# 价目表（tokens → 金额）
+
+> 日期 2026-10-29。原则：**没有价格就不编造**；`unpriced` 明确记录，预算按 tokens 兜底。
+
+---
+
+## 1. 数据来源
+
+- `deepseek/*`：从模型目录取得真实单价（2026-10-29）：
+  - `deepseek/deepseek-flash`：$0.15 / $0.60 / cache $0.003 per Mtok
+  - `deepseek/deepseek-v4-pro`：$0.66 / $1.98 / cache $0.022 per Mtok
+- `example/*`：**按免费（0）计**（用户 2026-10-29 定）；单价在 `prices.json` 里是 `0/0`，不是 unpriced。
+
+## 2. 配置
+
+`~/.config/dia/prices.json`（可覆盖默认；`DIA_PRICES_FILE` 可改路径）：
+
+```json
+{
+  "example/deepseek-v4.1-flash": { "input": 0.2, "output": 0.8 },
+  "vendor/model": null
+}
+```
+
+- 未列出的模型 = unpriced，不估算。
+- 价格单位：USD / 百万 tokens。
+
+## 3. 记录
+
+`runtime/model-calls.jsonl` 每行含：`model / input_tokens / output_tokens / total_tokens / cost_usd / priced`。
+dsh 的 tokens 从 `~/.dsh/sessions/.../session.v4.jsonl.zstd` 的 `assistant/message.data.usage` 增量读取。
+每任务 `usage.json` 汇总 `cost_usd` 与 `unpriced_calls`。
+
+## 4. 预算
+
+- 已知价格：按 `cost_usd` 累计。
+- 未知价格：按 tokens 设上限（例如每任务 ≤200k tokens），并在验收包标注 `unpriced`。
+- 月度封顶 $50（既有约定），超限降级/升级。
+
+## 5. 局限
+
+- 缓存计价只按 `cacheReadTokens` 粗略计算；provider 的缓存写/读折扣可能不同。
+- 价格会变；以 `prices.json` 的 `updated_at`（建议手动记录）为准。
+
+
+---
+
+<!-- proposals.md -->
+
+# 目标提案（team next）
+
+> 日期 2026-10-29。定位：**团队可以提候选，不能定目标。**
+> **状态（2026-11-03）**：v0 **已实现** —— `dia team next`（纯规则打分，不调模型）。
+> 人只在两处介入：选目标（本命令的产出）与验收（team accept）。
+
+---
+
+## 1. 能力
+
+`dia team next` 扫描已有信号，输出 **≤3 个候选目标**：
+
+- 每个候选带：`why / evidence[] / 预计成本 / 风险 / 来源信号`
+- **不创建任务、不改状态**；人选完后用 `dia task add` 立项。
+- 纯规则打分（v0），不调用模型；模型只能后续用于措辞/归因，不参与决定。
+
+---
+
+## 2. 信号源（v0）
+
+| 信号 | 来源 | 触发 |
+|---|---|---|
+| 升级任务 | `tasks/ledger.jsonl` 状态 `escalated` | 每个 escalated 任务一条候选 |
+| 验证失败 | `runs/<id>/verify.json` conclusion ≠ 通过 | 反复失败优先 |
+| 对抗高危 | `runs/<id>/redteam.json` findings.severity=high | 每条高危一条候选 |
+| 依赖未验证 | `docs/deps.jsonl` 的 `result: unknown` / `support: unknown` | 复核依赖 |
+| 待验证假设 | `docs/hypotheses.md` 表格中的 `待验证`（按 `H1 / H2–H5` 展开为单条，并映射标题） | 低成本实验优先 |
+
+**不采集**：会话原文、凭据、用户消息内容；只用 id/计数/结论。
+
+---
+
+## 3. 打分（v0）
+
+```
+score = severity_weight × 2
+      + min(evidence_count, 3)
+      - cost_penalty（low 0 / medium 1 / high 2）
+```
+
+- severity：high=3 / medium=2 / low=1；
+- 同分按“最近出现”排序；
+- 只输出前 N（默认 3）。
+
+---
+
+## 4. 数据契约（为后续能力准备）
+
+每条候选：
+
+```json
+{
+  "id": "p-...",
+  "title": "...",
+  "why": "...",
+  "evidence": ["..."],
+  "source": "task|verify|redteam|deps|hypothesis",
+  "severity": "high|medium|low",
+  "cost": "low|medium|high",
+  "score": 7
+}
+```
+
+后续要补的采集（v1）：
+- escalated 的**归因分类**（判据缺失 / 环境 / 预算 / 模型能力）；
+- 失败率的滑动窗口（不是单次）；
+- 成本 p50/p95；
+- redteam findings 的处置状态（fixed/waived/open）。
+
+---
+
+## 5. 边界
+
+- **不是**自动路线图：没有 backlog、没有优先级共识、没有资源日历；
+- **不替代人**：目标涉及价值与取舍，agent 无法承担；
+- **数据不足时**：宁可少提，不编造；候选必须带证据。
+
+
+---
+
+<!-- research/benchmarks-survey.md -->
+
+# 开源评测与基准：可用清单（2026-10）
+
+> 日期 2026-10-28。回答：哪些开源项目的**真实任务**能直接用；哪些只能做首次 baseline（已污染）；私有 canary 怎么建。
+> 判据：E=精确匹配，U=单测/脚本，J=LLM 评审，H=人工；依赖：D=Docker，B=浏览器，V=VM/GPU，W=联网。
+
+---
+
+## A. 清单（★/更新为 2026-10-28）
+
+| 项目 | ★ | 许可 | 任务/子集 | 判 | 依赖 | 单次成本 | 证 |
+|---|---|---|---|---|---|---|---|
+| lm-evaluation-harness | 14.3k | MIT | 数百 task | E | – | $0–1 | A |
+| HELM | 3.0k | Apache-2.0 | 40+ scenario | E/J | V | $5–50 | A |
+| OpenAI Evals | 19.7k | 混合 | ~200 | E/J | – | $1–20 | A |
+| Inspect AI | 3.1k | MIT | 131 包/~200 eval | E/J/U | 可选 D | $1–30 | A |
+| promptfoo | 26.5k | MIT | 自带断言 | 自定义 | – | <$1 | A |
+| DeepEval | 19.1k | Apache-2.0 | 指标库 | J | – | $1–10 | A |
+| **SWE-bench** | 6.1k | MIT | 2294 / Verified 500 / Lite 300 | U | D | $0.5–5/题 | A |
+| **Terminal-Bench 2.0** | 432 | Apache-2.0 | 89 题（2.1=91） | U | D | $0.3–3/题 | A |
+| Aider polyglot | 49.8k | Apache-2.0 | 225 / 6 语言 | U | – | $2–10/轮 | A |
+| RepoBench v1.1 | 215 | CC-BY-4.0 | Py/Java 补全 | E | – | <$1 | A |
+| LiveCodeBench | 970 | MIT | 400 + 按月滚动 | U | 沙箱 | <$1/题 | A |
+| **BFCL v4** | 13.1k | Apache-2.0 | 20 类目，100–800/类 | E(AST/执行) | 部分 W | $0.01–0.1/例 | A |
+| **τ²/τ³（tau-bench）** | 1.5k | MIT | airline 50 / retail 114 / telecom 2285 | U(DB 终态)+J | – | $1–5/题 | A |
+| AgentBench | 3.8k | Apache-2.0 | 8 环境 | U/J | D+B | 高 | A |
+| GAIA | HF gated | 见卡 | 466（val 165） | E | W | $0.2–2/题 | A |
+| WebArena | 1.6k | Apache-2.0 | 812 | U+J | D+B | 高 | A |
+| OSWorld | 3.2k | Apache-2.0 | 369（small 子集） | U+J | V+B | 很高 | A |
+| AssistantBench | 72 | 见仓 | 214 | E/F1+J | W | $0.1–1/题 | A |
+| MLE-bench | 1.8k | NOASSERTION | 75 | U(奖牌线) | V+GPU | 极高 | A |
+
+---
+
+## B. 首次 baseline：最合适的 3 个
+
+| 用途 | 集 | 规模 | 成本 | 为什么 |
+|---|---|---|---|---|
+| 工具调用 sanity | **BFCL simple/multiple** | 各 100 | ~$2 | 10 分钟内跑完，错误可定位 |
+| 步数/上下文 | **τ² retail+airline** | 取 30 | ~$15 | 多轮工具 + DB 终态比对，直接给出 max_steps/context 初值 |
+| 真实交付 | **Terminal-Bench 2.0** | 取 10–20 | ~$10 | 唯一同时压出步数/上下文/错误恢复 |
+
+---
+
+## C. 事故 canary：最合适的 3 个
+
+1. **LiveCodeBench 滚动窗口**：按发布日期取近 6 个月新题，训练集物理上不含；单测判分。
+2. **Terminal-Bench 2.1 固定子集**：与 2.0 不重叠，版本间可比。
+3. **私有 canary（自建）**：从自己仓库近 90 天 merged PR 挖题，**永不公开、不写进 prompt/日志**。
+
+---
+
+## D. 污染与过拟合（必须写在文档里）
+
+| 状态 | 基准 |
+|---|---|
+| **已高度污染**（不建议做长期监控） | SWE-bench、Aider polyglot、BFCL、tau-bench、GAIA |
+| **低污染** | LiveCodeBench（按日期切）、Terminal-Bench 2.x（新题）、自己的 PR |
+
+规避：
+1. 按时间切 held-out（只跑 cutoff 之后的题）；
+2. 判据不放题面（隐藏测试）；
+3. 每季度轮换 30%；
+4. 同模型跑 3 次；方差 > 分差则结论无效。
+
+---
+
+## E. 组合方案（已定：BFCL + τ²，$50/月封顶）
+
+| 阶段 | 内容 | 成本 |
+|---|---|---|
+| 冷启动一次 | BFCL 50 例 + τ² 10 题 + 私有 8 题 | **≈$15–17** |
+| 月度 canary | 私有 10 题 + （可选）LiveCodeBench 新月题 5 | **≈$10–20/月** |
+| 事故加跑 | `dia model incident` 立即跑私有 10 题 | ≈$2–5/次 |
+| **月度总封顶** | 基准 + canary + 事故合计 | **$50**（超限降级为 3 题抽样） |
+
+**私有题源（已定：PR + episode 结合）**：
+- **PR 类**：近 90 天 merged PR → 问题描述 + 隐藏测试（代码/终端任务）；
+- **episode 类**：从已有 257 条会话抽自包含任务（问答/结构化/工具调用）；
+- 两类都脱敏、判据脚本化、冻结入库；季度轮换 30%。
+
+**私有题池流水线**：
+```
+git log --since=90d --merges → 取「问题描述 + 隐藏测试」→ 脱敏 → 人工过一遍 → 冻结入库
+每季度复审，半年淘汰 30%
+```
+
+这是唯一不随公开榜单饱和而失效的部分。
+
+---
+
+## F. 对我们实现的含义
+
+1. **不重写 benchmark harness**：TB2/τ²/BFCL 各用自己的 runner；dia 只**导入结果 JSON** 进 `baselines/`。
+2. **canary 只用私有**（公开题只做首次画像）；私有题从 episode/PR 生成，判据脚本化。
+3. **成本护栏**：canary 单次预算上限；超限降级为 3 题抽样。
+4. **可重复性**：记录模型版本、题集 hash、判据版本、运行时间；缺一项视为"无法判定"。
+
+
+---
+
+<!-- research/collaboration-theory.md -->
+
+# 人机协作与评估：理论依据（2026-10）
+
+> 目的：给 dia 的 `(T, D, O)` 模型与指标找**可引用的理论出处**，并明确哪些是"有依据"、哪些是"我们拍的"。
+> 结论先行：V 型与控制回路 / 类型×层级 / 抽象层级**对得上**；但 **Δ 阈值**和**自报深度**两处是直觉，不是理论。
+
+---
+
+## A. 理论表
+
+| 理论 | 核心主张 | 对我们的映射 | 出处 | 级 |
+|---|---|---|---|---|
+| 混合主动交互 | 主动权在人与系统间流动，由「不确定性 × 错误成本 × 打断成本」决定谁发起 | 请示触发条件 | Horvitz 1999, CHI '99, `10.1145/302979.303030` | A |
+| 监督控制 / 10 级自动化 | 自动化是 1–10 连续谱；人成为监督者 | D 的刻度来源 | Sheridan & Verplank 1978；Sheridan 1992 | A |
+| 类型 × 层级 | 自动化按四类功能（信息获取/分析/决策/执行）**分别**定级 | **深度必须是矩阵，不是标量** | Parasuraman, Sheridan & Wickens 2000, `10.1109/3468.844354` | A |
+| 抽象层级 | means-end：目的在顶、形式在底，约束自上而下 | V 型的形状依据 | Rasmussen 1985, `10.1109/TSMC.1985.6313353` | A |
+| 联合认知系统 | 分析单元是「人＋技术」的控制回路整体 | **警告：不能按功能切两臂** | Hollnagel & Woods 2005, `10.1201/9781420038194` | A |
+| 情境意识 | SA 三级（感知/理解/预测）；自动化导致 OOTL 退化 | 观测事件应标 L1/L2/L3 | Endsley 1995, `10.1518/001872095779049543` | A |
+| 信任校准 | trust 应与能力匹配；complacency/bias 使监督失效 | Δ=0 也可能是共谋 | Lee & See 2004, `10.1518/hfes.46.1.50_30392`；Parasuraman & Riley 1997 | A |
+| 有意义的人类控制 | 需 tracking（响应理由）＋ tracing（理由可追溯） | O 必须记依据与 provenance | Santoni de Sio & van den Hoven 2018, `10.3389/frobt.2018.00015` | A |
+| 构念效度 / 指标腐蚀 | 指标须有构念定义与效度证据；成为目标即失效 | 覆盖率/压缩比目前**无构念定义** | Cronbach & Meehl 1955, `10.1037/h0040957`；Jacobs & Wallach 2021, `10.1145/3442188.3445901` | A |
+| 人-AI 团队 | 团队绩效非线性可加，需 common ground 与 directability | 请示质量须含可指挥性 | NASEM 2022, `10.17226/26355` | B |
+
+---
+
+## B. 站得住的三条
+
+1. **顶端 = 意图**：Rasmussen 的抽象层级把目的置顶、形式置底，约束自上而下——"人守顶端"与其同构。
+2. **深度做成矩阵**：Parasuraman 的 types×levels 明确四类功能各自定级；标量会掩盖"信息获取 9 级、决策 2 级"这类错配。
+3. **Δ 是有效信号**：Lee & See 的校准需要"预期 vs 实际"偏差；Δ 是其代理。
+
+## C. 站不住的四条（必须改）
+
+1. **请示没有成本模型**：违反 Horvitz 的"错误成本/打断成本"。叠加 Bainbridge 1983（`10.1016/0005-1098(83)90046-8`）的 ironies——自动化越多，人越少练手，回给人的恰是最难的部分 → **请示风暴 + 顶端能力退化**。
+2. **自报 + 同源复核 ≠ 校准**：自报是自信的代理，不是能力；同源复核对同源错误零功效（Skitka 1999 automation bias 同构）。**Δ≈0 无法区分"都对"与"共谋"**。
+3. **按功能切 V 的两臂违反 JCS**：Hollnagel & Woods 要求分析单元是回路整体；按功能切会在交接处留下无人的失效地带。
+4. **"人守顶端" ≠ 有意义的人类控制**：只做最终批准既不满足 tracking 也不满足 tracing；只记深度不记依据 = **名义控制**。
+
+---
+
+## D. 指标修正（按构念效度重写）
+
+| 现指标 | 问题 | 配对/替代 |
+|---|---|---|
+| 观测覆盖率 | 多写事件即可刷高 | ＋**复核后仍成立的观测率**＋每千事件人工复核工时 |
+| 深度达成 | 自报 ≠ 能力 | 改为 **calibration**：ECE / Brier（自报 vs 盲复核），报 ICC(2,k) |
+| 部分产物复用 | activity 指标，奖励囤积 | ＋复用产物在下游的返工率/缺陷率（结果侧） |
+| 压缩比 | 无操作定义 | 先定义"压缩信息量 vs token"，做不到就删 |
+| 意图漂移 | 缺可判定 rubric | 双人独立盲标 + kappa ≥0.61（Landis & Koch 1977） |
+| 请示质量 | 无结果侧 | ＝改变决策的比例 × 节省的错误成本 |
+| 共谋信号 | 单一来源自指 | 第三方盲评；且**不得**进个人考核（Campbell 定律） |
+
+**三问闸门**（Jacobs & Wallach）：构念被操作化了吗？有效度证据吗？对谁有效？
+
+---
+
+## E. 可执行规则（替代原来的直觉规则）
+
+1. **撤回"Δ>0.3 必须先对齐"**：无出处。改为**成本加权**：`优先级 = Δ × 该判定的错误成本`，阈值**预注册**。
+2. 请示三件套：不确定性 / 候选及代价 / 推荐项（Horvitz）。
+3. **打断预算**：每人每时段上限，超限降级为异步队列（注意力成本）。
+4. 顶端只保留三类决策：目标选择、冲突裁决、异常接管（Rasmussen + 监督控制）。
+5. 深度按**四类功能**分别记录，**禁止**输出单一深度分（Parasuraman 2000）。
+6. 复核必须**盲**且**异源**（automation bias / 独立性）。
+7. 每 N 次自报抽 5% 盲复核，公开 ECE（校准）。
+8. 每个观测事件必带 provenance：`intent_id / judge_id / upstream_artifact_ids`（MHC tracing）。
+9. 自动化升级时同步提高人的手动演练配额（Bainbridge / OOTL）。
+10. 指标上线前须有构念定义 + 反例测试；指标不得进个人考核（Cronbach & Meehl；Goodhart/Campbell）。
+11. 子 agent 不得自签验收——**弱支持**（Klein directability 只提供类比）。
+
+---
+
+## F. 参考文献分级
+
+**A（同行评审/一手）**：Horvitz 1999；Parasuraman/Sheridan/Wickens 2000；Rasmussen 1985；Hollnagel & Woods 2005；Endsley 1995；Lee & See 2004；Parasuraman & Riley 1997；Parasuraman & Manzey 2010；Santoni de Sio & van den Hoven 2018；Cronbach & Meehl 1955；Jacobs & Wallach 2021；Bainbridge 1983；Landis & Koch 1977；Skitka et al. 1999；Cohen 1960；Fleiss 1971；Shrout & Fleiss 1979。
+
+**B（权威机构）**：NASEM 2022《Human-AI Teaming》`10.17226/26355`。
+
+**C（二手/未验证）**：Article 36 的 meaningful human control 倡议文本（年份未验证）；"in/on the loop"术语溯源（未验证）。
+
+---
+
+## G. 对 dia 的两条硬结论
+
+1. **先加 provenance，再加深度**：没有 `intent_id / judge_id / upstream` 的观测，不满足 tracing，深度再准也是名义控制。
+2. **先把"共谋"做成可判**：盲复核 + 第三方抽检；否则 Δ 小只会被误读成"对齐良好"。
+
+
+---
+
+<!-- research/dsh-superagent.md -->
+
+# dsh-superagent-prototype 评审
+
+> 2026-11-02。仓库：<https://github.com/deepseek-ai/dsh-superagent-prototype>
+> 研究原型，MIT；约 8.9k stars；DSH bundle（`@deepseek-ai/dsh-*` alpha 依赖）。
+> 结论：**产品哲学很像，架构不是同一个东西**；借概念与约束，不直接依赖/复制。
+
+---
+
+## 1. 它是什么
+
+一个面向**单个 GitHub 仓库**的主动式 coding agent：
+
+```text
+Source（GitHub / Feishu）
+  → Trigger（不可变事件）
+  → Thread（按时间聚合）
+  → Eval（Gate + Assessment）
+  → Decision（accept / stop / ignore / unavailable）
+  → Ticket（授权后的工作单元）
+  → Assignment（绑定到一个 Executor Session）
+  → Executor（独立目录 / DSH Session）
+  → Channel（回复 PR/Issue/Feishu）
+```
+
+核心原则：**用最少的人类注意力换取最大价值**。只在被请求或已有书面规则允许时行动；只在人必须行动或结果可用时说话。
+
+它带一个 Web panel，展示“需要人处理的事项”、系统健康和历史；支持 GitHub/Feishu 两个 Source，每个 Ticket 一个 worker Session/目录，有并发槽位、持久化 outbox、恢复与幂等。
+
+---
+
+## 2. 和 dia 的对照
+
+| 维度 | dsh-superagent | dia 当前 |
+|---|---|---|
+| 定位 | 单仓 proactive agent 产品原型 | 通用框架 + 多角色团队 |
+| 入口 | DSH bundle + panel | CLI/ACP + opencode/dsh |
+| 领域模型 | Source/Trigger/Thread/Eval/Ticket/Assignment/Mandate | task/team/run/verify/gate（较扁平） |
+| 授权 | Policy version + Mandate + gate + revalidate | accept/gate + 人工确认；无版本化 Mandate |
+| 执行 | 一个 Ticket 一个 worker Session/目录 | 4 角色 team + ACP/dsh 多会话 |
+| 验证 | worker 自验 + PR review；没有独立 verifier 角色 | builder/verifier/redteam 分离 |
+| 知识 | 无通用 KB；prompt/skills | kb/ingest/audit/freeze 是核心 |
+| 人类介入 | 结构化 Attention，panel 优先展示 | team `accept` + gate；无 attention panel |
+| 持久化/恢复 | SQLite store + durable effects/outbox + slots | ledger/runs 文件；恢复能力较弱 |
+| Prompt 版本 | 不可变版本 + override/base/升级提示 | persona/patch + next-session |
+| 可移植性 | 强绑 DSH alpha | 目标跨 opencode/dsh，但仍有耦合 |
+| 成熟度 | research prototype，明确不 production-ready | 早期框架，测试/门禁在补 |
+
+---
+
+## 3. 值得吸收的
+
+1. **Attention 是一等公民**
+   - “需要人”的结构化状态（answer/review/blocked/failed）比 `accept` 一个终态更细；
+   - panel 先列“需要人”的事项，健康状态不占空间；
+   - dia 可以把它落成 task/team 的 `attention` 投影，而不是加聊天消息。
+
+2. **显式领域状态机**
+   - Ticket 的 stage 由事实（report/input/assignment）推导，不靠自由文本；
+   - 这比我们 `run` 里的临时状态更可测，能减少“看起来完成”。
+
+3. **Policy version + Mandate**
+   - 每个接受记录依据的 policy 版本、scope、strength；
+   - policy 变化只通知受影响的 Ticket，不撤销已发 Mandate；
+   - dia 的 gate/accept 可以参考，但不要一开始做全套。
+
+4. **Durable effects / outbox / idempotence**
+   - 外部动作先落库，再执行；失败退避；重启恢复；
+   - worker slot / 并发上限 / 人类消息优先；
+   - 这是 team 自动化从“能跑”到“可运营”的关键。
+
+5. **Prompt 版本化**
+   - immutable versions、override/base、默认更新提示；
+   - 和 dia 的 persona patch 可以对齐。
+
+---
+
+## 4. 不该直接照搬的
+
+- **不要替换 dia 为 DSH bundle**：它强绑 DSH alpha，和我们的 opencode/ACP/跨域目标冲突。
+- **不要退化成单仓单 worker**：dia 的 builder/verifier/redteam 分离是刻意设计。
+- **不要复制它的实现代码**：research prototype，工程一致性自述不保证；借概念即可。
+- **不要先做 panel**：我们的宿主适配层（H0 的 adapter 缺口）还没定，先做 attention 状态和 CLI/API 更稳。
+- **不要一次上全量 Ticket/Mandate 状态机**：先映射到现有 task/run，避免大爆炸重构。
+
+---
+
+## 5. 对 dia 路线的影响
+
+优先级建议：
+
+1. **attention 投影**：task/team 输出“等人工”的结构化状态（answer/review/blocked/failed），先 CLI，不先 UI。
+2. **durable team run**：把 `team.ts` 的外部动作（ACP prompt、快照、gate）落成可恢复的 effect/outbox；先做最小重试与恢复。
+3. **Mandate-lite**：accept 记录 policy/版本/scope/证据，policy 变化可追踪，不急着做完整 revalidation。
+4. **panel 等宿主适配层**：H0 的 adapter 子层落地后再做 Web/宿主 panel。
+5. **kb/job 继续按现有模块推进**，不要因为参考项目改方向。
+
+一句话：**借它的“注意力优先 + 显式状态 + durable effects”，不借它的 DSH 绑定和单仓单 worker 形态。**
+
+
+---
+
+<!-- research/frameworks-survey-2.md -->
+
+# 主流 Agent 框架设计对照（2026-10）
+
+> 日期 2026-10-28。对象 13 个：LangGraph、CrewAI、AutoGen/AG2、OpenAI Agents SDK、Google ADK、AWS Strands、Semantic Kernel/MAF、LlamaIndex、Mastra、PydanticAI、smolagents、Claude Agent SDK、Codex SDK。
+> 用途：给"零重依赖、审计优先、进化过程"的个人框架做设计校验。
+
+---
+
+## A. 对照表（摘要）
+
+| 框架 | 定位 | 模型抽象 | 中间件/钩子 | 状态/恢复 | HITL | 多 agent | 评测 | 许可 |
+|---|---|---|---|---|---|---|---|---|
+| **LangGraph** | 图运行时 | BaseChatModel + `with_fallbacks()` | before/after_model、wrap_model/tool_call | checkpointer+thread，**replay/fork**（副作用会重放） | `interrupt()`+resume | 子图/supervisor/handoff | 无内建 | MIT |
+| **CrewAI** | 角色团队 | `LLM("provider/model")`，无 fallback | task/step callback、guardrail | `@persist` 方法级 | Flow 人工反馈 | sequential/hierarchical | 弱（`crewai test`） | MIT |
+| **AutoGen/AG2** | 群聊 | ChatCompletionClient+model_info | hookable message | save/load_state | UserProxy（无 interrupt） | GroupChat/Swarm | AutoGenBench | MIT/Apache |
+| **OpenAI Agents SDK** | 轻 loop | Model/ModelProvider，**无 fallback** | guardrails+RunHooks | Session+**RunState 可序列化** | `needs_approval`→interruptions | handoff/agents-as-tools | 平台 tracing | MIT |
+| **Google ADK** | 企业 agent+图 | BaseLlm 子类 | **6 类 callback** + Plugins | 事件溯源 + `app:/user:/temp:` | workflow 节点 | 层级/graph/A2A | **`adk eval`+evalset** | Apache-2.0 |
+| **AWS Strands** | model-first | Model ABC + **ModelRouter(Fallback/Classifier)** | Hook（invocation/model/tool）+Plugin | SessionManager（File/S3/Snapshot） | 无一级中断 | Swarm/Graph/Workflow | 无内建 | Apache-2.0 |
+| **SK → MAF** | 企业 .NET/Py | IChatCompletionService | Filters | MAF checkpoint | MAF workflow | GroupChat/Handoff | 无 | MIT |
+| **LlamaIndex** | 事件驱动+RAG | Settings.llm + metadata | step 边界 | WorkflowCheckpointer（at-least-once） | `InputRequired` 事件 | AgentWorkflow | RAG 评测 | MIT |
+| **Mastra** | TS 全栈 | 路由串+能力表 | processors(input/output/error) | snapshot+thread，**suspend/resume** | **suspend()/resume()** | workflow+supervisor | **scorers+datasets** | Apache-2.0 |
+| **PydanticAI** | 类型安全 | Model+profile，**FallbackModel** | capabilities（before/after model、tool hook） | **无内建 session** | deferred tool 审批 | agent 委派 | pydantic-evals+Logfire | MIT |
+| **smolagents** | 极简 | Model 类 | step_callbacks | 仅内存 | 无 | ManagedAgent | 无 | Apache-2.0 |
+| **Claude Agent SDK** | Claude Code 当库 | 仅 Claude | hooks（PreToolUse/PostToolUse/PreCompact/SubagentStop） | **resume/fork**+checkpoint | permissions 回调 | subagents（≤20 并行） | 无 | Py MIT/TS 商业 |
+| **Codex SDK** | Codex CLI 当库 | 固定 Codex | 无 hook | **resume(threadId)**，无 fork | approval_policy | 无 | 无 | Apache-2.0 |
+
+**三个结构性事实**：
+1. AutoGen 与 SK 已进维护模式，微软的答案是 MAF（2026-04）。
+2. 真正"能中断再恢复"的只有 LangGraph / OpenAI / Mastra / Claude / Codex（Pydantic 靠 deferred tool）。
+3. 内建评测完整的只有 ADK 与 Mastra。
+
+---
+
+## B. 该借的五条
+
+1. **事件溯源会话**（ADK delta / Strands session）：消息与工具调用 append；state 分作用域；视图可重建 → 审计免费、可 fsck。
+2. **双闸口**（LangGraph wrap_model/tool_call + Codex 审批）：`gate-model` / `gate-tool` 两个可执行钩子，stdin JSON、stdout 决策；绕过即失败。
+3. **可序列化中断**（OpenAI RunState / Mastra suspend）：落 `runs/<id>/{state,interrupt}.json`，`resume` 跨进程续跑，不阻塞 stdin。
+4. **模型 profile 声明化**（PydanticAI/Mastra）：`models.yaml` 写 context/tools/vision/价格/`verified_at`；路由 = fallback 链 + 预算，决策落审计。
+5. **判据当门禁**（ADK evalset / Mastra scorers）：`evals/*.case.json` = 输入 + 期望工具轨迹 + 断言命令；收尾自动跑，不退步才允许 tag。
+
+---
+
+## C. 不该借的五条
+
+1. **图 DSL 当唯一编排**：个人任务九成线性，节点/边/Reducer 成本高于收益。
+2. **重型 durable runtime**（Temporal/DBOS 级）：违背零重依赖；文件 journal + 幂等键够。
+3. **角色群聊多 agent**：token 贵、路径不可预测、责任链糊。
+4. **平台绑定 tracing**：默认上行，离线/隐私不可控；本地 jsonl + 可选 OTLP。
+5. **"SDK 包 CLI"的伪库**（Claude/Codex SDK）：模型锁死、行为随 CLI 漂移。
+
+---
+
+## D. 三个空位（我们有机会）
+
+1. **审计即数据模型**：没人把"为什么"（判据、拒绝理由、成本、模型版本）做成一等字段；
+   我们让每条决策带 `judge` 指针 + 证据哈希，可离线校验、可 diff。
+2. **进化可回滚**：现有最多给分数，缺"候选→对抗→回归→落地→tag→rollback"生命周期与配额。
+3. **零依赖可移植**：全部要包树 runtime；个人 agent 应 `git clone && bash install.sh` 即跑，配置纯文本可 grep/diff。
+
+---
+
+## E. 对 dia 的结论
+
+| 我们的设计 | 对照结果 |
+|---|---|
+| 审计/门禁/证据一等公民 | **空位 1，方向正确** |
+| 进化生命周期（候选→评审→落地→回滚） | **空位 2，方向正确** |
+| 零依赖 + 纯文本配置 | **空位 3，方向正确** |
+| 团/档位 | 与"角色群聊"同风险，**继续 defer** |
+| 事件溯源会话 | 已有 dsh session；补"视图可重建"判据 |
+| 可序列化中断 | 我们只有 resume 卡片，**应补 interrupt 文件** |
+| 模型 profile | 已有 ModelSpec，补 `verified_at/price_ver` |
+| 评测门禁 | 已有 H 体系，补 `evals/*.case.json` 形态 |
+
+**一句话**：13 个框架验证了"审计/证据/可移植"是空位，也验证了"团/群聊/重运行时"是坑。
+
+
+---
+
+<!-- research/h0/report.md -->
+
+# H0 报告：三层架构覆盖分类实验
+
+> 日期 2026-10-29。判据来自 `dabo-agent/docs/hypotheses.md` H0：
+> “三层瘦架构（框架/入口/包）能覆盖 ≥90% 真实任务，维护成本减半。”
+> 本报告只回答**覆盖**；**维护成本减半无法判定**（没有改造前基线）。
+
+---
+
+## 1. 结论
+
+**按严格口径，H0 的覆盖预测未成立：17/20 = 85%，低于 90%。**
+
+失败集中在同一类：**宿主客户端/插件/本机环境**（3 条）。它们既不属于 framework 的通用引擎，
+也不属于 domain 的域内容，也不属于 kit 的可复用内容——三层里没有“宿主适配”这个承接处。
+
+- 若把“DSH 配置页调研”算作 kit 的知识产出，覆盖率是 **18/20 = 90%**，正好卡在边界；
+- 另外两条（Electron 客户端插件、本机编辑器/浏览器插件安装）仍然无归属；
+- **维护成本减半**：无改造前数据，**无法判定**；只能给出代理指标（见 §4）。
+
+**建议**：不要回到单仓单层；把“宿主适配”显式补进入口层（adapter 子层，已落到
+`docs/architecture.md` §2.1）。然后按 50 样本、双人独立分类重跑；本报告只完成 20 样本严格口径。
+
+---
+
+## 2. 方法
+
+### 数据
+
+- 本机 `dia ingest sessions --full` 产出：**322 条 episode**（不是假设里的 257；旧数字已过时）。
+- 过滤测试夹具（`headless`、`Implement this task`、`verify-ws`、`team-data`、`Return only JSON`、
+  `You are teammate`、`YAN-OK` 等）后剩 **140 条**。
+- 固定 `seed=11` 抽 20 条；样本与逐条标注见 `sample.json`。
+- 复现：`bun experiments/h0-sample.ts <episodes.jsonl> 11`。
+
+### 分类口径
+
+| 层 | 承接什么 |
+|---|---|
+| framework | 与域无关的引擎能力：ingest/audit/kb/team/版本/渲染/沙箱 |
+| domain | 单个入口的内容与策略：yan 工作域、dabo 个人域、宿主入口适配 |
+| kit | 可复用知识/技能/工具内容；默认无执行权 |
+
+- `fits=true`：任务能被三层之一**唯一承接**，不需要新增第四种职责；
+- `framework_change=true`：任务会逼 dia 改框架代码/契约；
+- `host_coupled=true`：依赖 Electron/DSH 客户端、本机编辑器/浏览器等宿主环境。
+
+---
+
+## 3. 结果
+
+| # | 任务 | 主责层 | 改框架 | 落入三层 | 说明 |
+|---|---|---|---|---|---|
+| 1 | 迁移 example-service 到 example-repo | domain | 否 | ✅ | 工作域项目迁移 |
+| 2 | yan 版本管理：服务/引用路径生命周期 | framework | 是 | ✅ | 版本/渲染生命周期 |
+| 3 | 只读沙箱 touch 测试 | framework | 否 | ✅ | 验证既有沙箱 |
+| 4 | 企业知识库智能体场景本地同构 | domain | 否 | ✅ | 产品域实现 |
+| 5 | GitLab MR lgtm 轮询 | kit | 否 | ✅ | 可复用轮询 skill |
+| 6 | DSH watchdog 权限日志分析 | framework | 否 | ✅ | 沙箱/权限观测 |
+| 7 | 图片菜单项识别 | framework | 否 | ✅ | 视觉/读图能力 |
+| 8 | 图片标题文字识别 | framework | 否 | ✅ | 同上 |
+| 9 | 网络安全短信改造 | domain | 否 | ✅ | 业务域改造 |
+| 10 | DSH 文档预览 Mermaid 客户端插件 | none | 是 | ❌ | 需宿主 Electron 插件机制 |
+| 11 | 超级本 LDAP 登录跳转修复 | domain | 否 | ✅ | 业务登录域 |
+| 12 | 平台感知 + 并行会话收尾 | framework | 是 | ✅ | 跨平台会话生命周期 |
+| 13 | DSH 配置页前端能力调研 | none | 是 | ❌ | 服务宿主配置页；边界可争议 |
+| 14 | 钉钉反馈分析：商品分组升级 | domain | 否 | ✅ | 工作域反馈分析 |
+| 15 | example-repo 知识库批量导入接口优化 | domain | 否 | ✅ | 产品接口优化 |
+| 16 | yan-agent 更新与生效版本机制 | framework | 是 | ✅ | 自更新/版本 |
+| 17 | 企业知识库回复诊断页内置改造 | domain | 否 | ✅ | 产品页面改造 |
+| 18 | 服务生命周期治理（续） | framework | 是 | ✅ | 同 #2 能力 |
+| 19 | iTerm2 Markdown 与浏览器插件安装 | none | 否 | ❌ | 本机宿主环境安装 |
+| 20 | 企业知识库领域知识出现商品 | domain | 否 | ✅ | 业务过滤规则 |
+
+### 计数
+
+- 覆盖：**17/20 = 85%**（严格）；**18/20 = 90%**（把 #13 算 kit 知识产出）
+- 主责层：framework 8 / domain 8 / kit 1 / none 3
+- 需要改框架：**6/20 = 30%**；不需要改框架：14/20 = 70%
+- 宿主耦合：**3/20 = 15%**
+
+---
+
+## 4. 解释
+
+### 4.1 失败不是“分层错了”，是少了一个承接处
+
+3 条失败全部与**宿主**有关：
+
+- DSH 是 Electron 应用，客户端插件（Mermaid 预览、配置页）需要宿主插件代码；
+- iTerm2/浏览器插件属于本机环境安装，不是 agent 的 persona/kit。
+
+这说明三层对“agent 能力类任务”覆盖良好（17 条里 17 条有主责层），
+但对“宿主集成类任务”没有位置。把这类任务硬塞进 domain，会让域仓库承担宿主 UI 代码，
+维护成本反而上升。
+
+### 4.2 “维护成本减半”没有证据
+
+- 没有改造前/后的维护成本基线；
+- 没有每个任务的 diff、变更包数、review 时长；
+- 只有“70% 任务不需要改框架”这一代理指标，能说明**变更局部化**，不能证明成本减半。
+
+### 4.3 这个结果对架构的含义
+
+- **不要**因为 85% 就回到单仓单层——失败面很窄，且集中在宿主；
+- **要**补一个明确的“宿主适配”职责（放在入口层或独立第四层），并规定：
+  - 宿主插件代码不进 framework；
+  - 宿主适配可以依赖 framework，但 framework 不反向依赖宿主；
+  - kit 仍默认无执行权，宿主插件需显式授权。
+
+---
+
+## 5. 限制
+
+1. **单评价者**：分类由我一人完成，没有双人独立标注/一致性系数；
+2. **样本偏差**：全部来自本机会话，工作域/框架开发占比高；不是用户任务总体；
+3. **episode 是摘要**，不是完整任务描述，分类依赖摘要信息；
+4. **257 → 322**：假设里的数据版本已过时，旧样本不可复现；
+5. **“fits”口径较宽**：把“能在现有能力上执行”与“有唯一主责层”分开后，结论对口径敏感（85% vs 90%）；
+6. **成本未测**：没有改造前后对照。
+
+---
+
+## 6. 决定
+
+| 选项 | 结论 |
+|---|---|
+| H0 原样支持 | ❌ 严格口径 85%，不成立 |
+| 回到单仓单层 | ❌ 失败面窄，代价过大 |
+| 补宿主适配后重跑 | ✅ 推荐 |
+| 维护成本减半 | ⏸ 无法判定，需先埋点 |
+
+**下一步（建议）**：
+1. 在 `docs/architecture.md` 明确“宿主适配”归属与依赖方向；
+2. 用 50 样本 + 双人独立分类重跑，报告 Cohen's κ；
+3. 在每个 MR 记录“改动层”（framework/domain/kit/host）与变更行数，积累 4 周后再判“成本减半”。
+
+
+---
+
+<!-- research/model-boundary-patterns.md -->
+
+# 模型边界控制与调优：模式与修正（2026-10）
+
+> 日期 2026-10-28。范围：客户端侧（适配/中间件/路由/护栏/评测/监控），不做训练与 provider 私有参数。
+> 结论先行：**不做学习型路由、不做在线 bandit、不自造 telemetry 命名**；引入"档位纯函数 + 健康闸门"、"spec_id + 指纹"、"Kayenta 式 canary 判据"。
+
+---
+
+## A. 模式表
+
+| 模式 | 代表 | 解决什么 | 代价 | 级 |
+|---|---|---|---|---|
+| 别名 + 部署池 | LiteLLM Router（`order`/`weight`/`allowed_fails`/`cooldown_time`/`num_retries`） | 多 provider 统一；失败隔离到部署 | 别名膨胀、语义被抹平 | A |
+| 声明式网关 | Portkey config（`single/loadbalance/fallback/conditional`） | 策略与代码解耦 | 配置即代码，需 schema | A |
+| 客户端中间件 | Vercel AI SDK `wrapLanguageModel`；LangChain `@before_model/@after_model` | 请求/响应两侧插重试/日志/脱敏 | 流式改写要缓冲到块结束 | A |
+| Provider 抽象 | OpenAI Agents SDK `ModelProvider` | 换 provider 不改业务 | 能力差异靠探测 | A |
+| 学习型路由 | RouteLLM（`mf/sw_ranking/bert/causal_llm`） | 成本降 35–85% @ 同质量 | 需标定集；漂移后静默失效 | A |
+| 商业 Pareto 路由 | NotDiamond `tradeoff` | 免训练起步 | 黑盒 | A/C |
+| 统计式 canary | **Kayenta**（Mann-Whitney + pass/marginal 阈值 + 0–100 分） | 区分抖动与真退化 | 需基线时序与样本量 | A |
+| 阈值式 canary | Flagger / Argo Rollouts（`threshold`/`failureLimit`/`consecutiveErrorLimit`） | 简单、回滚时间可算 | 长尾不敏感 | A |
+| SLO 燃烧率 | Google SRE（14.4×/1h、6×/6h、1×/3d） | 少误报 | 低流量失效 | A |
+| 输入/输出护栏 | NeMo Guardrails / Guardrails AI / Llama Guard | "不许"变可执行 | **额外模型调用**（示例约 2×延迟、3.7×token） | A |
+| 遥测标准 | OTel `gen_ai.*`（仍 Development，已改名一次） | trace/指标/成本同键 | 上游会变 | A |
+| 按模型回归 | promptfoo / DeepEval / Inspect AI | 同题多模型 | 判分器自身要评；成本线性 | A |
+| 在线 bandit | 仅论文 | 在线学习 | 非稳态 + 反馈延迟 | C |
+
+**空档**：drift 检测在评测工具里不是一等公民（promptfoo/DeepEval/Inspect 只有矩阵对比）。
+
+---
+
+## B. 我们缺的六项（已确认）
+
+| # | 缺口 | 修正 |
+|---|---|---|
+| 1 | ModelSpec 只有名字 | 加 `spec_id = sha256(provider\|model_id\|snapshot\|tokenizer\|tool_protocol\|price_ver)` |
+| 2 | baseline 指纹未定义 | `fingerprint = sha256(suite_id\|n\|judge_id\|judge_ver\|temperature\|seed\|spec_id)`；判据改为**逐题 pass 集合 Jaccard ≥0.95**，flaky 题单列 |
+| 3 | 路由无健康度 | `gate(tier, health)`：`ok_rate_5m ≥ SLO`、`p95 ≤ L`、`cooldown_until < now`；回退目标写进审计 |
+| 4 | sidecar 缺症状分类 | `symptom_class ∈ {truncated, tool_arg_bad, refusal, hallucination, timeout}` |
+| 5 | 投票无 tie-break / 同源风险 | 不一致 → 人裁；judge 不得与被评模型同源（self-preference） |
+| 6 | 预算无单位经济 | 每任务 p50/p95、每档 ceiling、**重试计入同一 `task_id`** |
+
+---
+
+## C. 三条最值得引入
+
+### C1 档位纯函数 + 健康闸门（两级）
+
+```
+route(req) -> tier                         # 纯函数，可快照
+gate(tier, health) -> deployment | REFUSE  # 第二参数
+health(d) = { ok_rate_5m, p95_latency_5m, cost_1h, cooldown_until }
+准入: ok_rate_5m >= SLO_d 且 p95 <= L_d 且 cooldown_until < now
+```
+
+回退链显式声明，**"回退到谁"必须写进审计行**（LiteLLM 的 `fallbacks` + `allowed_fails` 语义）。
+
+### C2 ModelSpec + 指纹 baseline
+
+- 同 `fingerprint` 重跑才算对比；改了 judge/温度/题集 = 新实验体。
+- 判据：**Jaccard ≥0.95**，而不是"差 <5%"（后者无法钉住噪声源）。
+
+### C3 Kayenta 式降质检测
+
+```
+per_metric: pass | high | low        # Mann-Whitney 或比率比较
+final = Σ w_i·pass_i / Σ w_i         # 0–100
+fail  = final < marginal OR 任一 critical = high
+critical: 工具参数合法率（failureLimit = 1）
+```
+
+四个指标够：**参数合法率、任务完成率、p95 轮数、单任务成本**。
+参数合法率是唯一 critical——它掉就是硬伤，不看总分。
+
+---
+
+## D. 三条不该引入
+
+1. **学习型路由**（RouteLLM/NotDiamond 自训）：需上千偏好标注 + 稳定分布；我们一天几十任务，标定集比流量大。
+2. **在线 bandit**：反馈延迟以天计、奖励稀疏非稳态；用离线 A/B + 冻结集。
+3. **自造 telemetry 命名**：OTel `gen_ai.*` 仍在变（`gen_ai.system` 已改名）；只写 `gen_ai.*` + `dabo.task_id` 关联键。
+
+---
+
+## E. 对 dia 的落地清单
+
+| 动作 | 落点 |
+|---|---|
+| ModelSpec 字段 + spec_id | `docs/model-baseline-sidecar.md` §2 |
+| fingerprint + Jaccard 判据 | 同上 §2.2 |
+| gate(tier, health) | `docs/model-behavior.md` L6 |
+| symptom_class | sidecar 数据结构 |
+| 投票 tie-break + 异源 | `docs/model-behavior.md` L7 |
+| 成本按 task_id 归集 | `runtime/calls.jsonl` |
+| OTel `gen_ai.*` 字段 | 遥测（后续） |
+
+---
+
+## F. 参考文献（节选）
+
+LiteLLM Router、Portkey Config、Vercel AI SDK Middleware、LangChain Middleware、OpenAI Agents SDK Models、RouteLLM（LMSYS 博客 + arXiv:2406.18665）、Kayenta Judge、Flagger、Argo Rollouts Analysis、Google SRE Workbook（Alerting on SLOs）、NeMo Guardrails Rail Types、Guardrails AI `OnFailAction`、Llama Guard 4、OTel GenAI semconv、promptfoo CI、DeepEval、Inspect AI。均 2026-10 复核，A 级为主。
+
+
+---
+
+<!-- research/opencode-session-scoping.md -->
+
+# opencode v2 会话分区调查（Project / Location / Workspace）
+
+> 日期 2026-10-28。问题：`opencode ./` 只看到当前目录的会话，是否是专门设计？和 workspace 有什么关系？
+> 结论：**是设计，不是 UI 过滤**。Project = 工作目录的身份；Workspace 是另一层（可选、实验性）。
+
+---
+
+## 1. 三层概念
+
+| 层 | 定义 | 行为 | 证据 |
+|---|---|---|---|
+| **Project** | 工作目录身份：Git 仓跟随 worktree 根；非 Git 目录在 V2 各自成 project（V1 统一 `global`） | 决定 `session list` / TUI picker 的范围 | 官方指南；本机 DB `project_id` |
+| **Location** | 每次请求的目录上下文：fs/tools/agents/providers/MCP 都在 `LocationServiceMap` 下 | 同一 server 可服务多个 location | V2 spec |
+| **Workspace** | 可选、实验性：session 可绑定 `workspace_id`（worktree） | 本机 34 条 session 全为 NULL | 测试代码 + 本机 DB |
+
+**一句话**：Project 管"看到哪些会话"，Location 管"用哪套文件/工具"，Workspace 管"绑哪个 worktree"。
+
+---
+
+## 2. CLI 行为（实测）
+
+| 命令 | 行为 |
+|---|---|
+| `opencode ~/proj` | 切到该 project |
+| `opencode`（不指定） | 默认 location（server cwd） |
+| `opencode session list` | **只列当前 project 的顶层会话**（子会话不出现），默认 100 条，`--format json` 可看 directory/project |
+| `--continue` | 只挑"记录目录 = 当前目录"的最新顶层会话 |
+| 跨 project | **没有 `--all`**；走 `GET /api/session`（支持 `scope/directory/path/workspaceID/roots`）或直接读 DB |
+
+`cli.json` 的 `session.new_location: inherit` 可让新会话跟随当前活动会话的位置。
+
+---
+
+## 3. 数据模型（本机 opencode.db）
+
+`session` 表关键列：
+
+```
+id, project_id, workspace_id, parent_id, directory, path, title,
+agent, model, time_created, time_updated, ...
+```
+
+- `project_id`：本机分布为 `global`（20）+ 两个具体 project（13/1）；V1 非 Git 目录统一 `global`。
+- `workspace_id`：本机全 NULL（实验特性）。
+- `directory` / `path`：记录会话发生的位置；`path` 是相对/项目内路径。
+
+---
+
+## 4. 坑
+
+1. **V1 迁移**：V1 非 Git 目录的会话挂在 `global` project，V2 picker 看不到；`GET /api/session` 能取到；修复用 `opencode api post /api/session/<id>/move --data '{"directory":...}'`。
+2. **目录改名/删除**：V2 已修（2026-09-02 #23248），但旧会话可能显示 "Session location unavailable"。
+3. **不是隔离**：共享 daemon 拥有全部会话；project 只是选择范围。隔离要用 `--standalone` / `--server`。
+4. **子会话**：`session list` 不列子会话，采集时要单独取或用 DB。
+
+---
+
+## 5. 对 dia ingest 的影响（已实现）
+
+episode 新增字段：
+
+```yaml
+project: string|null        # hash(project_id)，12 位
+workspace_id: string|null   # 原样（可能 null）
+directory_hash: string      # hash(directory)
+path_hash: string           # hash(path)
+```
+
+- **默认跨 project 全采**（直接读 DB）；`--project <id>` 只采一个。
+- 不依赖 `opencode session list`（会漏 global/跨 project/子会话）。
+- 仍不存原始路径，只存哈希；需要回源时用 source + session id。
+
+实测：27 条顶层会话分成 3 个 project；`workspace_id` 全 NULL。
+
+---
+
+## 6. 参考
+
+- opencode v2 CLI Intro（传目录切项目）· 2026-10 · A
+- opencode v2 session list 帮助（"current project, newest first"）· 本机实测 · A
+- opencode v2 API `POST /api/session`（location）· 2026-10 · A
+- opencode v2 session spec（LocationServiceMap、durable inbox）· dev 分支 · A
+- 社区指南《Where did my OpenCode session go?》· 2026 · C
+- 本机 DB 查询（project_id/workspace_id 分布）· 2026-10-28 · A
+
+
+---
+
+<!-- review/reuse-review.md -->
+
+# 复用评审（REUSE REVIEW）— 2026-10-28
+
+> 触发：用户指出"思考过程有很多拿来主义，没有验证就决定复用"。
+> 本文是**评审材料**，不是结论文档；裁决需团队评审（人 + 独立复核）后写入。
+
+---
+
+## 1. 规矩（先立后评）
+
+任何外部能力（库/插件/协议/别人的引擎）默认是**假设**。进入主路径前必须有 REUSE ADR：
+
+```
+主张：我们要复用它做什么
+证据级：A 源码/官方文档 / B 官方博客 / C 第三方 / D 传闻
+本地探测：命令 + 原始输出（没跑就写"未验证"）
+失败模式：它坏了/变了/弃用了，我们怎么办
+耦合代价：版本、许可证、维护者数量、退出成本
+裁决：adopt / adapt / reject / defer（defer 必须写复查日期）
+```
+
+**闸门**：没有本地探测 → 只能 `defer`，不许进主路径。
+**角色**：点子（选项）→ 爪子（probe）→ 炸毛（失败模式）→ 秤（复现）→ 大波（裁决）→ 人（批准）。
+
+---
+
+## 2. 本轮 probe 结果（可复现）
+
+| # | 主张 | 命令 | 结果 | 证据级 |
+|---|---|---|---|---|
+| P1 | 抽 yan watchdog 引擎 | `cp -R watchdog /tmp && node --test test/*.test.js` | **失败**：硬编码 `~/Library/Application Support/yan-agent`、包名 `@example/dsh-watchdog`；`license` 字段缺失 | A |
+| P2 | 生成 dsh bundle | 造 `~/.dsh/profiles/dia-probe/{package.json,cordis.patch.yml}` → `dsh --profile dia-probe --dump-config` | **通过**：patch 被正确组合（`dia-probe` 出现 5 次） | A |
+| P3 | acpx 当 ACP 客户端 | `npm view acpx version license`；`npx -y acpx@0.21.1 --help` | **可用**：`0.21.1` / MIT；有 `--agent`、`--permission-policy`、`--non-interactive-permissions` | A |
+| P4 | dsh ACP 端到端 | 查包 | 包存在（2 个），**未跑通 stdio 会话** | B |
+| P5 | opencode 插件机制 | `opencode plugin list` | 可用；本地已有 `yan-oc-guard.ts`，其注释记录：**`permission.hook("evaluate")` 返回值不生效**，只能观测 | A |
+| P6 | SKILL.md 跨家 | `ls ~/.agents/skills` | 目录存在（yan 的 skills），**未验证** opencode/dsh 实际发现 | C |
+| P7 | 沙箱能力 | `sandbox-exec` 手工实验 | 网络阻断、写外拒绝、symlink 逃逸拒绝，均通过 | A |
+
+---
+
+## 3. 裁决矩阵
+
+| # | 复用项 | 证据 | Probe | 裁决 | 理由 / 复查 |
+|---|---|---|---|---|---|
+| R1 | dsh 文件沙箱 | A | —（README 明确只文件） | **adapt** | 只在 dsh 内复用；独立 CLI 需自带 wrapper（已实测 seatbelt） |
+| R2a | yan watchdog 引擎（法律） | A | P1：**license 字段缺失** | **defer** | 无许可证不得复用；需作者补 license；复查 2026-11-04 |
+| R2b | yan watchdog 引擎（工程） | A | P1：硬编码路径/包名 | **defer** | 解耦约 3 行 patch + 测试可移植；判据：patch 后跑通全部测试 |
+| R3 | acpx（ACP 客户端） | A | P3 通过 | **adopt-with-constraints** | 只能由 `dia run` 启动；版本写死 v0.21.1；禁止不可信 `--cwd/--agent`；pre-1.0 |
+| R4 | dsh bundle 生成 | A | P2 通过（仅组合） | **adopt（待运行时复验）** | 需再跑一次真实 profile 启动；否则只是"声明被组合" |
+| R5 | opencode 观测插件 | A | P5 部分 | **adopt-as-observer** | 只做审计/观测（1 行 audit 为判据）；拦截另立议题 |
+| R6 | SKILL.md 跨家 | C | P6 未完成 | **defer** | 需在 opencode/dsh 各跑一次发现；复查 2026-11-04 |
+| R7 | dsh ACP 端到端 | B | P4 未跑 | **defer** | 需要一次 stdio 会话（指纹/工具列表） |
+| R8 | "无可执行插件 ABI" | C | — | **working assumption** | AgentPlugins/everyharness 存在但 <40★；季度复核 |
+
+---
+
+## 4. 评审要回答的问题（给炸毛/秤）
+
+1. R1 的"adapt"是否掩盖了"独立 CLI 根本没有沙箱"这个事实？我们是否应该直接拒绝非 dsh 场景的高危执行？
+2. R2 的 defer 是否等于"永远不做"？如果 watchdog 解耦成本 > 重写成本，是否应该只抄 `engine.js` 的判定函数（约 500 行）而不是整包？
+3. R3 采用 acpx 是否违反"零依赖"？它是外部可执行而非库，是否可接受？版本 pin 策略是什么？
+4. R5 的 opencode 观测插件对我们的价值是什么？如果只能观测不能拦，是否值得做？
+5. R6 如果 SKILL.md 只在部分宿主被发现，我们的包格式是否要改成"每个宿主一份 skills"？
+6. 有没有被漏掉的复用项？（例如 `ticktick`/`cc-switch`/`rulesync`）
+
+---
+
+## 6. defer 生命周期（评审后新增）
+
+每条 defer 必须写：`revive_by`（日期）+ 一条命令级判据 + 负责人；**30 天未复活自动转 rejected**。
+当前：
+
+| 项 | revive_by | 复活判据 | 负责人 |
+|---|---|---|---|
+| R2a | 2026-11-04 | `package.json` 出现 license 字段 | 我 |
+| R2b | 2026-11-04 | patch 路径后 `node --test` 全绿 | 我 |
+| R6 | 2026-11-04 | opencode/dsh 各发现一次 `.agents/skills` 里的 SKILL.md | 我 |
+| R7 | 2026-11-04 | `acpx exec --agent <dsh>` 跑通一次非交互会话 | 我 |
+
+## 5. 评审记录（2026-10-28，独立复核）
+
+**误报一条**：复核称"文档不存在"——因为它在 dabo 仓库目录执行 `ls`。实际文件在 `dia` 仓库，已提交 `cbf83b5`。
+→ 流程修正：**评审必须声明仓库路径 + commit hash，并在结论里贴 `git -C <repo> ls-files` 输出。**
+
+**接受的批评与修订**：
+
+| # | 批评 | 修订 |
+|---|---|---|
+| 1 | R2 把"无 license（法律阻断）"和"硬编码路径（工程成本）"混成一个 defer | 拆成 **R2a 法律**（无 license → 不可复用，除非作者补 license）与 **R2b 工程**（路径/包名解耦，约 3 行 patch） |
+| 2 | 4 条 defer 没有负责人/到期/复活条件 = 僵尸状态 | 新增 **defer 生命周期**：`revive_by` + 命令级判据 + 负责人；30 天未复活自动 `rejected` |
+| 3 | R3 的 acpx 会形成**审计黑洞**（子进程继承权限，绕过 gate），且无 lockfile | R3 改为 **adopt-with-constraints**：只能由 `dia run` 启动（否则不计审计）；版本写死；禁止把不可信输入拼进 `--cwd`/`--agent` |
+| 4 | R4 只验证 `--dump-config`，没验证运行时加载 | 增加 probe：真实 `dsh --profile` 启动一次，确认 patch 生效（不只是组合） |
+| 5 | R5 方向错：`permission.evaluate` 不生效只影响"拦截"，不影响"观测" | R5 改为 **adopt-as-observer**：只要能写出 1 行 audit 即可；拦截另立议题 |
+| 6 | R1 把"一条路径有隔离"表述成"有隔离" | 新增 **覆盖率表述**：`sandbox: dsh ✓ / CLI ✗（无隔离）`；doctor 必须显式输出 `sandbox: none`，不许沉默 |
+| 7 | "推翻率 >20% 健康"会 Goodhart | 改为**配对指标**：`有效推翻 / (有效推翻 + 误报)`；单看推翻率不采纳（详见 evolution-process §4） |
+| 8 | 信任度/意图漂移没有公式与事件 | 指标必须绑定事件与公式，否则不进表 |
+
+**最致命的 3 条（接受）**：
+1. R3 的审计黑洞（外部执行体绕过 gate）；
+2. R1 的沙箱表述失实；
+3. defer 没有复活判据 = 假 pending。
+
+- **可以进主路径**：R3（外部工具）、R4。
+- **必须 defer**：R2、R5、R6、R7。
+- **已有能力但要限定范围**：R1（仅 dsh 内）。
+- **反面教材**：P5 的 `yan-oc-guard` 注释——"文档说能拦，实测返回值不生效"；这正是本地探测的价值。
+
+
+---
+
+<!-- review/verification-2026-10-28.md -->
+
+# 独立验证报告 — 2026-10-28（pilot）
+
+> 验证者：独立子 agent（只读仓库，不共享实现者上下文）。
+> 结论：**26 项测试全绿，但发现 10 个问题，其中 2 个严重。**
+
+## A. 三态结论
+
+| # | 主张 | 结论 |
+|---|---|---|
+| 1 | 单元测试全绿 | 通过（26 pass） |
+| 2 | build + version | 通过 |
+| 3 | smoke | 通过 |
+| 4 | E2E Node/Bun | 通过（9 段） |
+| 5 | 审计对账 + gap | 通过 |
+| 6 | 冻结四码 | 通过 |
+| 7 | resume 卡片 | 通过 |
+| 8 | 采集只读 | 通过（有保留：opencode WAL 无法归因） |
+| 9 | 文档存在/链接/YAML | **不通过**（断引用、文档与实现不一致） |
+| 10 | 静态安全 | 通过（但测试有盲区） |
+
+## B. 发现并已修的问题
+
+| # | 问题 | 修复 |
+|---|---|---|
+| P1 | **冻结 fail-open**：`freeze.json` 损坏时 `status()` 返回未冻结，一行 JSON 即可解除闸口 | 改为 fail-closed：解析失败 → `frozen:true` + reason；新增测试 |
+| P2 | **resume 跨会话泄漏**：使用全局快照，A 会话的 cwd 会出现在 B 会话 | 快照按 session 校验，不匹配则忽略；新增测试 |
+| P7 | 对账 `n >= expected` 可被多余行掩盖 | 改为精确相等，新增 `extra` 字段；新增测试 |
+| P10 | 已存在的 `freeze.json` 权限可能残留 644 | 写入后强制 `chmod 600` |
+| P5 | 静态测试不递归、未覆盖 `execFileSync` | 递归遍历 + 断言仅允许 `execFileSync("git"` |
+| P6 | 死测试 `tests/run.sh`（0 tests）与 `__pycache__` | 删除 |
+
+**测试数：26 → 29 全绿。**
+
+## C. 尚未修（已记录）
+
+| # | 问题 | 处理 |
+|---|---|---|
+| P3 | docs 多次提到 `doctor`，但命令不存在 | 文档已标"待实现"；实现后再改回 |
+| P4 | docs 声称"快照打包 session 文件"，实际只写元数据 | 文档已改为现状；`VACUUM INTO`/WAL 处理待实现 |
+| P8 | `docs/research/system-survey.md`、`hypotheses.md` 在 dia 仓库不存在 | 改为外部引用（dabo-agent 仓库） |
+| P9 | README 说公开 npm，但 `private: true` | README 已注明"发布前需移除" |
+| — | opencode 真实源只读无法归因（WAL 变化） | 待 opencode 空闲时复测，或改用 `immutable=1` |
+
+## D. 团队指标（第一条数据）
+
+- 独立验证发现的问题：**10 个**；
+- 其中实现者测试未覆盖的严重问题：**2 个**（P1/P2）；
+- 独立验证发现率：本轮 **100%**（因为实现者自测全绿，问题全部来自独立验证）。
+- 结论：**"实现者 ≠ 验证者"这条规则应立即固化为门禁。**
+
+
+---
+
+<!-- security-sandbox.md -->
+
+# Sandbox 细化设计（dia）
+
+> 日期 2026-10-28。依据：dsh 本机源码实测、Hermes/Pi 取证、[/tmp/dia-sbx 实验]。
+> 结论先行：**dia 不自建策略引擎**——复用 yan `dsh-watchdog` 的规则引擎；dia 只补它缺的三块：
+> **网络默认关、状态目录保护、fail-closed 断言**。
+
+---
+
+## 1. 三家对照（都实测/源码级）
+
+| 维度 | dsh | Hermes | Pi | **dia 目标** |
+|---|---|---|---|---|
+| 文件隔离 | seatbelt / bwrap / landlock / win ACL，**fail-closed** | local 无；Docker 有 | 无内建；示例扩展 | 复用 dsh |
+| 网络 | **不在 seam 词汇里**（原文：no network/process/syscall/credential restrictions） | local 不限；Docker 默认有网 | 扩展白名单；失败静默降级 | **dia 自建 offline profile** |
+| 进程/凭据 | 不管 | 不管（env 靠猜名字 → CVE-2026-9368） | 扩展同进程同权限 | env 白名单 + 明确不做进程隔离 |
+| 审批对象 | — | 命令字符串 | 原始字符串，执行前还会被改写 | **argv hash 冻结** |
+| 策略位置 | 部署配置 | 配置文件（`~/.hermes/config.yaml` 硬拒写） | 工作区内可写（被约束方可改） | 数据根只读 |
+| 失败模式 | fail-closed（`SANDBOX_UNAVAILABLE`） | 双路径绕过 | **fail-open**（不支持就裸跑） | fail-closed + 显式逃生口 |
+
+---
+
+## 2. 威胁模型
+
+| # | 威胁 | 现状 | 对策层 |
+|---|---|---|---|
+| T1 | 写工作区外（含 symlink 逃逸） | dsh 可挡（实测 seatbelt 解析真实路径） | OS 文件 |
+| T2 | 出网外传（curl/git/webhook/DNS） | **dsh 不管** | dia offline profile |
+| T3 | 读凭据（`~/.ssh`、`**/.env*`） | watchdog 红线可挡；dsh 文件模式可挡 | 策略 + OS |
+| T4 | 篡改安全状态（audit/freeze/policy） | 无保护 | OS 只读 + 位置隔离 |
+| T5 | 审批面 ≠ 执行面 | 三家都出过 | argv hash 冻结 |
+| T6 | 第二执行路径（code tool/MCP/插件） | Hermes/Pi 都栽在这 | 单 seam 原则 |
+| T7 | 审计缺失/可改 | 部分有 | append-only + 对账 |
+| T8 | 凭据进子进程 env | Hermes CVE | env 白名单 |
+
+**明确不做**：进程可见性隔离、内核级 syscall 过滤、多用户隔离、容器编排。这些交给容器/microVM；文档必须写明。
+
+---
+
+## 3. 执行 seam（唯一入口）
+
+```
+所有工具调用
+   ├─ 在 dsh 内：dsh tool dispatch → watchdog pre-execute（决策/记账）→ dsh sandbox（文件）
+   └─ 在 CLI/脚本：dia run → freeze 闸口 → dia policy（watchdog engine）→ OS wrapper → 子进程
+```
+
+**单 seam 硬规则**：
+
+1. 任何"直接 spawn 子进程"的工具都属于违例（Hermes 的 `execute_code` 就是反例）。
+2. MCP/插件新增的执行能力必须先过同一 Policy 接口，否则注册被拒（测试断言）。
+3. `dia run` 是脚本侧唯一入口；绕过它的执行不在审计范围内——**文档与 doctor 都要标出来**。
+
+---
+
+## 4. 策略模型
+
+```yaml
+# ~/.local/state/dia/policy.yaml（600，agent 不可写）
+file:
+  mode: read-only            # read-only | workspace-write | full（默认 read-only）
+  workspace: session-cwd     # 每会话一个根，不支持额外可写根（对齐 dsh）
+network:
+  mode: off                  # off | allowlist | on（默认 off）
+  allowlist: []              # 域名；经代理，非直连
+env:
+  mode: allowlist            # 只透传显式声明的变量
+  allow: [PATH, HOME, LANG, TMPDIR]
+approval:
+  freeze_argv_hash: true     # 批准时冻结，执行前校验
+  unattended: deny           # cron/webhook 无人值守默认拒绝
+redline:
+  paths: ["~/.ssh/**", "~/.aws/**", "**/.env*", "**/*.pem"]
+  commands: ["rm -rf /", "mkfs*", "dd of=/dev/*"]
+```
+
+**优先级**：session 只能**收紧**，不能放宽部署默认；项目级规则同样只收紧。
+策略文件在数据根，agent 的沙箱必须对它**只读**（否则就是 Pi 的坑：被约束方能改策略）。
+
+---
+
+## 5. OS 包装（本机实测）
+
+| 平台 | 文件 | 网络 | 实测 |
+|---|---|---|---|
+| macOS | `sandbox-exec` profile（deny file-write* + allow subpath workspace/tmp） | `(deny network*)` | 写外拒、symlink 逃逸拒、curl 000 |
+| Linux | bwrap / landlock-run（复用 dsh 后端） | `unshare -n` 或 bwrap `--unshare-net` | 未验证（无 Linux 机器） |
+| 都没有 | **拒绝高危执行**（exit 30 + degraded_reason） | 同上 | 待实现 |
+
+实测命令与结果：
+
+```
+sandbox-exec -p '(version 1)(deny network*)(allow default)' curl https://example.com  → 000
+sandbox-exec -p '(deny file-write*)(allow file-write* (subpath "/tmp/dia-sbx")) ...'  → 外部 Operation not permitted
+通过 symlink 写外部                                                                   → 拒绝
+```
+
+---
+
+## 6. 状态保护
+
+| 状态 | 位置 | 保护 |
+|---|---|---|
+| audit | `~/.local/share/dia/audit/` | append-only；沙箱只读 |
+| freeze | `~/.local/state/dia/freeze.json` | 600；沙箱只读；guard 在沙箱外 |
+| policy | `~/.local/state/dia/policy.yaml` | 只读；哈希校验 |
+| calls | `~/.local/share/dia/runtime/` | append-only |
+
+**断言**：`workspace-write` 模式下，尝试写上述路径必须失败（测试用例；待实现）
+`danger-full-access` 模式下 dia 必须**拒绝启动**（否则状态可被篡改）。
+
+---
+
+## 7. 审批与逃生口
+
+- 审批时冻结：`argv + cwd + env 白名单 + wrapper` 的 hash；执行前重算，不一致即拒绝（T5）。
+- 审批展示的内容必须逐字节等于执行内容；禁止审批后改写 input（Pi/Hermes 都栽过）。
+- 逃生口只有两个：`--full-access`（需 `--i-am-human` + 记录 + 高 risk）和 waiver（限时/限任务）。
+- **hardline 地板**：`rm -rf /`、写裸设备、fork bomb 连 `--full-access` 都拒绝（抄 Hermes）。
+- 无人值守（launchd/cron）：默认 `deny`，必须有显式 `allow_unattended: true`。
+
+---
+
+## 8. 与 watchdog 的关系（复用，不重写）
+
+| 能力 | 归属 |
+|---|---|
+| 路径/程序/命令判定、红线、五层规则 | **yan `dsh-watchdog`**（已有 23 个测试） |
+| 审计格式（脱敏、按天滚动） | watchdog 的 `audit-YYYY-MM-DD.jsonl`；dia 读取并对账 |
+| 网络 offline profile | **dia 新增**（watchdog 没有） |
+| 状态目录只读断言 | **dia 新增** |
+| freeze / guard / resume | **dia 新增**（watchdog 无冻结态） |
+| 统一 seam 断言（禁止第二路径） | **dia 新增**（静态检查 + 运行时断言） |
+
+---
+
+## 9. 测试矩阵（可执行）
+
+| # | 用例 | 期望 | 状态 |
+|---|---|---|---|
+| S1 | 写工作区外 | exit≠0 / Operation not permitted | ✅ 手工实测 |
+| S2 | symlink 逃逸 | 拒绝 | ✅ 手工实测 |
+| S3 | offline 下 curl | 失败（000/连接拒绝） | ✅ 手工实测 |
+| S4 | 写 audit/freeze 目录 | 拒绝 | ⏳ 待实现 |
+| S5 | 未知 sandbox 模式 | 拒绝执行（fail-closed） | ⏳ |
+| S6 | 审批后改 argv | 拒绝（hash 不符） | ⏳ |
+| S7 | 沙箱不可用 + 高危命令 | exit 30，不裸跑 | ⏳ |
+| S8 | 子进程 env 含 token | 被剥离 | ⏳ |
+| S9 | 绕过 `dia run` 直接执行 | doctor 报覆盖率缺口 | ⏳ |
+
+---
+
+## 10. 诚实边界（写进文档与 doctor）
+
+1. 同 OS 用户下，agent 若拿到 `bash` 且不在沙箱内，能改任何文件——**语言与权限位都不是边界**。
+2. dsh sandbox 只约束文件；网络必须 dia 自己关，关不掉就拒绝，不许"降级放行"。
+3. 进程可见性、syscall、凭据内存隔离不做；需要请上容器/microVM（Hermes 的 Docker 旗标清单可抄）。
+4. 审计只覆盖经过 seam 的调用；"全覆盖"在单机同用户条件下是**不可证明**的，只能对账。
+
+
+---
+
+<!-- security/credentials.md -->
+
+# 凭据管理（现状 + 调研待办）
+
+> 2026-11-03。**待调研**，不是方案定稿。触发：bw CLI 已用于入库，但"按账号分组"决定放行粒度，
+> 个人 vault 内容过多、风险集中；需要找更合适的用法或替代。
+
+---
+
+## 1. 现状
+
+| 项 | 现状 |
+|---|---|
+| 存储 | `~/.env.leyan`（网关 key）、`~/.env.leyan-tokens`（脚本凭据），600 明文 |
+| 入库 | Bitwarden（`bw` CLI） |
+| 使用 | `dia env list/check/run`：白名单键 → 子进程环境；不回显、`--redact`、密钥不进 argv |
+| 约束 | 明文文件**不是**机密性边界（同一 OS 用户下的 agent 可读），只是"防误入 repo/日志/备份" |
+
+## 2. 问题（为什么要继续找办法）
+
+1. **放行粒度 = 账号 / collection 分组**：bw 的访问控制跟着账号走，没法对"某个 agent、某次任务"单独授权。
+2. **爆炸半径大**：个人 vault 内容多，一次解锁等于全量暴露；agent 拿到的会话能读到的远多于它需要的。
+3. **无调用审计**：bw 侧看不到"哪个任务取了哪个键"，dia 侧只看得到注入动作。
+4. **解锁即长期有效**：`bw unlock` 的 session 是令牌，落在环境里就有泄漏面。
+
+## 3. 硬约束（不能破）
+
+- 凭据值不进 repo / 日志 / 截图 / URL / argv；只走白名单键注入。
+- 每个任务只能拿它声明的键；越权即失败（显式，不静默回退）。
+- 取用要可审计：谁、什么时候、拿了哪个键（不记值）。
+- 失效要大声：缺键 / 解锁失败 → 非 0 退出并给修复命令。
+
+## 4. 候选方向（待调研，未选型）
+
+| 方向 | 要点 | 待验证 |
+|---|---|---|
+| bw 会话收敛 | 只在 `dia env run` 进程内 unlock，子进程退出即失效；按 collection 拆个人/工作 | `bw unlock --raw` 生命周期；是否支持按项读取 |
+| OS 级隔离 | macOS Keychain / Linux Secret Service，按条目授权 | 跨平台一致性；agent 进程的访问控制粒度 |
+| 分级密钥库 | 敏感域（家庭库）独立 vault / 独立 passphrase | 与 §3 审计线的组合 |
+| 引用而非值 | SOPS / age / Infisical / Vault：配置里只放引用，运行时解析 | 离线可用性、CI 场景、轮换成本 |
+| 短时令牌 | 临时 STS / 短 TTL token 替代长期 key | 各上游是否支持；失败重试策略 |
+
+## 5. 调研清单（下一步）
+
+1. 读 bw CLI 官方文档 + 社区实践：session 生命周期、`--raw`、组织/collection 权限模型。
+2. 对照开源方案（Infisical、Vault、SOPS/age）在"单机 + agent"场景的最小可用形态。
+3. 找公开的 agent 凭据实践（最小权限、短时凭据、审计）作为判据参考。
+4. 产出一页选型对比 + 一个能跑的 POC 判据（例：`dia env run` 只拿到声明的 2 个键，未声明的键读取失败且有审计行）。
+
+> 结论落地前，继续沿用现有 `dia env` 白名单注入；**不要在调研期引入第二套凭据路径**。
+
+---
+
+## 6. 调研摘要（2026-11-04）
+
+> 来源：Bitwarden 官方 CLI 文档、trustless 的两篇 bw 自动化笔记、awesomecli 的 agent 指南、社区实践。结论只取可验证的行为约定。
+
+**关键事实（会决定方案）**
+
+1. **`BW_SESSION` 是 bearer 凭据**：拿到它就等于拿到该账号可见的全部 vault；只能放环境变量，**不能进 argv**（`ps`/`/proc/<pid>/cmdline` 同用户可读）。
+2. **每次 `bw unlock` 会让之前所有 session key 失效**——多个任务各自 unlock 会互相踢掉。这条直接否掉"每个 task 自己解锁"。
+3. `bw lock` 只锁不解登；`bw logout` 才结束身份。无人值守脚本结束应 `lock`（共享机用 `logout`）。
+4. `bw serve` 等于把 vault 能力开成常驻本地服务，只在完全可控的机器上用。
+5. 官方提供 `--passwordenv` / `--passwordfile`；API key 登录可给自动化独立身份与轮换周期，避免用人的主密码。
+
+**对我们问题的直接含义**
+
+- "按账号分组"不是实现问题，是 bw 的访问模型：**会话粒度 = 账号**。要任务级最小权限，必须自己做 broker，而不是给 agent 一个 `bw` 会话。
+- 因此候选方向收敛为：**单 broker 进程持有唯一 session**（它负责 unlock/lock、按请求只返回声明的键），agent 侧永远拿不到 `BW_SESSION`。
+  - 这也解释了为什么"每次放行靠账号分组"体验差：粒度根本不在 bw 这一层。
+- 备选（成本从低到高）：短时令牌优先于长期 key；敏感域独立 vault；引用式（SOPS/age/Vault）只在 CI/无交互场景更合适。
+
+**POC（2026-11-04 已实现，含常驻 broker）**
+
+```bash
+dia env bw unlock [--passwordfile P]   # session 落 0600，不回显
+dia env bw status                      # unauthenticated/locked/unlocked
+dia env bw run --map DB_PASS=db-item -- <cmd…>
+dia env bw lock                        # 同时清本地 session
+dia env bw serve                       # 常驻 broker（unix socket 0600）
+dia env bw get --item db --task t-1    # 走 broker，写审计行
+```
+
+实现约束：`BW_SESSION` 只存在于 bw 子进程环境；映射外的键一律不注入；任一条取不到 → 不执行命令（fail-closed）。
+
+**审计**：`bw.jsonl` 记录每次取用（含失败）；`DIA_BW_AUDIT_CHAIN=1` 时成功取用同时写入主审计链（`tool=bw`，只记键名）。
+
+**与 `dia env run` 合并**：`dia env run --bw KEY=item -- <cmd…>`，白名单键与 vault 映射一起注入；子进程永远看不到 `BW_SESSION`。
+
+**常驻化**：`packaging/launchd/` 有 broker 的 launchd 模板（RunAtLoad + KeepAlive）；前置是先 `dia env bw unlock`。
+
+**判据（POC 验收）**
+
+1. agent 进程环境里**没有** `BW_SESSION`；
+2. 只能取到任务声明的 N 个键，未声明的键请求即失败（fail-closed，非空返回）；
+3. 同一时刻起 3 个任务不会互相踢掉会话（单 broker 持有）；
+4. 每次取用留一行审计（谁/哪个任务/哪个键，不含值）。
+
+
+---
+
+<!-- security/public-release.md -->
+
+# dia Public Release Gate
+
+> 状态：**BLOCKED until audit**（2026-10-30）
+> 适用：把 `minonl/dia` 从 private 改为 public 之前。任何一项失败都不得公开。
+
+---
+
+## 1. 硬门禁
+
+| # | 项 | 通过条件 |
+|---|---|---|
+| 1 | 当前树脱敏 | 无凭据、PII、公司/内部域名、家目录、内部仓库链接、业务知识 |
+| 2 | Git 历史清洁 | 所有 ref 可达历史扫描通过；旧敏感对象不可达；tags/releases 已清理 |
+| 3 | GitHub 元数据 | 仓库描述、topics、Actions 日志、releases、issues/PR、wiki 无内部信息 |
+| 4 | 配置 | provider/baseURL/token 全部走 env 或通用占位符，无硬编码 |
+| 4b | 运行时 | 无 Python 依赖；`packages/job` 的 JSON 层迁到 Node/Bun（见 `docs/migrations/no-python.md`） |
+| 5 | 打包 | `private` 仅在 audit 通过后移除；lockfile/registry 无私有源；无 source map 泄漏 |
+| 6 | 文档 | 内部迁移文档移出 public 仓或脱敏；示例全部通用化 |
+| 7 | 政策文件 | `LICENSE`、`SECURITY.md`、漏洞报告渠道就绪 |
+| 8 | 独立审核 | `dia-security` agent 出 `pass` 报告 + 人工签字；自签无效 |
+
+---
+
+## 2. 安全审核 agent
+
+定义：`team/agents/dia-security.md`。只读、不得改文件、不得执行写操作。
+
+输出必须是 JSON：
+
+```json
+{
+  "verdict": "pass|blocked|unknown",
+  "scope": "commit/tag",
+  "findings": [
+    {"id": "...", "severity": "P0|P1|P2|P3", "area": "tree|history|metadata|config|package|docs", "evidence": "...", "fix": "..."}
+  ],
+  "history_clean": true,
+  "public_ready": false
+}
+```
+
+规则：
+
+- 任一 P0/P1 → `blocked`；
+- 无法扫描（缺工具/权限/历史不完整）→ `unknown`，不得算通过；
+- 发现即记录证据文件 `docs/security/audits/<date>.json`（不含 secret 原文）。
+
+---
+
+## 3. 扫描清单（通用模式）
+
+> 文档不写具体公司词；审核时用内部词表，不把词表提交进 public 仓。
+
+### 3.1 当前树
+
+- 凭据形态：API key/token/私钥/`.env`/`opencode.db`/`session*.jsonl`
+- 内部标识：公司名、内部域名、内部仓库 URL、工号、组织 ID
+- 个人信息：`/Users/<name>`、`/home/<name>`、邮箱、手机号
+- 业务知识：工作域规则、客户/商品/组织数据、内部项目名
+- 配置：硬编码 provider/baseURL/token；测试夹具中的真实值
+
+### 3.2 Git 历史
+
+```sh
+git rev-list --all --count
+git log --all --oneline
+git log --all -p | <scanner>
+git rev-list --all --objects | <object-scanner>
+git tag -l
+git for-each-ref
+```
+
+- 旧敏感 commit 必须不可达（重建历史或 filter-repo）；
+- force push 后仍需向 GitHub Support 申请 GC/purge，避免缓存对象；
+- 检查 tags/releases/annotations，不只 branch。
+
+### 3.3 GitHub 元数据
+
+- repo description/topics
+- Actions run logs 与 artifacts
+- Releases / tags / packages
+- Issues / PR / wiki / discussions
+- Deploy keys / webhooks / collaborators（公开前最小化）
+
+---
+
+## 4. 公开顺序
+
+1. 当前树脱敏 + 测试全绿；
+2. 重建/过滤历史；本地 `git grep` + 全历史扫描通过；
+3. 安全审核 agent 出报告；人工复核签字；
+4. force push + 申请 GitHub GC；
+5. 再扫一次远端 HEAD 与 tags；
+6. 最后才把 visibility 改为 public。
+
+任何一步发现敏感项：回到 1，不跳过。
+
+---
+
+## 5. 当前状态
+
+- `dia` 历史已于 2026-10-30 重建为单提交（当前仓库继续追加干净提交）；
+- 仍待完成：公开前全量扫描、内部迁移文档处理、GitHub 元数据检查、独立审核报告；
+- 因此**当前不得转 public**。
+
+
+---
+
+<!-- status.md -->
+
+# dia 状态页（单一事实源）
+
+> 更新：2026-11-03（复核：`bun test tests` 286/39 全绿）。任何"现在做到哪了"的问题，以本页为准；其他文档是细节。
+> 规则：状态必须能追到**命令/测试/提交**；没有证据的写"未验证"。
+
+---
+
+## 1. 文档清单
+
+> 三方合起来的现状看 [`overview.md`](overview.md)；本页只管 dia 自己的阶段与证据。
+
+| 文档 | 内容 | 状态（2026-11-03） |
+|---|---|---|
+| `overview.md` | **三方现状**：dia/yan/dabo 对照、能力面、缺口、文档地图 | 现行 |
+| `vision.md` | **长期定位**：superagent/agent-team 工厂、平台经验库、fleet 边界 | 方向（不是现状） |
+| `platforms/index.md` | **AI 工具平台经验库**：版本矩阵、断代与坑、验证命令、脱敏规则 | 现行（P0 持续补） |
+| `security/credentials.md` | 凭据管理现状与调研待办（bw 分组粒度问题） | 待调研 |
+| `HANDOFF.md`（仓库根） | 交接入口：复验判据 / 接手须知 / 坑 / 待决策指针 | 现行 |
+| `status.md` | 本页：阶段、判决、待决策 | 现行 |
+| `cli.md` | CLI 词表 + §4.1 实现状态 | 现行 |
+| `persona-install.md` | persona/kit 安装：git → opencode/dsh 渲染 | 现行 |
+| `monorepo.md` | core / kb / job / cli / wt 布局 | 现行 |
+| `team.md` | 开发团队 4+3 | 现行 |
+| `pricing.md` | 计价表与 `price` 命令 | 现行 |
+| `dependency-registry.md` / `deps.jsonl` | 依赖登记格式（只追加） | **现行**：`deps.jsonl` 是单一事实源，`dia doctor` 派生校验（M1） |
+| `versioning.md` | 多版本、semver、激活模式 | **部分**：多版本 + `use` 已实现；`activation` 未实现 |
+| `architecture.md` | 三层职责、知识存储选型、抽取顺序 | **设计**（§7 待定已全部落定，见文内 2026-11-03 注） |
+| `history/framework-bootstrap.md` | 早期启动与分发选型（已归档） | **归档**：方案未采用，实际分发是 `install.sh`，不要按它部署 |
+| `entrypoints.md` | 用户入口矩阵 | **部分过时**：终端 dabo preset 已渲染；IM bridge 未写；`dia status` / `dia model` 不存在 |
+| `kit-install.md` | kit 清单、渲染、生命周期 | **设计**：实现只有 `add/list/verify/remove`；`show/update/gc/create` 未做 |
+| `patching.md` | 本地 patch | **未实现**（`unknown command`） |
+| `team-automation.md` | 计划→实现→验证全自动循环 | **未实现**（D0.6–D0.9 只跑通 mock / ACP 驱动） |
+| `proposals.md` | `team next` 目标候选 | **v0 已实现**（`dia team next`，纯规则打分） |
+| `security-sandbox.md` | 沙箱单 seam、档位、fail-closed | **部分未实现**（S4–S7） |
+| `security/public-release.md` | 公开 release 门禁 | **BLOCKED until audit** |
+| `acp-integration.md` / `ecosystem-*.md` | ACP 与生态选型 | **设计 / 参考**（server 未做） |
+| `model-behavior.md` / `model-baseline-sidecar.md` | 客户端模型调控、基准 sidecar | **有据，未实施**（D2） |
+| `evolution-process.md` | `(T,D,O)`、V 型、压缩 | **理论**（D3 未实施） |
+| `host-control-surface.md` | opencode/dsh 控制面 L0/L1/L2 | 参考 |
+| `migrations/yan-agent-current.md` | yan → dia 迁移现状 | **现行** |
+| `migrations/*`（其余） | 当时的迁移/清理结论 | **留痕**：可能已被推翻（`yan-kb-parity` 的「main 仍旧」已过期） |
+| `research/*`、`review/*`、`research/h0/*` | 实验与验证报告 | **留痕** |
+
+---
+
+## 2. 设计支柱 × 证据 × 判决
+
+| # | 支柱 | 证据 | 判决 | 下一步 |
+|---|---|---|---|---|
+| 1 | 进化过程（观测→记录→蒸馏→评审→尝试→度量→调整） | 理论：混合主动、JCS、MHC；本系统**未验证** | **有理论依据，未实证** | 用 4-fixture 跑完整一圈 |
+| 2 | `(T,D,O)` 多维状态 | 理论：types×levels、SA、信任校准；Δ/自报已被纠正 | **部分支持，需实验** | state 事件 + 一次样本 |
+| 3 | 审计/冻结（H1/H2） | 29 测试、E2E 9 段、独立验证修复 P1/P2 | **支持（局部）** | 哈希链（M3） |
+| 4 | 独立验证 | pilot 发现 10 问题、其中 2 个严重且自测全绿 | **支持** | 每里程碑固定执行 |
+| 5 | 沙箱 | dsh 只文件；seatbelt 网络/路径/symlink 实测；状态保护未实现 | **部分** | S4–S7 |
+| 6 | 知识索引 / 采集 | yan 103 篇基线；257 episode；源只读实测；opencode 会话跨 project 已覆盖 | **支持（管线）** | 保留策略 |
+| 7 | 模型调控 | 五家源码对照；baseline/sidecar 设计 | **有据，未验证** | ModelSpec + canary |
+| 8 | 验收双票 / 路由 | 用户决定；无实验 | **假设** | H13/H14 |
+| 9 | 团 / 档位 | 无先例、无第二场景；已 defer | **无证据** | H4/H5（暂缓） |
+| 10 | ACP / 生态 | 五家服务端 + acpx；无 dsh 桥 | **支持（参考）** | 先做 server |
+| 11 | 团队 4+3 | 首次独立验证即回本 | **支持** | 固化为门禁 |
+| 12 | 依赖/记录治理 | SBOM/PITR/GDPR/AU-11 标准 | **有据，未实现** | M1–M5 |
+
+**一句话判决**：
+> **"进化过程 + 审计/门禁 + 证据纪律 + 模型基准"有搞头；"引擎/团/档位"没有证据，已被降级。**
+> 继续投入的条件：D1–D3 能跑出真实数据；否则停止扩张。
+
+---
+
+## 3. 计划状态
+
+| 阶段 | 内容 | 状态 | 证据 |
+|---|---|---|---|
+| D0 | kb / ingest / audit / freeze / run / resume | **完成** | 29 测试 + E2E 9 段（Node+Bun） |
+| D0.5 | 独立验证 + 修复 P1/P2/P5/P7/P10 | **完成** | `docs/review/verification-2026-10-28.md` |
+| D0.6 | task 台账 + 团队状态机 + 验收门禁（mock） | **完成** | 43 测试 |
+| D0.7 | ACP TeamDriver（opencode） | **成功/失败路径均跑通** | 成功→accept；失败→escalated；tokens 记账；只读副本+脱敏+清理 |
+| D0.8 | ACP TeamDriver（dsh） | **成功/失败路径均跑通** | 每角色 profile（只读沙箱）；4 次调用/34k tokens；失败→escalated |
+| D0.9 | H9/H10：角色 JSON 契约 + 修复重试 | **实现+单元测试** | 68 测试；build/smoke/e2e（node+bun）通过；真实模型修复率待测 |
+| D0.10 | H0：三层覆盖分类实验 | **推翻（严格口径）** | 20/140 抽样：17/20=85%；宿主适配缺口 3；成本未测；见 `docs/research/h0/report.md` |
+| D0.11 | yan-agent 迁移 dia | **本机已切换；dsh host 已补；剩余项见清单** | `yan` persona 生效；dsh profile 3091；AGENTS/default agent 已切；见 `docs/migrations/yan-agent-current.md` |
+| D0.12 | yan-kb → dia kb 能力矩阵 | **K2.5 next 已切；main 仍 old** | next 默认 dia + auto-index；old 可回滚；main/现网未替换；见 `docs/migrations/yan-kb-parity.md` |
+| D0.13 | dia monorepo（core/kb/job/cli） | **M3b 完成；M4 归档** | `packages/kb`、`packages/job`、`packages/cli`；独立 `dia-job` 已归档；见 `docs/monorepo.md` |
+| D0.14 | public release gate | **BLOCKED until audit** | 必须完成脱敏 + git 历史清洁 + `dia-security` pass；见 `docs/security/public-release.md` |
+| D0.15 | dia global install + CLI package (M3a/M3b) | **完成** | `install.sh` + `packages/cli`；根 `src/cli.ts` 兼容；88 tests |
+| D0.16 | Python 清理 | **完成** | experiments/TS + `packages/job/lib/json.mjs`；全仓无 python3；见 `docs/migrations/no-python.md` |
+| D0.17 | persona/kit 安装形态（kit + 内联内容 + scope + 委派） | **完成** | `src/{kit,scope,active,env,doctor}.ts`；`tests/{kit,scope,env,active-doctor}.test.ts` |
+| D0.18 | 生效版本指针 + 审计 | **完成** | `dia persona use/show`；`state/active.json(l)`；scope 先读指针 |
+| D0.19 | 凭据注入（白名单 → 子进程） | **完成** | `dia env list/check/run`；不回显、redact、不进 argv |
+| D0.20 | 组合自检 | **完成** | `dia doctor`（persona/kit/knowledge/dsh preset/wt；exit 0/1/2） |
+| D0.21 | worktree 抽取 `packages/wt` | **完成** | 7 处 python→node；`dia wt`；4 套测试原样迁移全绿 |
+| D0.23 | doctor 平台版本自检 | **完成** | `platform:opencode` / `platform:dsh` 报版本（缺宿主 = warn，不判红）；`tests/active-doctor.test.ts` |
+| D0.43 | broker 取用写主审计链 | **完成** | `DIA_BW_AUDIT_CHAIN=1` 时成功取用追加 `audit.jsonl`（tool=bw、note=ENV=item，无值）；默认关，避免测试/日常噪声；失败只留 `bw.jsonl` |
+| D0.42 | env run 接 bw 白名单 | **完成** | `dia env run --bw KEY=item …`：白名单 + broker 取用合并注入；子进程环境剔除 `BW_SESSION`/`BW_PASSWORD`；`serve --passwordfile` 支持启动解锁；`tests/bw-cli.test.ts` |
+| D0.41 | accept 接 CI 门禁 | **完成** | `dia team accept <id> --pr N [--repo R] [--merge]`：先验 `gh pr checks` 全绿，绿才接受；`--merge` 顺带 squash 合并；`tests/team.test.ts` |
+| D0.39 | 合并门禁脚本 | **完成** | `scripts/pr-merge.sh`：CI 全绿才 `gh pr merge`（私有仓无 branch protection）；`tests/pr-merge.test.ts` |
+| D0.40 | bw broker launchd 模板 | **完成** | `packaging/launchd/com.minzhao.dia-bw-broker.plist.template` + README（load/unload/检查） |
+| D0.38 | bw broker 常驻进程 + 审计行 | **完成** | `dia env bw serve/get`：unix socket（0600，不监听 TCP）、单进程持有 session；每次取用写 `audit/bw.jsonl`（env/item/task/ok，**不记值**）；client 优先走 broker，不在才回落本地 session；`tests/bw-broker.test.ts` |
+| D0.37 | 团队快照移出 run 目录 | **完成** | 快照落系统临时目录（`snapshots.json` 登记，结束即删）；角色会话不再能顺着相对路径摸到验收证据；277 tests |
+| D0.36 | bw 单会话 broker（POC） | **完成** | `dia env bw status/unlock/lock/run`：session 只落 0600 文件、永不打印/进 argv；`--map KEY=item` 只注入声明键；子进程环境剔除 `BW_SESSION`/`BW_PASSWORD`；取不到即 fail-closed；`tests/bw*.test.ts` |
+| D0.35 | dsh 驱动自动修复对齐 ACP | **完成**（团队产出 + 人工补齐） | 抽出 `repairRedteamHighs`（ACP/dsh 共用）：high → builder 修 → 复跑判据（20MB buffer / 600s）→ 复检；dsh 成功路径写 `run.json`；268 tests |
+| D0.34 | 判据证据由 gate 现场重跑 | **完成**（团队升级后人工补齐） | gate 只认任务台账的 judge，在 `run.json` 记录的 workspace 里重跑；忽略任何角色写的 `judge.json`；mock run 不再能当验收证据；`tests/team.test.ts` 覆盖 |
+| D0.33 | audit off-box checkpoint | **完成**（团队产出） | `DIA_AUDIT_CHECKPOINT`：两阶段（pending 公告 → 落盘 → 确认）、`checkpoint_id`、路径校验（绝对/不在审计目录/非常规文件）；`protection=anchored:*` 判定；248 tests |
+| D0.32 | doctor 渲染产物检查 | **完成**（团队产出） | `persona.renderDrift`（只读，复用 compareDir 口径）+ `persona.render` 检查：宿主产物被改/丢失 → warn 并给 `dia persona render <id>`；跳过场景不拉红；237 tests |
+| D0.31 | redteam high 自动修复 | **完成** | `team gate` 遇 high 判 fail；`run --acp` / `run --dsh` 同一套闭环：high 回灌 builder 修一轮 → 复跑判据（`run.json` 的 workspace）+ 复检一轮，仍不达标则 escalated；`redteam.json` 带 `repaired/round`；`tests/team-acp.test.ts` 两条驱动路径均覆盖 |
+| D0.30 | 清理过期内容 | **完成** | `docs/framework-bootstrap.md` → `docs/history/`（归档并标注不采用）；删除 `doctor.ts` 未用常量；全仓无 `deps.yaml` 残留引用 |
+| D0.29 | audit 哈希链（M3） | **完成**（团队自动循环 + 人工修正） | `audit append` 写 `seq/prev_hash/hash`；`audit verify --chain`；锚点 `audit/head.json`（原子写，截断/锚点缺失 fail-closed）；mkdir 锁串行化写入；坏行判链断点；离箱检查点 `DIA_AUDIT_CHECKPOINT`（两阶段公告/确认写、head→checkpoint 顺序、写失败回滚、同域伪造/回滚/未公告行检出、缺失/损坏 fail-closed、未配置仅告警）；`tests/audit.test.ts` 46 例 |
+| D0.28 | ACP 默认超时 10 分钟 | **完成** | `DEFAULT_ACP_TIMEOUT=600000`（180s 实测会掐断 builder）；`tests/team.test.ts` |
+| D0.27 | doctor 知识索引新鲜度 | **完成**（团队自动循环产出） | `packages/kb` 的 `indexStatus`（只读探测，不建目录）+ doctor 三态：目录缺失 fail / 索引缺失·落后·外部根 warn（带重建命令）/ 一致 ok；`tests/active-doctor.test.ts` |
+| D0.26 | `dia deps list/record` | **完成** | 追加与派生视图进 CLI；`tests/deps-cli.test.ts` |
+| D0.25 | 依赖登记迁移 JSONL + 校验（M1） | **完成** | `docs/deps.jsonl`（只追加，同 id 取最后一行）+ `src/deps.ts`（PATH/版本/路径探测）+ `doctor` 的 `deps` 项；`tests/deps.test.ts` |
+| D0.24 | 平台注册表（单一事实源） | **完成** | `docs/platforms/registry.json`（支持范围/实测版本/坑）+ `src/platforms.ts` 版本判定 + `doctor` 派生视图；`install.sh` 分发注册表；`tests/platforms.test.ts` |
+| D0.22 | 安装/自检一致性修复 | **完成** | `doctor` 多 persona 逐项自检；`scope` 旧 lock 缺 `content` 时读 `dia.json` 兜底；`render --check` 跳过宿主自写 `cordis.yml`；`persona add --force`（先备份） |
+| D1 | doctor 依赖校验（M1）+ audit 哈希链（M3） | **M1 完成；M3 未开始** | `src/deps.ts` + `doctor` 的 `deps` 项；哈希链未做 |
+| D2 | ModelSpec + 首次基准 + 事故 sidecar | **未开始** | 设计完成 |
+| D3 | state 事件 + `(T,D,O)` 视图 | **未开始** | 设计完成 |
+| D4 | 私有 canary（PR + episode） | **未开始** | 设计完成 |
+| — | 热更新边界 | **persona 不热更（H19）**；工具新增可公告（H17），移除仅 `in-history` | 实现能力探测 |
+| — | watchdog 抽取 | **defer**（2026-11-04） | 无 license、测试不可移植 |
+| — | 团 / 档位 | **defer** | H4/H5 未验证 |
+| — | npm 发布 / ACP server | **未开始** | package `private: true` |
+
+---
+
+## 4. 团队与门禁
+
+- 固定：架构 / 实现 / 验证 / 档案；按需：红队 / 研究 / 发布。
+- 门禁：无判据不开工；**无独立验证不合并**；行为改动人批；自签 = 违规。
+- 首轮指标：独立验证发现率 100%（实现者自测全绿）。
+
+---
+
+## 4.1 已定（2026-10-28）
+
+- 默认生效时机：**next-session**（运行中会话不惊动）。
+- patch 范围：**限定**——提示词/知识/技能实现可改；capabilities/安全策略/凭据不可改。
+- 版本：semver + `breaking` 标记；dia 建议、硬检查强制；模型审查只补充不推翻。
+
+## 5. 待决策
+
+1. D1 先做 doctor 还是 audit 哈希链？
+2. D2 的 ModelRunner 以 dsh 为首，是否需要同时接 opencode？
+3. D3 的 state 事件是否先只做"深度 + 障碍"两类？
+4. D4 的 PR 题源是否只在本地生成、不进任何远程？
+
+---
+
+## 6. 不做什么（防止漂移）
+
+- 自建沙箱 / 重试 / 压缩（复用 dsh）。
+- 公共市场 / 自动安装。
+- 多引擎运行时。
+- 无证据的团/档位扩张。
+- 未经过独立验证就宣布完成。
+
+
+---
+
+<!-- team-automation.md -->
+
+# 全自动团队：人只在验收介入
+
+> 日期 2026-10-28。目标：**计划→实现→验证→对抗→修复全自动循环；人只在验收阶段拍板。**
+>
+> **状态（2026-11-03 更新）**：部分实现。已落地：`dia team run --mock|--acp|--dsh`、`gate/accept/reject`、`task` 台账；
+> **redteam 的 high 级反驳会自动回灌 builder 修一轮**（复跑判据 + 复检，仍不达标才 escalated），gate 对 high 直接判 fail；
+> `--acp` 与 `--dsh` 两条驱动路径共用同一闭环与同一判据。
+> 未落地：多轮修复后的模型重打分、验收包的机器可读格式。
+> 前提：每个角色是宿主里的独立 persona；编排由确定性脚本驱动；模型只做角色内判断。
+
+---
+
+## 1. 自动机
+
+```
+queued
+  → planning       (planner：计划 + 验收判据 judge + 任务拆解)
+  → building       (builder：worktree 内实现 + 测试)
+  → verifying      (verifier：独立只读，三态结论)
+  → redteaming     (redteam：反驳清单，每条可复现)
+  → fixing         (builder：逐条回应/修复；≤N 轮)
+       ↑__________________________|
+  → awaiting_acceptance  (生成验收包，停下)
+  → accepted / rejected
+```
+
+**人在哪**：只在 `awaiting_acceptance` 出现；其余阶段人可看但不需要操作。
+**谁能停**：确定性门禁（预算/判据缺失/连续失败）可自动升级到 `escalated`，同样停在人面前。
+
+---
+
+## 2. 角色与权限（能力包络）
+
+| 角色 | 工具 | 读/写 | 不许 |
+|---|---|---|---|
+| **planner** | read, grep | 只读 | 写代码、改判据 |
+| **builder** | bash, git, edit（仅 worktree） | 写 | 自签验收、改 judge |
+| **verifier** | bash（只跑判据） | 只读 | 改代码、与 builder 同上下文 |
+| **redteam** | read, bash（只复现） | 只读 | 空泛吐槽、改判据 |
+| **lead（脚本）** | 无模型 | 编排/记账 | 代替任何角色判断 |
+
+**硬规则**：builder ≠ verifier；verifier 只认命令+输出；`无法判定 ≠ 通过`。
+
+---
+
+## 3. 确定性门禁（脚本判，不看模型）
+
+| 门 | 判据 | 失败 |
+|---|---|---|
+| 有判据 | `judge` 非空且可执行 | 回 planning |
+| 测试 | builder 的测试命令 exit 0 | 回 building |
+| 验证 | `verify.json` 含 `conclusion` 三态 + 证据 + commit | 回 verifying |
+| 对抗 | `redteam.json` 每条有触发/后果/复现/严重度 | 回 redteaming |
+| 自签 | verifier ≠ builder（会话/身份不同） | **拒绝** |
+| 预算 | 轮数 ≤3、token/时长/成本 ≤上限 | `escalated` |
+| 验收 | 以上全过 + packet 完整 | 停在人面前 |
+
+---
+
+## 4. 验收包（人只看这个）
+
+```
+runs/<task-id>/
+├── plan.md            # 目标、判据、拆解
+├── diff.patch         # 变更
+├── test.log           # 测试命令与输出
+├── verify.json        # 三态结论 + 证据
+├── redteam.json       # 反驳清单 + 处置
+└── packet.md          # 一页摘要：改了什么、风险、没做什么、结论
+```
+
+人只做：`dia team accept <id>` / `reject <id> --reason ...`。
+
+---
+
+## 5. 失败与升级
+
+| 情况 | 行为 |
+|---|---|
+| 验证不通过 | 回 building，带证据修复（≤3 轮） |
+| 同一失败重复 2 次 | 停止，标 `escalated`，附两次证据 |
+| 预算超限 | 停止，附成本/轮数 |
+| 判据不可执行 | 回 planning，要求可执行判据 |
+| 需要政策/权限变更 | 标 `needs-human`，进验收包 |
+
+---
+
+## 6. 编排实现（不重写运行时）
+
+```
+dia team run <task-id>
+  ├─ TeamDriver：start(role) / prompt(session, text) / collect(session) / close
+  ├─ 首个驱动：opencode ACP（session/new → mode=role → prompt → 读事件）
+  ├─ 次驱动：dsh ACP（profile 每角色一个）
+  └─ 所有角色产物落 runs/<task-id>/，脚本校验后才进入下一阶段
+```
+
+- 角色 = persona（`dabo-planner` / `dabo-builder` / `dabo-verifier` / `dabo-redteam`）；
+  - **模型**：由对应 `dabo-<role>` profile / 用户配置决定；需要覆盖时 `DIA_DSH_MODEL=provider/model`（也接受 JSON 数组）。
+    代码不再写死模型（2026-11-01 移除 `example/*` 硬编码）。
+  - **前提**：每个角色要有对应 dsh profile（`dsh --profile dabo-planner` 等）。当前 dabo persona 只渲染 `dabo` 一个
+    profile，角色 profile 属 M5（团落地）范围；缺失时 `dsh` 会直接报 profile 不存在。
+- 每个角色独立会话，**不共享上下文**；只传文件产物（plan/diff/report）；
+- 编排器不调用模型，只调度与校验。
+
+---
+
+## 7. 非目标
+
+- 不自动合并、不自动发布、不自动外发。
+- 不允许 verifier 与 builder 同会话。
+- 不允许没有判据就进入 acceptance。
+- 不把"模型说通过"当通过。
+
+---
+
+## 7.1 实现状态（2026-10-28）
+
+| 件 | 状态 |
+|---|---|
+| task ledger（add/list/status/done，done 需 judge+evidence） | ✅ |
+| runs 目录 + 验收包六件 | ✅ |
+| 门禁（六件齐全、verify 三态、证据非空、findings 合法） | ✅ |
+| accept / reject | ✅ |
+| `team run --mock` 状态机 | ✅（用于验证门禁） |
+| **ACP 驱动（opencode）** | ✅ 跑通成功/失败路径 |
+| **ACP 驱动（dsh）** | ✅ 每角色独立 profile（`dabo-{role}`），跑通成功路径 |
+| dsh 用量 | ✅ 从 session 日志增量采集（实测 4 次调用 / 34k tokens，含 redteam） |
+| 输出归一化 | ✅ PASS/FAIL/verdict → 三态；redteam issues → findings |
+| H9 角色契约 | ✅ planner/verifier/redteam prompt 写死 JSON 字段与示例 |
+| H10 修复循环 | ✅ 非法 JSON → 带 offset 重试一次；dsh 重试带 repo/judge/diff 上下文；二次失败升级 |
+| 证据闸门 | ✅ 空/占位证据（`(no evidence)`）不可过 gate；planner 解析失败写 packet 并 escalated |
+| 角色 persona（planner/builder/verifier/redteam） | ✅ 已装到 `~/.config/opencode/agents/dabo-*.md` |
+| verifier/redteam 只读 | ✅ agent `edit: deny` + **只读工作副本**（shell 写也打不到原仓库） |
+| 快照脱敏/清理 | ✅ 排除 `.env*`/`.npmrc`/`.git/config`/密钥；结束自动删（`DIA_KEEP_SNAPSHOTS=1` 保留） |
+| 失败修复循环（≤3 轮） | ✅ opencode/dsh 均实测：`judge exit 1` → 4 次尝试 → `escalated`，gate/accept 拒绝 |
+| dsh 角色只读 | ✅ planner/verifier/redteam profile 设 `sandbox-policy: read-only`；实测 `touch` 被拒（exit=1，文件未创建） |
+| 成本/用量记账 | ✅ tokens 落 `runtime/model-calls.jsonl` + 每任务 `usage.json`（金额待价目表） |
+
+## 8. 最小落地顺序
+
+1. **task ledger + runs 目录**（状态机与产物）；
+2. **`dia team run` 骨架**（无模型也能跑状态机，先回放假产物）；
+3. **接入一个驱动**（opencode ACP），让 planner/builder 能产出；
+4. **接入 verifier/redteam**，打开自动循环；
+5. **验收包 + accept/reject**。
+
+**只读隔离验证（2026-10-28）**：verifier 在 `runs/<id>/verify-ws-0` 副本里跑判据并通过；原仓库只保留 builder 的改动。
+`opencode debug agents` 可见 `edit: * deny` 追加在 agent 规则末尾。
+
+**已跑通的样例（2026-10-28）**：
+任务「创建 answer.txt=42」，判据 `grep -qx 42 answer.txt`；
+planner 出计划 → builder 写文件 → verifier 亲自跑判据（通过，4 条证据）→ redteam 看 diff（0 findings）
+→ `team gate` ok → `team accept`。
+产物：`plan.md / builder-0.md / verify.json / test.log / diff.patch / redteam.json / packet.md`。
+
+判据：用一个真实小任务跑完整圈，人在 acceptance 只做一次 accept/reject；全程无人工触发 verifier。
+
+**自动化回归（2026-11-01，2026-11-04 补 dsh high 修复闭环）**：`tests/team-acp.test.ts` 用假 ACP 服务器（`tests/fixtures/fake-acp.mjs`）跑通
+`team run --acp` 与 `--dsh`：planner → builder → verifier（通过/不通过两条路径）→ redteam → gate / accept，
+**不花模型钱**、结果确定；覆盖 `escalated`（退出码 30）、无判据 `E_TASK`，以及 high → builder 修复 + `redteam-2` 复检
+（清零 → awaiting_acceptance；仍 high 或判据非 0 → escalated，两条驱动路径各三例）。真实模型链路仍需人工跑一次。
+
+
+## 隔离边界（2026-11-04）
+
+- verifier / redteam 跑在**系统临时目录的快照**里，路径名不含 `task id`（无法反推 `runs/<id>`）
+- `runs/<id>` 以 `0700` 创建；验收证据（`judge.json`/`run.json`）由 gate 现场重跑判据生成/覆盖
+- **不是沙箱**：同一 OS 用户的进程仍可用绝对路径读写 `~/.local/share/dia`；要真隔离需要宿主级只读沙箱（dsh sandbox / 容器），当前不属于 dia 范围
+
+
+---
+
+<!-- team.md -->
+
+# 团队章程：谁来做 dia（开发团队）
+
+> 日期 2026-10-28。
+> **2026-10-28 升级**：开发团队执行模式改为**全自动循环**（计划→实现→验证→对抗→修复），**人只在验收阶段介入**；
+> 状态机、门禁、验收包见 `docs/team-automation.md`。本文保留角色定义与章程。
+> 先区分两层，别混：
+> - **产品团队**：dabo 的 9 个角色（大波/点子/爪子/炸毛/秤/记性/管家/信箱/磨爪）——是 agent 产品内部的角色。
+> - **开发团队**：做 dia 这个框架的人/agent 分工——本文。
+
+---
+
+## 1. 现状（诚实版）
+
+| 项 | 现状 |
+|---|---|
+| 固定组员 | **没有**。只有主 agent（我）+ 按需子 agent |
+| 角色是否落地 | 产品 9 角色只在文档里；开发角色没有定义 |
+| 实际分工 | 我同时做架构/实现/验证；研究、红队用一次性子 agent |
+| 最大风险 | **实现者与验证者是同一个人**，自签验收 |
+
+**结论**：现在不是"团队"，是"一个人 + 临时工"。
+
+---
+
+## 2. 建议的固定组员（4 个）
+
+"固定"不等于常驻进程，而是：**每个里程碑必须经过这个角色，且它有明确的输入/输出契约**。
+
+| 角色 | 职责 | 输入 | 输出 | 不许 |
+|---|---|---|---|---|
+| **主控（人）** | 意图、优先级、裁决、批准 | 设计/证据/风险 | 决策、批准/否决 | 替 agent 写代码/做技术判断 |
+| **架构（planner）** | 设计、假设、ADR、拆任务 | 需求/证据 | `docs/*.md`、H 条目、任务拆解 | 写实现、给自己签验收 |
+| **实现（builder）** | 代码、测试、文档同步 | 设计与判据 | diff + 测试输出 | 改判据、自签验收 |
+| **验证（verifier）** | 独立跑判据、三态结论 | diff + 测试 + 判据 | 验证报告（通过/不通过/无法判定） | 改代码、与实现同上下文 |
+| **档案（archivist）** | 证据、依赖、基线、历史 | 验证报告/探针结果 | `deps.jsonl`、`baselines/`、决策记录 | 写无日期无判据的裸事实 |
+
+**硬规则**：实现者 ≠ 验证者；验证者不得与实现者共享上下文（独立子 agent，只读 diff + 测试输出）。
+
+---
+
+## 3. 按需组员（3 个，不进固定编制）
+
+| 角色 | 何时启用 | 为什么不做固定 |
+|---|---|---|
+| **红队（redteam）** | 里程碑评审、合并前、安全相关改动 | 成本高，且需要"陌生视角"，常驻会钝化 |
+| **研究（researcher）** | 生态/基准/理论取证 | 项目式任务，完成即解散 |
+| **发布（ops）** | 打包、CI、launchd、版本 | 低频，可按阶段启用 |
+
+---
+
+## 4. 工作流（全自动，人只在验收）
+
+```
+人给意图
+  → 架构：设计 + 可证伪判据 + 拆任务（自动）
+  → 实现：代码 + 测试（自动）
+  → 验证：独立角色，只读 diff/测试，出三态（自动）
+  → 红队：反驳清单（自动）
+  → 修复循环（≤3 轮，自动）
+  → 验收包 → 人 accept / reject
+```
+
+详见 `docs/team-automation.md`。
+
+**门禁**：
+1. 没有判据不开工；
+2. 没有独立验证不合并；
+3. 行为类改动必须人批；
+4. 自签验收 = 违规（记入 `security_debt` 同类）。
+5. 证据缺失（命令 + 输出）= 无法判定。
+
+---
+
+## 5. 交付物契约（控制上下文成本）
+
+| 角色 | 交付物 | 长度上限 |
+|---|---|---|
+| 架构 | 设计文档 / ADR | 1 页/决策 |
+| 实现 | diff + 测试命令与输出 | diff 原样，输出摘要 |
+| 验证 | 三态报告 + 证据 | 半页 |
+| 红队 | 反驳清单 | 每条 4 要素 |
+| 档案 | 登记行 / 基线 JSON | 结构化，不写散文 |
+
+**原则**：agent 之间只传**结论 + 证据指针**，不传完整会话（避免上下文膨胀）。
+
+---
+
+## 6. 指标（团队自身）
+
+| 指标 | 目标 |
+|---|---|
+| 自签率（实现者自己签验收） | **0** |
+| 独立验证发现的问题数 / 总问题数 | ≥30% |
+| 返工率（因判据不清导致） | ↓ |
+| 证据缺失的结论数 | 0 |
+| 每位固定角色的上下文成本 | 可估算、可上限 |
+
+---
+
+## 7. 与"进化过程"的关系
+
+- 人机两个引擎：人是主控；电子脑内部再分架构/实现/验证/档案。
+- V 型：人守顶端；遇到障碍（判据不清、价值冲突）由架构/验证上升请示。
+- 团队是**过程的一部分**，不是目的；角色可以增减，但"独立验证"和"人批行为"两条不能省。
+
+---
+
+## 8. 立即要做的三件事
+
+1. **设独立验证**：每个里程碑用独立子 agent 复核（只读 diff + 测试），我先执行。
+2. **定交付物模板**：设计/验证/红队/档案四份，长度上限如上。
+3. **角色产品化（后置）**：等 dia 能渲染 preset 后，把这些角色做成 dsh/opencode 的 agent 定义。
+
+
+---
+
+<!-- versioning.md -->
+
+# 版本与多会话（persona / kit）
+
+> 日期 2026-10-28。问题：dia 要支持升级/本地迭代期间不同会话用不同版本 persona；kit 是否也要会话级版本？
+> 结论：**persona 硬钉；kit 按类型分**——工具/技能硬钉，知识滚动但记录索引哈希。
+
+---
+
+## 1. 为什么 yan 的做法不够
+
+yan：同一时间只有一个 agent 版本生效，升级 = 覆盖。
+问题：
+- 升级时在跑的会话会被动切换（或直接坏）；
+- 本地迭代无法与稳定版并存；
+- 出问题无法回答"这个会话当时用的哪版"。
+
+dia 需要：**多版本并存 + 会话级钉住 + 可追溯**。
+
+---
+
+## 2. 存储模型
+
+```
+~/.local/share/dia/
+├── personas/<id>/<version>/        # 每个版本完整目录（含 dia.json）
+├── kits/<id>/<version>/
+├── channels.json                   # stable/dev → 具体版本
+└── sessions/<session-id>.json      # 会话钉住的版本与哈希
+```
+
+- `version` = `semver+commit`（如 `1.2.0+abc1234`）；
+- 内容寻址：同 hash 的目录只存一份（跨版本去重）；
+- 保留策略：`gc --keep N`（默认 3），dev 版本可标 `ephemeral` 自动清。
+
+---
+
+## 2.1 semver 判定 + breaking 标记
+
+| 变更 | bump | 例子 |
+|---|---|---|
+| 移除工具/技能、工具签名变化、策略收紧或放宽、人格身份变化 | **major** | 删除 `bash` 工具、改审批阈值 |
+| 新增工具/技能、增量提示词、知识新增 | **minor** | 加 `dsh` 工具、补一条规则 |
+| 文档、错别字、非行为修正 | **patch** | 改说明文字 |
+
+- `dia.json` 可显式标 `"breaking": true`（或 `breaking: ["remove-tool:bash"]`）→ 强制 major。
+- `dia` 在 `persona update --check` 时**建议版本号**：按 diff 分类给出 `major/minor/patch`，作者确认。
+- **硬检查**：实际 bump 不得小于建议级别；否则拒绝发布。
+
+## 2.2 双重审查（硬检查 + 模型）
+
+| 闸门 | 检查 | 失败 |
+|---|---|---|
+| **硬检查（dia）** | schema、semver、hash、文件白名单、capabilities 是否扩大、secret 扫描、依赖约束 | **拒绝** |
+| **模型审查** | diff 是否削弱策略/引入注入/与 persona 意图冲突；给 verdict + 证据 | 标记 `needs-human`，人批 |
+
+模型**不能推翻硬失败**；硬检查**不替代**语义审查。
+
+## 3. 会话钉版本
+
+会话开始时解析并写入：
+
+```json
+{
+  "session_id": "...",
+  "persona": { "id": "dabo", "version": "1.2.0+abc1234", "hash": "sha256:..." },
+  "kits": [
+    { "id": "core", "version": "1.2.0+def5678", "mode": "pinned" },
+    { "id": "knowledge", "index": "idx-2026-10-28T10:00Z", "mode": "rolling" }
+  ]
+}
+```
+
+规则（基线）：
+- **persona：默认硬钉**；是否允许"增量补丁"取决于宿主能力（见 §3.1）。
+- **工具/技能 kit：默认硬钉**；增量新增可被感知，移除/签名变化需要新会话或 `in-history` 能力。
+- **知识 kit：滚动**，但**每次检索记录索引版本/hash**；eval/canary 场景可强制硬钉。
+- 没有记录 = 无法判定，审计直接标 `unknown`。
+
+### 3.1 能力分级（决定"能感知到什么"）
+
+| 级 | 能力 | 代表 | 能做什么 |
+|---|---|---|---|
+| **T0** | 无钩子 | 纯 CLI、无事件 | 只能下次会话生效 |
+| **T1** | 工具边界 | MCP 状态、工具报错 | 下次工具调用时感知（如"需要登录"） |
+| **T2** | 事件/预步 | dsh `tools/change`、`llm/adapters-updated`、`agent/pre-step`；opencode `event.subscribe`、`session.hook` | 下一轮模型请求前注入通知 |
+| **T3** | 原生增量更新 | dsh `toolUpdate=addition-only/in-history`；opencode `agent.transform` | 增量工具/定义可在会话内生效 |
+
+**关键差异（dsh 实测）**：
+- `addition-only`：新增工具以 tool-addition 块跟随缓存，**移除不通知**；
+- `in-history`：新增 + 移除都进历史，能感知移除；
+- 缺省：每次请求重写完整工具表（缓存失效）。
+
+### 3.2 变更类型 × 能力 → 动作
+
+| 变更 | T0 | T1 | T2 | T3 addition-only | T3 in-history |
+|---|---|---|---|---|---|
+| 知识更新 | 下次会话 | 下次检索 | 下次检索 | 下次检索 | 下次检索 |
+| **新增工具** | 下次会话 | 下次调用 | 注入通知 | **原生追加** | **原生追加** |
+| **移除工具/签名变化** | 下次会话 | 报错 | 通知 + 拒绝调用 | **下次会话**（不通知移除） | **原生移除 + 拒绝** |
+| persona 增量补丁 | 下次会话 | 下次调用 | **注入补丁通知** | 原生更新（若支持） | 原生更新 |
+| persona 换身份 | 下次会话 | 下次会话 | 下次会话 | 下次会话 | 下次会话 |
+
+**原则**：用当前会话能安全支持的最强动作，而不是一律降级；**破环性变更永远不静默热切**。
+
+**H19 实测（2026-10-28，opencode 2.1.3）**：
+同一 ACP 会话，`h19probe` agent 文件从 v1 改为 v2 后，第二轮仍返回 `H19-V1`；
+模型 reasoning 原文："The system update didn't change my identity."
+→ **persona 身份在会话内被钉住**；next-session 默认正确。
+（dsh 源码级一致：profile/bundle 启动时加载，headless HMR 关闭。）
+
+**H17 实测（`projectToolUpdates`，2026-10-28）**：
+给定历史 `a,b`、新增 `c`、移除 `a`：
+
+| 模式 | 工具声明 | 历史块 |
+|---|---|---|
+| `addition-only` | `b, c(deferred)` | 只有 `tool-addition:c`（**移除 a 不通知**） |
+| `in-history` | `a, b, c(deferred)` | `addition:c` + `removal:a` |
+| 缺省 | `b, c` | 无 developer 消息（每轮重写全表） |
+
+→ **新增工具可在会话内公告；移除只有 `in-history` 能感知**。
+
+---
+
+## 4. 通道（channel）：稳定版与迭代版并存
+
+```json
+// channels.json
+{ "dabo": { "stable": "1.2.0+abc1234", "dev": "1.3.0-dev+fedcba9" } }
+```
+
+- `stable`：日常入口，用户的默认选择；
+- `dev`：本地迭代，只给开发者/测试用；
+- 宿主侧映射：
+  - opencode：`dabo`（stable）与 `dabo-dev` 两个 agent 文件；
+  - dsh：`dabo`（stable）与 `dabo-dev` 两个 profile。
+- 这样升级 stable 时，dev 可以继续跑，互不影响。
+
+---
+
+## 5. 激活规则
+
+| 动作 | 行为 |
+|---|---|
+| `persona update` | 新版本落盘；按 `activation` 模式决定是否切 active |
+| `persona activate dabo@<ver>` | 切 stable 指针；有活跃会话时按能力分级：T3 增量可 `--apply active`，破环性变更要求 0 活跃 |
+| `--activate-now --i-am-human` | 强制切；运行中会话仍用旧版（宿主不热更） |
+| `persona gc --keep 3` | 清理旧版本；被会话引用/被 pin 的跳过 |
+| `persona rollback dabo` | 切回上一 stable（同 activate 规则） |
+
+---
+
+## 5.1 生效时机：用户选择并记住
+
+配置存 `~/.config/dia/activation.yaml`：
+
+```yaml
+dabo:
+  mode: next-session        # next-session | active-additive | active-all | manual
+  notify: true
+  confirm_breaking: true
+```
+
+| 模式 | 行为 | 适用 |
+|---|---|---|
+| **next-session**（默认） | 只切指针；运行中会话保持旧版 | 日常升级 |
+| **active-additive** | 只把"增量变更"推给活跃会话；破环性变更排队 | 加工具/加知识 |
+| **active-all** | 尝试全部生效；破环性需 `--i-am-human`；可能迁移/重启 | 紧急修复 |
+| **manual** | 只落盘；用户逐会话 `dia persona apply` | 保守/调试 |
+
+命令：`dia persona activation dabo --mode active-additive`（记住）。
+
+## 5.2 "所有会话立即用最新"能怎么做
+
+| 方式 | 保证 | 代价 |
+|---|---|---|
+| **增量注入**（T3） | 新增工具/补丁在下一轮生效 | 只支持增量；不覆盖破环 |
+| **会话迁移/fork** | 用新配置重建会话，保留上下文 | 依赖宿主 fork/resume；一次一会话 |
+| **重启宿主 daemon/profile** | 所有新会话必用新版；在跑会话中断 | 破坏性；仅 `active-all` 且人批 |
+| **标记 stale + 提示新建** | 不中断，用户自己换 | 用户需操作 |
+
+**没有"对运行中会话无损、全量、立即"的通用方案**；必须在上面四选一。
+
+## 6. 通知（热切必须提示）
+
+任何对活跃会话的变更都要注入提示（能注入时）：
+
+```
+[dia] persona dabo 1.2.0 → 1.3.0
+变更：新增 web 工具；排障口吻调整
+生效：下一轮 / 需新会话
+```
+
+- 注入点：dsh `agent/pre-step`；opencode `session.hook("context")`；
+- 不能注入（T0/T1）→ 在下一次工具结果或 `dia status` 中提示；
+- 同时写审计（`persona_switched` 事件，含 session/old/new/reason）。
+
+## 7. 宿主限制（必须写清）
+
+- **dsh**：profile 在进程启动时加载；多版本靠**多 profile**（`dabo` / `dabo-dev` / 可选 `dabo-<ver>`），不能在一个进程里换。
+- **opencode**：agent 文件按 id 加载；多版本靠**多 agent id**（stable/dev），不能同一个 id 两个版本。
+- dsh：`toolUpdate` 模式决定增量能力（`addition-only` 不感知移除；`in-history` 可感知）；profile 本身仍需重启。
+- opencode：MCP 状态实时（`mcp list` 可见）；agent 目录可由 `reload`/`agent.transform` 更新，但会话快照是否切换需探针（H17）。
+- **不做无差别的"一律热更"**：破环性变更（移除工具/换人格）永远要求新会话。
+
+---
+
+## 8. UX
+
+```
+$ dia persona list dabo --versions
+1.2.0+abc1234  stable   active sessions: 1
+1.3.0-dev+fed  dev      active sessions: 2
+
+$ dia persona activate dabo@1.2.0+abc1234
+refused: 3 active sessions; use --activate-now --i-am-human or wait
+
+$ dia session show ses_xxx
+persona dabo@1.2.0+abc1234
+kits core@1.2.0+def (pinned), knowledge@idx-2026-10-28T10:00Z (rolling)
+```
+
+---
+
+## 9. 待确认
+
+1. **知识 kit 的默认策略**：滚动 + 记录索引哈希（推荐）vs 会话硬钉。
+2. **多版本宿主映射**：stable/dev 双通道（推荐）vs 每版本独立 agent id / profile。
+
+
+---
+
+<!-- vision.md -->
+
+# dia 长期定位：从"安装器"到 superagent / agent-team 工厂
+
+> 2026-11-03，方向性文档。**它不是现状**——现状看 [`overview.md`](overview.md) 与 [`status.md`](status.md)；
+> 两者冲突时以现状为准。本文回答："一年后 dia 要长成什么，现在缺什么。"
+
+---
+
+## 1. 一句话
+
+**dia 是 superagent / agent-team 的生成与维护工具。**
+把一个「域」编译成能跑、能审、能进化的 agent（单域）或 agent-team（多角色），
+再把它送进更大的组织形态（rig / fleet / software factory）里自行工作。
+
+现在 dia 只做到这条链的前半段：**persona 安装 + 渲染 + 知识/审计控制面**；
+后半段（团队生成、平台版本经验、自身成为 agent、fleet 对接）还没有。
+
+---
+
+## 2. 产物谱系
+
+| 产物 | 域 | 形态 | 现状 |
+|---|---|---|---|
+| **yan** | 工作域 · 偏前端领域 | 单 superagent（16 个域命令 + 知识库 + 技能） | 已装，落后来源仓 1 个提交 |
+| **dabo** | 个人 · 游戏 / 生活 / 个人项目 | 单 superagent（人格 + 9 角色团定义 + 2 个域命令） | 已装，与来源一致 |
+| **redmine case agent**（计划） | 工作域 · 工单处理 | 单域 superagent（case 检索 → 判定 → 草稿 → 留痕） | 未开始 |
+| **家庭库管家**（计划） | 个人 · 家庭资料 | 单域 superagent（私有数据根 + 只读索引 + 定期巡检） | 未开始 |
+| **openrig rig**（计划） | 多 agent 协作 | agent-team / rig（组织形态见 §5） | 未开始；边界待定 |
+
+**编译链（dia 的职责）**
+
+```
+域内容（人格 + 知识 + 技能 + 命令 + 策略）
+   → dia persona/kit 校验 + 渲染（opencode / dsh / 未来宿主）
+   → 运行（宿主 / ACP / headless）
+   → 观测（audit / episodes / usage）
+   → 知识沉淀 + 评审
+   → 再编译（update / patch / activation）
+```
+
+判据：同一个域，换宿主只换 render target，不重写内容；换版本不丢审计与回滚。
+
+---
+
+## 3. dia 的两个面
+
+| 面 | 形态 | 属性 | 现在 |
+|---|---|---|---|
+| **A. 控制面** | `dia` CLI（确定性、无 LLM） | 可脚本化、可审计、可回滚；CI/门禁的稳定接口 | 已存在（见 `cli.md`） |
+| **B. dia-agent** | **独立 persona `dia-evoler`**（跑在宿主里，工具 = 控制面 + 知识） | 能对话、能规划、能解释"为什么这样配" | 未开始 |
+
+**仓库边界（2026-11-03 定）**：dia 仓库**只放控制面（工具）**。agent 面是独立 persona `dia-evoler`
+（独立仓 + 独立数据根），由 `dia persona create` 出骨架、`dia persona add` 安装；dia 不为它写专属代码。
+
+**B 不是把 LLM 塞进 A。** 硬边界：
+
+1. A 的每条命令保持确定性；同一输入同一输出，模型不参与判定。
+2. B 只能**调用** A，不能绕过门禁（写操作仍要 `--force` / 人确认 / 审计）。
+3. B 的成长 = 知识库 + 提案 + 评审，不是运行时自我改写（复盘见 `evolution-process.md`）。
+4. B 的产物仍然是 persona：可 `verify`、可 `remove`、可回滚。
+
+---
+
+## 4. 平台对接能力（当前最大的工程缺口）
+
+目标：**同一份域内容，能在不同平台 / 不同版本上稳定落地**，且每个坑都有记录、有判据。
+
+### 4.0 原则：宿主配置对 persona 透明
+
+persona 只声明"我是谁、我会什么"（逻辑入口、能力、策略）；opencode / dsh / pi / codex 的配置键、
+目录结构、frontmatter 由 dia 的适配层编译生成。**写 persona 的人不需要知道宿主怎么配。**
+
+现状差距：`dia.json` 仍要求按平台写 `entry.{opencode,dsh}`（同一份正文写两遍），
+`--host` 也只认这两家——这仍是"让 persona 操心宿主"。
+
+方向：清单收敛为 `agent`（一份正文）+ `capabilities` + 可选 `overrides`；适配层按平台生成；
+平台缺能力时**显式失败**（不静默降级）。
+
+### 4.1 需要的能力
+
+| 能力 | 说明 | 现状 |
+|---|---|---|
+| 配置矩阵 | opencode / dsh / codex / mimocode / zed / ACP 的配置键与渲染目标 | 只有 opencode + dsh；`ecosystem-integration.md` 有对照但无矩阵 |
+| **版本经验库** | 每个宿主 × 版本的：配置键、断代点、已知坑、验证命令、降级策略 | **缺**（坑散落在知识库与提交信息里） |
+| 能力探测 | 启动前判断宿主版本支持什么（hooks / ACP / skill 目录） | 只有 `dsh.checkPreset` 一项 |
+| 依赖校验 | `deps.jsonl` 与实际可执行文件/版本比对 | **已做（M1）**：`doctor` 的 `deps` 项 |
+| 降级策略 | 宿主能力缺失时明确降级还是失败（不静默） | 设计有（`entrypoints.md` §4），未实现 |
+
+### 4.2 版本经验库的建议形态
+
+```
+docs/platforms/       # 记录 AI 工具平台，不记录设备（脱敏规则见 index.md §0）
+  registry.json       # 单一事实源：支持范围 / 实测版本 / 已知坑（2026-11-03 起）
+  index.md            # 只写规则与用法，不复制数据
+  opencode.md         # 配置键、渲染目标、已知坑、验证命令（含 v1→v2 断代）
+  dsh.md              # bundle/patch 语义、preset 校验、冷启动坑
+  codex.md / mimocode.md / zed.md   # 有接入才建
+hosts.yaml            # 机器可读：version_range / checks / fallback（doctor 消费）
+```
+
+规则：**一条经验 = 版本范围 + 复现命令 + 现有判据**；没有复现命令的写"未验证"。
+`dia doctor` 按注册表探测本机并派生视图（`platform:<name>`）；`deps.jsonl` 仍是"装了什么"的账本，两者不混。
+
+---
+
+## 5. fleet / factory（openrig 层）
+
+边界建议（**待与 openrig 侧确认**）：
+
+| 层 | 谁负责 | 内容 |
+|---|---|---|
+| 域内容与配置 | **dia** | persona/kit、宿主渲染、知识根、审计契约、版本经验 |
+| 编排与隔离 | **openrig** | rig 定义、席位、队列、快照、隔离环境、跨 agent 调度 |
+| 证据格式 | 两边共用 | 任务 id、回合、审计行、成本行（dia 已有 `audit` / `usage` 形状） |
+
+dia 对 fleet 的交付物：**可导出的 persona 包 + 能力声明 + 校验结果**，而不是"帮 openrig 调度"。
+判据：一个 rig 不依赖 dia 的运行时也能跑；dia 只负责"装配正确 + 可追溯"。
+
+---
+
+## 6. 路线（按依赖排序）
+
+| 阶段 | 内容 | 依赖 / 判据 |
+|---|---|---|
+| **P0** | 平台经验库 + 依赖校验（M1）：`docs/platforms/` + `hosts.yaml` + `doctor --host` | 现有两台平台实测通过；`deps.jsonl` 不再与真实环境脱节 |
+| **P1** | team 生成：team spec → 多个 persona/角色 + 门禁 | `team run --mock` 已可用；需补"从 spec 生成角色" |
+| **P2** | `dia-evoler`：独立 persona（读文档、解释配置、给迁移建议） | P0 的经验库是前置（否则它只会瞎猜）；dia 仓不动 |
+| **P3** | rig 导出：persona 包 + 能力声明 → openrig | 与 openrig 的接口定稿 |
+| **P4** | 多域隔离（团队/家庭/项目）与数据根策略 | `data_root` 契约 + `DIA_DATA_ROOT_SCOPE` 已有雏形 |
+
+与既有缺口的关系：P0 吃掉 M1；P1 顺带解决 `kit show/update/gc` 的一半需求；
+P2 依赖 `patch` / `activation` 的边界先定清。
+
+---
+
+## 7. 不做什么（防止漂移）
+
+- **不自建运行时 / 沙箱 / 通道**：复用宿主与 openrig，dia 只做装配与控制。
+- **不在 dia 仓里写 agent 人格 / 对话实现**：agent 面独立成 persona（`dia-evoler`），保持仓库的工具形态。
+- **不把 LLM 放进确定性控制面**：模型只在 dia-agent 面说话，判定仍走命令与判据。
+- **不做公共市场 / 自动安装**：安装必须可审、可回滚。
+- **不存业务数据**：域数据留在各域的数据根。
+- **无证据不扩团、不扩档位**：团队规模按真实任务增长。
+
+---
+
+## 8. 决策记录
+
+**已定（2026-11-03）**
+
+1. **dia-agent 的边界**：独立 persona `dia-evoler`（独立仓 / 数据根）；**dia 仓库保持工具形态**。
+2. **`hosts/` 的语义**：记录的是 **AI 工具平台**（opencode/dsh/pi/codex…），不是设备；目录改名 `docs/platforms/`，
+   写之前按 `docs/platforms/index.md §0` 脱敏——公共仓只放公开平台事实，设备/家庭/内网信息落私人仓。
+3. **多域数据隔离**：**需要**。家庭库这类敏感域用独立数据根 + 独立审计线；凭据管理单独立项（见下）。
+
+**待定**
+
+4. **fleet 层归谁**：配置与知识归 dia、编排与隔离归 openrig——这条边界要 openrig 侧确认。
+5. **版本经验库的载体**（已定 2026-11-03）：**单一事实源 = `docs/platforms/registry.json`**；
+   md 只写规则与用法，不复制数据；人读视图由 `dia doctor` 按需派生。
+6. **凭据管理的落地**：现在用 `bw` CLI 入库，但"按账号分组"约束下放行粒度粗、个人 vault 内容过多 + 风险集中；
+   需要继续调研开源项目与最佳实践。现状与候选方向见 [`security/credentials.md`](security/credentials.md)。

@@ -1,0 +1,79 @@
+# dia 文档菜单
+
+> 本文件由 `scripts/docs-index.mjs` 生成，**不要手改**；改完文档跑 `bun run docs:index`。
+
+Agent 入口：[`llms.txt`](../llms.txt)（按需全量：[`llms-full.txt`](../llms-full.txt)）
+
+## 现状
+
+| 文档 | 一句话 |
+|---|---|
+| [ACP 集成与降级设计（2026-10）](acp-integration.md) | 问题：通过 ACP 是否更好？fallback 怎么做？配置失败如何降级、体验如何？ |
+| [架构：框架 / 场景入口 / kit](architecture.md) | 本文回答一个问题：什么该留在 dabo-agent，什么该抽到独立框架。 |
+| [dia CLI 词表（动作规范）](cli.md) | 原则：动作成对、名词分层、不混轴。 |
+| [外部依赖索引与原始记录维护（2026-10）](dependency-registry.md) | 回答两件事：依赖怎么登记/验证/淘汰，原始记录怎么保留/重建/删除。 |
+| [生态与组合：可复用性调研（2026-10）](ecosystem-integration.md) | 问题：dia 的包和集成面应该长什么样，才能同时服务 opencode / dsh（未来 OpenClaw/Hermes/Pi）？ |
+| [生态定位：我们落在哪，接谁、不接谁](ecosystem-positioning.md) | 一句话：dia 不做通道、不做运行时、不做记忆产品；dia 做"进化的控制面"——观测、审计、基准、门禁。 |
+| [用户入口：人在哪进，agent 叫什么](entrypoints.md) | 一句话：入口仍是 opencode/dsh（和 yan 一样），但 agent 名是 dabo，不是 dia；dia 是控制面命令，不是人格。 |
+| [进化：dia 的第一性定位](evolution-process.md) | 本文不是功能清单，是过程定义。 |
+| [宿主控制面：黑盒边界与内部 seam（2026-10）](host-control-surface.md) | 问题：把 opencode（含 v2）与 dsh 当"黑盒宿主"时，我们能在哪些边界上控制它们？ |
+| [Kit：内容包安装（persona 的第二个半边）](kit-install.md) | 前置：docs/persona-install.md（persona = 人格，kit = 内容）。 |
+| [模型基准与 Sidecar 监控（A+B 一起）](model-baseline-sidecar.md) | A：首次使用先跑基准，用数据决定配置。 |
+| [模型行为调控（客户端侧）](model-behavior.md) | 边界（用户定）：只使用各平台提供的通用模型；不做本地构建/微调；不依赖多数模型不支持的推理与输入输出控制参数； |
+| [dia monorepo：框架模块的归属](monorepo.md) | 结论：dia-job 回 dia monorepo，作为 packages/job；kb 作为 packages/kb。 |
+| [dia / yan / dabo 现状总览](overview.md) | 2026-11-03 实测。本条是三方合起来的「现在长什么样」；docs/status.md 管 dia 的阶段与证据， |
+| [Patch：对已安装 persona / kit 的本地补丁](patching.md) | 参考 npm/patch-package，但只作用于本地安装副本，不改上游。 |
+| [Persona / Kit 安装：用 dia 从 git 地址装](persona-install.md) | 命名已定：persona = 可被选中的 agent 定义，kit = 知识/技能/工具内容，profile = 宿主运行环境（dsh）。 |
+| [价目表（tokens → 金额）](pricing.md) | 原则：没有价格就不编造；unpriced 明确记录，预算按 tokens 兜底。 |
+| [目标提案（team next）](proposals.md) | 定位：团队可以提候选，不能定目标。 |
+| [Sandbox 细化设计（dia）](security-sandbox.md) | 依据：dsh 本机源码实测、Hermes/Pi 取证、[/tmp/dia-sbx 实验]。 |
+| [dia 状态页（单一事实源）](status.md) | 任何"现在做到哪了"的问题，以本页为准；其他文档是细节。 |
+| [全自动团队：人只在验收介入](team-automation.md) | 目标：计划→实现→验证→对抗→修复全自动循环；人只在验收阶段拍板。 |
+| [团队章程：谁来做 dia（开发团队）](team.md) | 2026-10-28 升级：开发团队执行模式改为全自动循环（计划→实现→验证→对抗→修复），人只在验收阶段介入； |
+| [版本与多会话（persona / kit）](versioning.md) | 问题：dia 要支持升级/本地迭代期间不同会话用不同版本 persona；kit 是否也要会话级版本？ |
+| [dia 长期定位：从"安装器"到 superagent / agent-team 工厂](vision.md) | 2026-11-03，方向性文档。它不是现状——现状看 overview.md 与 status.md； |
+
+## 平台与宿主
+
+| 文档 | 一句话 |
+|---|---|
+| [AI 工具平台经验库（规则与用法）](platforms/index.md) | 单一事实源 = registry.json：平台支持范围、实测版本、已知坑全部只在 JSON 里。 |
+
+## 安全与审计
+
+| 文档 | 一句话 |
+|---|---|
+| [凭据管理（现状 + 调研待办）](security/credentials.md) | 2026-11-03。待调研，不是方案定稿。触发：bw CLI 已用于入库，但"按账号分组"决定放行粒度， |
+| [dia Public Release Gate](security/public-release.md) | 状态：BLOCKED until audit（2026-10-30） |
+
+## 迁移
+
+| 文档 | 一句话 |
+|---|---|
+| [K0：kb 查询 golden（20 条）](migrations/kb-golden.md) | 2026-10-30。原始 query 只落在 yan 数据根，不提交到 dia 仓。 |
+| [Python 清理：Node/Bun 项目不收 Python](migrations/no-python.md) | 目标：dia 仓库不把 Python 作为运行时/工具链依赖。 |
+| [yan-agent 切到 dia：本机现状与剩余迁移](migrations/yan-agent-current.md) | 2026-11-02 初版，2026-11-03 复核。yan-agent 远端 main 已合入 yan-agent@next（dia persona 形态）。 |
+| [yan-agent@next：迁移到 dia 框架](migrations/yan-agent-next.md) | 目标：yan-agent 的“通用能力”沉到 dia，“工作域内容”留在 yan-agent； |
+| [yan-kb 兼容设计 v2（grill 后）](migrations/yan-kb-parity.md) | 2026-10-30。触发：9 条 query golden 上，旧实现规则召回 10/12、top1 5/9； |
+| [yan-kb → dia kb：能力矩阵与迁移计划](migrations/yan-kb.md) | v2 修订（2026-10-30）：兼容边界、质量门禁、单引擎架构见 yan-kb-parity.md。 |
+
+## 留痕
+
+| 文档 | 一句话 |
+|---|---|
+| [开源评测与基准：可用清单（2026-10）](research/benchmarks-survey.md) | 回答：哪些开源项目的真实任务能直接用；哪些只能做首次 baseline（已污染）；私有 canary 怎么建。 |
+| [人机协作与评估：理论依据（2026-10）](research/collaboration-theory.md) | 目的：给 dia 的 (T, D, O) 模型与指标找可引用的理论出处，并明确哪些是"有依据"、哪些是"我们拍的"。 |
+| [dsh-superagent-prototype 评审](research/dsh-superagent.md) | 2026-11-02。仓库：<https://github.com/deepseek-ai/dsh-superagent-prototype> |
+| [主流 Agent 框架设计对照（2026-10）](research/frameworks-survey-2.md) | 对象 13 个：LangGraph、CrewAI、AutoGen/AG2、OpenAI Agents SDK、Google ADK、AWS Strands、Semantic Kernel/MAF、LlamaIndex、Mastra、PydanticAI、smolagents、Claude Agent SDK、Codex SDK。 |
+| [H0 报告：三层架构覆盖分类实验](research/h0/report.md) | 判据来自 dabo-agent/docs/hypotheses.md H0： |
+| [模型边界控制与调优：模式与修正（2026-10）](research/model-boundary-patterns.md) | 范围：客户端侧（适配/中间件/路由/护栏/评测/监控），不做训练与 provider 私有参数。 |
+| [opencode v2 会话分区调查（Project / Location / Workspace）](research/opencode-session-scoping.md) | 问题：opencode ./ 只看到当前目录的会话，是否是专门设计？和 workspace 有什么关系？ |
+| [复用评审（REUSE REVIEW）— 2026-10-28](review/reuse-review.md) | 触发：用户指出"思考过程有很多拿来主义，没有验证就决定复用"。 |
+| [独立验证报告 — 2026-10-28（pilot）](review/verification-2026-10-28.md) | 验证者：独立子 agent（只读仓库，不共享实现者上下文）。 |
+
+## 归档
+
+| 文档 | 一句话 |
+|---|---|
+| [框架启动方案（bootstrap）](history/framework-bootstrap.md) | 已归档（2026-11-03）：本文的启动/分发方案（release tarball + agentctl + framework.lock）未采用； |
+

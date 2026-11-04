@@ -68,6 +68,17 @@
   - 这也解释了为什么"每次放行靠账号分组"体验差：粒度根本不在 bw 这一层。
 - 备选（成本从低到高）：短时令牌优先于长期 key；敏感域独立 vault；引用式（SOPS/age/Vault）只在 CI/无交互场景更合适。
 
+**POC（2026-11-04 已实现）**
+
+```bash
+dia env bw unlock [--passwordfile P]   # session 落 0600，不回显
+dia env bw status                      # unauthenticated/locked/unlocked
+dia env bw run --map DB_PASS=db-item -- <cmd…>
+dia env bw lock                        # 同时清本地 session
+```
+
+实现约束：`BW_SESSION` 只存在于 bw 子进程环境；映射外的键一律不注入；任一条取不到 → 不执行命令（fail-closed）。
+
 **判据（POC 验收）**
 
 1. agent 进程环境里**没有** `BW_SESSION`；

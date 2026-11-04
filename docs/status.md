@@ -1,6 +1,6 @@
 # dia 状态页（单一事实源）
 
-> 更新：2026-11-03（复核：`bun test tests` 268/34 全绿）。任何"现在做到哪了"的问题，以本页为准；其他文档是细节。
+> 更新：2026-11-03（复核：`bun test tests` 277/36 全绿）。任何"现在做到哪了"的问题，以本页为准；其他文档是细节。
 > 规则：状态必须能追到**命令/测试/提交**；没有证据的写"未验证"。
 
 ---
@@ -89,6 +89,7 @@
 | D0.20 | 组合自检 | **完成** | `dia doctor`（persona/kit/knowledge/dsh preset/wt；exit 0/1/2） |
 | D0.21 | worktree 抽取 `packages/wt` | **完成** | 7 处 python→node；`dia wt`；4 套测试原样迁移全绿 |
 | D0.23 | doctor 平台版本自检 | **完成** | `platform:opencode` / `platform:dsh` 报版本（缺宿主 = warn，不判红）；`tests/active-doctor.test.ts` |
+| D0.36 | bw 单会话 broker（POC） | **完成** | `dia env bw status/unlock/lock/run`：session 只落 0600 文件、永不打印/进 argv；`--map KEY=item` 只注入声明键；子进程环境剔除 `BW_SESSION`/`BW_PASSWORD`；取不到即 fail-closed；`tests/bw*.test.ts` |
 | D0.35 | dsh 驱动自动修复对齐 ACP | **完成**（团队产出 + 人工补齐） | 抽出 `repairRedteamHighs`（ACP/dsh 共用）：high → builder 修 → 复跑判据（20MB buffer / 600s）→ 复检；dsh 成功路径写 `run.json`；268 tests |
 | D0.34 | 判据证据由 gate 现场重跑 | **完成**（团队升级后人工补齐） | gate 只认任务台账的 judge，在 `run.json` 记录的 workspace 里重跑；忽略任何角色写的 `judge.json`；mock run 不再能当验收证据；`tests/team.test.ts` 覆盖 |
 | D0.33 | audit off-box checkpoint | **完成**（团队产出） | `DIA_AUDIT_CHECKPOINT`：两阶段（pending 公告 → 落盘 → 确认）、`checkpoint_id`、路径校验（绝对/不在审计目录/非常规文件）；`protection=anchored:*` 判定；248 tests |

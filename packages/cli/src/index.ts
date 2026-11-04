@@ -14,6 +14,7 @@ import * as scope from "../../../src/scope.ts";
 import * as active from "../../../src/active.ts";
 import * as doctor from "../../../src/doctor.ts";
 import * as envx from "../../../src/env.ts";
+import * as bw from "../../../src/bw.ts";
 import * as deps from "../../../src/deps.ts";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -33,6 +34,12 @@ function flag(args: string[], name: string): string | undefined {
   return i >= 0 ? args[i + 1] : undefined;
 }
 function has(args: string[], name: string): boolean { return args.includes(name); }
+/** 取某个 flag 的全部出现（如 \`--map\` 可重复）。 */
+function flags(args: string[], name: string): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i++) if (args[i] === name && i + 1 < args.length) out.push(args[i + 1]);
+  return out;
+}
 function positional(args: string[]): string[] {
   const out: string[] = [];
   for (let i = 0; i < args.length; i++) {
@@ -138,6 +145,8 @@ usage:
   dia deps list [--json] [--file PATH]        # 派生视图：登记 + 实测
   dia deps record --id ID --kind K --version V [--resolved R] [--role required|optional] [--result pass|fail|unknown] [--evidence P]
   dia env list|check [KEY…] | env [--dry-run] [--redact] <cmd…>
+  dia env bw status|unlock [--passwordfile P]|lock
+  dia env bw run --map KEY=item [--map …] -- <cmd…>   # 只注入映射键；BW_SESSION 不进子进程
   dia persona default <id>|--unset|--show [--host opencode]
   dia kit add --from SRC [--ref REF] [--dry-run] [--json]
   dia kit list|verify <id>|remove <id>
@@ -960,6 +969,42 @@ export async function main(rawArgv: string[]): Promise<number> {
       keys: keysArg ? keysArg.split(",") : undefined,
     });
     try {
+      if (sub === "bw") {
+        const [act = "status", ...rest2] = rest;
+        try {
+          if (act === "status") {
+            const s = bw.status();
+            if (has(rest2, "--json")) out(JSON.stringify(s));
+            else out(`${s.status}${s.detail ? "（" + s.detail + "）" : ""}`);
+            return s.status === "unlocked" ? 0 : 1;
+          }
+          if (act === "unlock") {
+            const r = bw.unlock({ passwordFile: flag(rest2, "--passwordfile") });
+            if (!r.ok) { err(r.error); return 1; }
+            out("unlocked（session 已落盘 0600，不显示）");
+            return 0;
+          }
+          if (act === "lock") {
+            const r = bw.lock();
+            if (!r.ok) { err("E_BW: " + r.error); return 1; }
+            out("locked");
+            return 0;
+          }
+          if (act === "run") {
+            const maps = bw.parseMaps(flags(rest2, "--map"));
+            if (!maps.length) { err("usage: dia env bw run --map KEY=item [--map …] -- <cmd…>"); return 2; }
+            const sep = rest2.indexOf("--");
+            if (sep < 0 || sep === rest2.length - 1) { err("missing -- <cmd…>"); return 2; }
+            const [command, ...cmdArgs] = rest2.slice(sep + 1);
+            const r = bw.runMapped(maps, command, cmdArgs);
+            process.stdout.write(r.out);
+            process.stderr.write(r.err);
+            return r.code;
+          }
+          err("usage: dia env bw status|unlock|lock|run");
+          return 2;
+        } catch (e: any) { err(e?.message || String(e)); return 1; }
+      }
       if (sub === "list" || (!sub && has(rest, "--list"))) {
         const r = envx.list(cfg);
         if (has(rest, "--json")) { out(JSON.stringify(r, null, 1)); return r.keys.every((k) => k.found) ? 0 : 1; }

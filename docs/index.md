@@ -51,6 +51,7 @@ Agent 入口：[`llms.txt`](../llms.txt)（按需全量：[`llms-full.txt`](../l
 | 文档 | 一句话 |
 |---|---|
 | [K0：kb 查询 golden（20 条）](migrations/kb-golden.md) | 2026-10-30。原始 query 只落在 yan 数据根，不提交到 dia 仓。 |
+| [配置迁移：用 LLM 任务，不写 migration 代码](migrations/llm-migration.md) | 2026-11-04。适用：dia / persona / kit 的声明式格式升级（dia.json、lock、registry.json、deps.jsonl 等）。 |
 | [Python 清理：Node/Bun 项目不收 Python](migrations/no-python.md) | 目标：dia 仓库不把 Python 作为运行时/工具链依赖。 |
 | [yan-agent 切到 dia：本机现状与剩余迁移](migrations/yan-agent-current.md) | 2026-11-02 初版，2026-11-03 复核。yan-agent 远端 main 已合入 yan-agent@next（dia persona 形态）。 |
 | [yan-agent@next：迁移到 dia 框架](migrations/yan-agent-next.md) | 目标：yan-agent 的“通用能力”沉到 dia，“工作域内容”留在 yan-agent； |

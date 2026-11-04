@@ -148,7 +148,7 @@ usage:
   dia env list|check [KEY…] | env [--dry-run] [--redact] <cmd…>
   dia env bw status|unlock [--passwordfile P]|lock
   dia env bw run --map KEY=item [--map …] [--task T] -- <cmd…>   # 只注入映射键；BW_SESSION 不进子进程
-  dia env bw serve [--socket PATH]   # 常驻 broker：单会话 + 审计行（前台）
+  dia env bw serve [--socket PATH] [--passwordfile P]   # 常驻 broker（可启动时解锁）
   dia env bw get --item ITEM [--env KEY] [--task T] [--json]
   dia persona default <id>|--unset|--show [--host opencode]
   dia kit add --from SRC [--ref REF] [--dry-run] [--json]
@@ -1016,6 +1016,11 @@ export async function main(rawArgv: string[]): Promise<number> {
             return r.code;
           }
           if (act === "serve") {
+            const pw = flag(rest2, "--passwordfile");
+            if (pw) {
+              const u = bw.unlock({ passwordFile: pw });
+              if (!u.ok) { err(u.error); return 1; }
+            }
             const h = await bw.serve({ socket: flag(rest2, "--socket"), ready: () => out(`broker listening ${bw.socketFile()}`) });
             process.on("SIGINT", () => { h.close(); process.exit(0); });
             process.on("SIGTERM", () => { h.close(); process.exit(0); });
@@ -1053,15 +1058,20 @@ export async function main(rawArgv: string[]): Promise<number> {
       const args = sub === "run" ? rest : [sub, ...rest].filter((x) => x !== undefined);
       const dry = has(args, "--dry-run");
       const redact = has(args, "--redact") || process.env.DIA_ENV_REDACT === "1";
-      const cmd = args.filter((a) => a !== "--dry-run" && a !== "--redact" && !a.startsWith("--files") && !a.startsWith("--keys"));
-      // 去掉 --files/--keys 的值 token
+      const bwMaps = bw.parseMaps(flags(args, "--bw"));
+      // 去掉 dia 自己的 flag 与其值，剩下的才是要执行的命令
+      const valueFlags = new Set(["--files", "--keys", "--bw", "--task", "--persona"]);
       const cleaned: string[] = [];
-      for (let i = 0; i < cmd.length; i++) {
-        if (cmd[i] === filesArg || cmd[i] === keysArg) continue;
-        cleaned.push(cmd[i]);
+      for (let i = 0; i < args.length; i++) {
+        const a = args[i];
+        if (a === "--dry-run" || a === "--redact" || a === "--") continue;
+        if (valueFlags.has(a)) { i++; continue; }
+        if (a.startsWith("--files=") || a.startsWith("--keys=") || a.startsWith("--bw=") || a.startsWith("--task=")) continue;
+        cleaned.push(a);
       }
-      if (!cleaned.length) { err("usage: dia env run [--dry-run] [--redact] <cmd…>"); return 2; }
-      const r = envx.run(cfg, cleaned, { dryRun: dry, redact });
+      if (!cleaned.length) { err("usage: dia env run [--dry-run] [--redact] [--bw KEY=item …] <cmd…>"); return 2; }
+      const extraEnv = bwMaps.length ? await bw.resolveMaps(bwMaps, flag(args, "--task")) : undefined;
+      const r = envx.run(cfg, cleaned, { dryRun: dry, redact, extraEnv });
       if (dry) {
         out(`将注入 ${r.injected.length} 个键到：${cleaned[0]}`);
         for (const k of r.injected) out(`  · ${k}（${envx.check(cfg, [k])[0]?.length ?? 0} 字符）`);

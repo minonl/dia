@@ -68,16 +68,19 @@ export interface RunResult { injected: string[]; missing: string[]; exit: number
 export function run(
   cfg: EnvConfig,
   cmd: string[],
-  opts: { redact?: boolean; dryRun?: boolean } = {},
+  opts: { redact?: boolean; dryRun?: boolean; extraEnv?: Record<string, string> } = {},
 ): RunResult {
   if (!cmd.length) throw new Error("E_USAGE: 需要命令");
-  const values = loadValues(cfg);
-  const injected = cfg.keys.filter((k) => values[k]);
+  const values = { ...loadValues(cfg), ...(opts.extraEnv || {}) };
+  const injected = [...cfg.keys, ...Object.keys(opts.extraEnv || {})].filter((k) => values[k]);
   const missing = cfg.keys.filter((k) => !values[k]);
   if (opts.dryRun) return { injected, missing, exit: 0, redacted: false };
 
   const [bin, ...args] = cmd;
   const childEnv: Record<string, string> = { ...(process.env as Record<string, string>) };
+  // 凭据 broker 的会话键永远不进子进程（值只按白名单注入）
+  delete childEnv.BW_SESSION;
+  delete childEnv.BW_PASSWORD;
   for (const k of injected) childEnv[k] = values[k];
   const r = spawnSync(bin, args, {
     stdio: opts.redact ? "pipe" : "inherit",

@@ -33,6 +33,13 @@ describe("dia env bw", () => {
     expect(r.stdout).not.toContain("ran");
   });
 
+  test("env run --bw 注入声明键，BW_SESSION 不进子进程", () => {
+    expect(run(["env", "bw", "unlock"]).status).toBe(0);
+    const r = run(["env", "run", "--bw", "DB_PASS=db", "--", "sh", "-c", "printf '%s|%s' \"$DB_PASS\" \"${BW_SESSION:-none}\""]);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toBe("secret-db|none");
+  });
+
   test("lock 之后取用失败（fail-closed）", () => {
     expect(run(["env", "bw", "lock"]).status).toBe(0);
     const r = run(["env", "bw", "run", "--map", "DB_PASS=db", "--", "sh", "-c", "echo ran"]);

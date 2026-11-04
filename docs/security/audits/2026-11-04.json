@@ -1,0 +1,44 @@
+{
+  "verdict": "blocked",
+  "scope": "working tree (pre-public redaction)",
+  "findings": [
+    {
+      "id": "TREE-01",
+      "severity": "P1",
+      "area": "tree",
+      "evidence": "公司名与内部域名出现在 docs/overview.md、docs/vision.md、experiments/*、packages/wt/{bin,tests}、docs/research/h0/*",
+      "fix": "已全部替换为通用占位：工作域 / example.com / example-repo / example-user / example-service"
+    },
+    {
+      "id": "TREE-02",
+      "severity": "P2",
+      "area": "docs",
+      "evidence": "research/h0 样本含工作域任务名（业务知识）",
+      "fix": "任务名改为示例名（example-service / example-repo）；其余保留为方法论样例"
+    },
+    {
+      "id": "PKG-01",
+      "severity": "P3",
+      "area": "package",
+      "evidence": "dist 无 source map；npm 包 files 仅 bin/dist/packages/docs/README",
+      "fix": "无需处理"
+    },
+    {
+      "id": "HIST-01",
+      "severity": "P1",
+      "area": "history",
+      "evidence": "git log -S 命中 3 个历史提交仍含内部域名/公司名",
+      "fix": "未处理：需要重建历史（孤儿提交）并向 GitHub 申请 GC"
+    }
+  ],
+  "checks": {
+    "tree_redaction": "pass",
+    "tests": "287 tests / 40 files pass",
+    "credentials_scan": "pass（无 token/私钥/真实邮箱；命中的 PRIVATE KEY 为正则定义）",
+    "sourcemaps": "pass（无）",
+    "metadata": "pass（description 为通用描述，topics 为空）"
+  },
+  "history_clean": false,
+  "public_ready": false,
+  "note": "本报告为自查（非独立审核）；按 public-release.md §1-8，公开前仍需独立 dia-security pass + 历史重建"
+}

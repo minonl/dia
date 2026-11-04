@@ -160,3 +160,10 @@ planner 出计划 → builder 写文件 → verifier 亲自跑判据（通过，
 `team run --acp` 与 `--dsh`：planner → builder → verifier（通过/不通过两条路径）→ redteam → gate / accept，
 **不花模型钱**、结果确定；覆盖 `escalated`（退出码 30）、无判据 `E_TASK`，以及 high → builder 修复 + `redteam-2` 复检
 （清零 → awaiting_acceptance；仍 high 或判据非 0 → escalated，两条驱动路径各三例）。真实模型链路仍需人工跑一次。
+
+
+## 隔离边界（2026-11-04）
+
+- verifier / redteam 跑在**系统临时目录的快照**里，路径名不含 `task id`（无法反推 `runs/<id>`）
+- `runs/<id>` 以 `0700` 创建；验收证据（`judge.json`/`run.json`）由 gate 现场重跑判据生成/覆盖
+- **不是沙箱**：同一 OS 用户的进程仍可用绝对路径读写 `~/.local/share/dia`；要真隔离需要宿主级只读沙箱（dsh sandbox / 容器），当前不属于 dia 范围

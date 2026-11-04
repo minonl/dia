@@ -14,7 +14,7 @@ export function runDir(id: string) { return join(RUNS, id); }
 
 export function runMock(id: string) {
   const t = get(id);
-  const dir = runDir(id); mkdirSync(dir, { recursive: true });
+  const dir = runDir(id); mkdirSync(dir, { recursive: true, mode: 0o700 });
   writeFileSync(join(dir, "plan.md"), `# Plan: ${t.title}\n\n- judge: ${t.judge || "(missing)"}\n- roles: planner → builder → verifier → redteam\n`);
   writeFileSync(join(dir, "diff.patch"), "# mock diff\n");
   writeFileSync(join(dir, "test.log"), "mock tests: 0 failures\n");
@@ -187,7 +187,8 @@ function isSensitive(p: string): boolean {
 
 /** 快照目录放到 run 目录之外（系统临时目录），避免角色会话顺着相对路径摸到验收证据。 */
 function snapPath(id: string, dir: string, tag: string): string {
-  const p = join(tmpdir(), `dia-team-${id}-${tag}-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+  // 名字里不带 task id：角色拿到的 cwd 无法反推 runs/<id> 的位置（少一条旁路线索）
+  const p = join(tmpdir(), `dia-team-${tag}-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`);
   const f = join(dir, "snapshots.json");
   let list: string[] = [];
   try { list = JSON.parse(readFileSync(f, "utf8")); } catch { list = []; }
@@ -314,7 +315,7 @@ function gitDiff(ws: string): string {
 export async function runAcp(id: string, workspace: string) {
   const t = get(id);
   if (!t.judge) throw new Error("E_TASK: judge required");
-  const dir = runDir(id); mkdirSync(dir, { recursive: true });
+  const dir = runDir(id); mkdirSync(dir, { recursive: true, mode: 0o700 });
   const acp = new AcpClient(["opencode", "acp"], workspace, Number(process.env.DIA_ACP_TIMEOUT || DEFAULT_ACP_TIMEOUT));
   const usageAcc = { rows: [] as any[], input: 0, output: 0, total: 0, cost: 0, unpriced: 0 };
   const prices = loadPrices();
@@ -509,7 +510,7 @@ async function callDsh(role: string, cwd: string, text: string, tracker: Map<str
 export async function runDsh(id: string, workspace: string) {
   const t = get(id);
   if (!t.judge) throw new Error("E_TASK: judge required");
-  const dir = runDir(id); mkdirSync(dir, { recursive: true });
+  const dir = runDir(id); mkdirSync(dir, { recursive: true, mode: 0o700 });
   const usageAcc = { rows: [] as any[], input: 0, output: 0, total: 0, cost: 0, unpriced: 0 };
   const prices = loadPrices();
   const tracker = new Map<string, number>();

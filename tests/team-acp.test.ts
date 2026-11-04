@@ -69,6 +69,8 @@ describe("team run --acp（假 ACP 服）", () => {
     const log = readFileSync(fakeLog, "utf8").trim().split("\n").map((l) => JSON.parse(l));
     const cwds = log.filter((e: any) => e.ev === "new").map((e: any) => String(e.cwd || ""));
     expect(cwds.some((c: string) => c.includes("verify-ws-0"))).toBe(true);
+    // 快照路径不带 task id：角色无法反推 runs/<id>
+    expect(cwds.every((c: string) => !c.includes(id))).toBe(true);
     expect(cwds.some((c: string) => c.includes("redteam-ws"))).toBe(true);
     expect(cwds).toContain(workspace); // planner/builder 在原 workspace；verifier/redteam 在副本
     expect(existsSync(join(dir, "verify-ws-0"))).toBe(false);

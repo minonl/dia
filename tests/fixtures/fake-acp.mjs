@@ -18,14 +18,14 @@ let seq = 0;
 const send = (o) => process.stdout.write(JSON.stringify(o) + "\n");
 
 // dsh 每次 prompt 都是独立进程，所以「第一轮/复检轮」用快照目录名判断而不是进程内计数器。
-function redteamHigh(cwd) {
+function redteamHigh(cwd, prompt) {
   const mode = process.env.FAKE_REDTEAM_HIGH;
   if (!mode) return false;
   if (mode === "always") return true;
-  return !String(cwd || "").includes("redteam-ws-2");
+  return !String(prompt || "").includes("Round: 2");
 }
 
-function textFor(r, cwd) {
+function textFor(r, cwd, prompt) {
   switch (r) {
     case "planner":
       return JSON.stringify({ judge: process.env.FAKE_JUDGE || "test -f a.txt", steps: ["impl", "verify"] });
@@ -34,7 +34,7 @@ function textFor(r, cwd) {
     case "verifier":
       return JSON.stringify({ conclusion: process.env.FAKE_VERIFY || "通过", evidence: ["fake-verify: ok"] });
     case "redteam":
-      return JSON.stringify({ findings: redteamHigh(cwd) ? [{ severity: "high", trigger: "fake", consequence: "fake", repro: "fake" }] : [] });
+      return JSON.stringify({ findings: redteamHigh(cwd, prompt) ? [{ severity: "high", trigger: "fake", consequence: "fake", repro: "fake" }] : [] });
     default:
       return "ok";
   }
@@ -83,7 +83,7 @@ process.stdin.on("data", (chunk) => {
       if (fixName && effRole === "builder" && promptText.includes("Fix these high-severity findings")) {
         try { appendFileSync(join(s.cwd, fixName), "fix\n"); } catch {}
       }
-      const text = textFor(effRole, s.cwd);
+      const text = textFor(effRole, s.cwd, promptText);
       send({
         jsonrpc: "2.0", method: "session/update",
         params: { sessionId: sid, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } } },

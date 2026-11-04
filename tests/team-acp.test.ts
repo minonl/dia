@@ -20,8 +20,11 @@ const run = (args: string[], env: Record<string, string> = {}) => spawnSync("bun
   },
 });
 
+let taskSeq = 0;
 function newTask(judge: string): string {
-  const r = run(["task", "add", "团队演练", ...(judge ? ["--judge", judge] : []), "--json"]);
+  // title 决定 task id：每个用例必须唯一，否则多个用例共用一个 run 目录（CI 上并行/慢机暴露）
+  const title = `团队演练-${++taskSeq}-${Date.now()}`;
+  const r = run(["task", "add", title, ...(judge ? ["--judge", judge] : []), "--json"]);
   if (r.status !== 0) throw new Error(r.stderr || r.stdout);
   return JSON.parse(r.stdout).id;
 }

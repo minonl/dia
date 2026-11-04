@@ -415,7 +415,7 @@ export async function runAcp(id: string, workspace: string) {
       round2: async (rws2, diff2) => {
         const red2 = await acp.newSession(rws2);
         await acp.setMode(red2.sessionId, "dabo-redteam");
-        const rOut2 = await acp.prompt(red2.sessionId, `Repo: ${rws2}\nDiff:\n${diff2.slice(0, 20000)}\nReturn only the JSON object.`);
+        const rOut2 = await acp.prompt(red2.sessionId, `Round: 2\nRepo: ${rws2}\nDiff:\n${diff2.slice(0, 20000)}\nReturn only the JSON object.`);
         recordModelCall(id, "redteam-2", modelOf(red2), rOut2.usage, usageAcc, prices);
         return await parseRoleJsonWithRepair(rOut2.text, async (msg) => {
           const r = await acp.prompt(red2.sessionId, msg);
@@ -591,10 +591,10 @@ export async function runDsh(id: string, workspace: string) {
         recordModelCall(id, "builder-fix", fOut.model, fOut.usage, usageAcc, prices);
       },
       round2: async (rws2, diff2) => {
-        const rOut2 = await callDsh("redteam", rws2, `Repo: ${rws2}\nDiff:\n${diff2.slice(0, 20000)}\nReturn only the JSON object.`, tracker);
+        const rOut2 = await callDsh("redteam", rws2, `Round: 2\nRepo: ${rws2}\nDiff:\n${diff2.slice(0, 20000)}\nReturn only the JSON object.`, tracker);
         recordModelCall(id, "redteam-2", rOut2.model, rOut2.usage, usageAcc, prices);
         return await parseRoleJsonWithRepair(rOut2.text, async (msg) => {
-          const r = await callDsh("redteam", rws2, `Repo: ${rws2}\nDiff:\n${diff2.slice(0, 20000)}\n${msg}`, tracker);
+          const r = await callDsh("redteam", rws2, `Round: 2\nRepo: ${rws2}\nDiff:\n${diff2.slice(0, 20000)}\n${msg}`, tracker);
           recordModelCall(id, "redteam-2-repair", r.model, r.usage, usageAcc, prices);
           return r.text;
         });

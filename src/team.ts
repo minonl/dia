@@ -1,5 +1,5 @@
 import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { get, status as setStatus } from "./task.ts";
 import { AcpClient } from "./acp.ts";
@@ -185,6 +185,17 @@ function isSensitive(p: string): boolean {
   return SENSITIVE.some((x) => norm.includes(x));
 }
 
+/** 快照目录放到 run 目录之外（系统临时目录），避免角色会话顺着相对路径摸到验收证据。 */
+function snapPath(id: string, dir: string, tag: string): string {
+  const p = join(tmpdir(), `dia-team-${id}-${tag}-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+  const f = join(dir, "snapshots.json");
+  let list: string[] = [];
+  try { list = JSON.parse(readFileSync(f, "utf8")); } catch { list = []; }
+  list.push(p);
+  writeFileSync(f, JSON.stringify(list, null, 1));
+  return p;
+}
+
 export function snapshotWorkspace(src: string, dest: string): string {
   if (resolve(dest).startsWith(resolve(src) + "/")) throw new Error("E_SNAPSHOT: dest inside src");
   rmSync(dest, { recursive: true, force: true });
@@ -198,6 +209,14 @@ export function snapshotWorkspace(src: string, dest: string): string {
 
 export function cleanupSnapshots(runDir: string) {
   if (process.env.DIA_KEEP_SNAPSHOTS === "1") return;
+  // 新路径（run 目录之外）：按 snapshots.json 登记清理
+  try {
+    for (const p of JSON.parse(readFileSync(join(runDir, "snapshots.json"), "utf8")) as string[]) {
+      if (resolve(p).startsWith(resolve(tmpdir()) + "/")) rmSync(p, { recursive: true, force: true });
+    }
+    rmSync(join(runDir, "snapshots.json"), { force: true });
+  } catch { /* 没有登记就跳过 */ }
+  // 兼容旧 run：以前快照就在 run 目录里
   for (const e of readdirSync(runDir)) {
     if (e.startsWith("verify-ws-") || e === "redteam-ws" || e.startsWith("redteam-ws-")) rmSync(join(runDir, e), { recursive: true, force: true });
   }
@@ -237,7 +256,7 @@ async function repairRedteamHighs(o: {
   writeFileSync(join(dir, "diff.patch"), diff2);
 
   // 4) 重新快照 + 再复检一轮
-  const ws2 = snapshotWorkspace(workspace, join(dir, "redteam-ws-2"));
+  const ws2 = snapshotWorkspace(workspace, snapPath(id, dir, "redteam-ws-2"));
   const p2 = await o.round2(ws2, diff2);
   redteam = { ...normalizeRedteam(p2.value), repaired: p2.repaired, round: 2 };
   writeFileSync(join(dir, "redteam.json"), JSON.stringify(redteam, null, 1));
@@ -336,7 +355,7 @@ export async function runAcp(id: string, workspace: string) {
       recordModelCall(id, `builder-${round}`, modelOf(buildNs), buildOut.usage, usageAcc, prices);
       writeFileSync(join(dir, `builder-${round}.md`), buildOut.text || "(no output)");
 
-      const vws = snapshotWorkspace(workspace, join(dir, `verify-ws-${round}`));
+      const vws = snapshotWorkspace(workspace, snapPath(id, dir, `verify-ws-${round}`));
       const verifyNs = await acp.newSession(vws);
       const sVerify = verifyNs.sessionId;
       await acp.setMode(sVerify, "dabo-verifier");
@@ -370,7 +389,7 @@ export async function runAcp(id: string, workspace: string) {
     // redteam high 修复后的判据复跑同样以 run.json 的 workspace 为准。
     writeFileSync(join(dir, "run.json"), JSON.stringify({ mock: false, mode: "acp", workspace, judge, ts: new Date().toISOString() }, null, 1));
 
-    const rws = snapshotWorkspace(workspace, join(dir, "redteam-ws"));
+    const rws = snapshotWorkspace(workspace, snapPath(id, dir, "redteam-ws"));
     const redNs = await acp.newSession(rws);
     const sRed = redNs.sessionId;
     await acp.setMode(sRed, "dabo-redteam");
@@ -523,7 +542,7 @@ export async function runDsh(id: string, workspace: string) {
       recordModelCall(id, `builder-${round}`, buildOut.model, buildOut.usage, usageAcc, prices);
       writeFileSync(join(dir, `builder-${round}.md`), buildOut.text || "(no output)");
 
-      const vws = snapshotWorkspace(workspace, join(dir, `verify-ws-${round}`));
+      const vws = snapshotWorkspace(workspace, snapPath(id, dir, `verify-ws-${round}`));
       const vOut = await callDsh("verifier", vws, `Repo: ${vws}\nRun this judge yourself: ${judge}\nReturn only the JSON object.`, tracker);
       recordModelCall(id, `verifier-${round}`, vOut.model, vOut.usage, usageAcc, prices);
       const fixed = await parseRoleJsonWithRepair(vOut.text, async (msg) => {
@@ -553,7 +572,7 @@ export async function runDsh(id: string, workspace: string) {
     // 判据命令与工作区由 harness 记录，gate 会**重新执行**它；redteam 修复后的判据复跑也以 run.json 为准。
     writeFileSync(join(dir, "run.json"), JSON.stringify({ mock: false, mode: "dsh", workspace, judge, ts: new Date().toISOString() }, null, 1));
 
-    const rws = snapshotWorkspace(workspace, join(dir, "redteam-ws"));
+    const rws = snapshotWorkspace(workspace, snapPath(id, dir, "redteam-ws"));
     const rOut = await callDsh("redteam", rws, `Repo: ${rws}\nDiff:\n${diff.slice(0, 20000)}\nReturn only the JSON object.`, tracker);
     recordModelCall(id, "redteam", rOut.model, rOut.usage, usageAcc, prices);
     const fixed = await parseRoleJsonWithRepair(rOut.text, async (msg) => {

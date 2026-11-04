@@ -621,6 +621,9 @@ async function teamCli(argv: string[]): Promise<number> {
       err("use --mock or --acp|--dsh --workspace <dir>");
       return 33;
     }
+    if (sub === "gate" || sub === "accept" || sub === "reject") {
+      if (!id) { err(`usage: dia team ${sub} <task-id>${sub === "accept" ? " [--note ...] [--pr N [--repo R] [--merge]]" : ""}`); return 2; }
+    }
     if (sub === "gate") {
       const g = team.gate(id);
       out(asJson ? JSON.stringify(g) : (g.ok ? "gate ok" : "gate fail: " + g.reason));

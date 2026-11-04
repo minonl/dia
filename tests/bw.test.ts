@@ -7,6 +7,7 @@ let bw: any;
 const fakeSrc = join(import.meta.dir, "fixtures", "fake-bw.sh");
 
 beforeAll(async () => {
+  process.env.DIA_BW_AUDIT_CHAIN = "0";
   const bin = join(mkdtempSync(join(tmpdir(), "dia-bwbin-")), "bw");
   copyFileSync(fakeSrc, bin);
   chmodSync(bin, 0o755);

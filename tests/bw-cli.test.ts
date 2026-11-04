@@ -8,6 +8,7 @@ const cli = join(import.meta.dir, "..", "packages", "cli", "src", "index.ts");
 let bin: string, session: string;
 
 beforeAll(() => {
+  process.env.DIA_BW_AUDIT_CHAIN = "0";
   bin = join(mkdtempSync(join(tmpdir(), "dia-bwbin2-")), "bw");
   copyFileSync(join(import.meta.dir, "fixtures", "fake-bw.sh"), bin);
   chmodSync(bin, 0o755);

@@ -181,7 +181,7 @@ export function serve(opts: { socket?: string; ready?: () => void } = {}): Promi
     const server = createServer((conn) => {
       let buf = "";
       conn.setEncoding("utf8");
-      conn.on("data", (chunk) => {
+      conn.on("data", async (chunk) => {
         buf += chunk;
         let i: number;
         while ((i = buf.indexOf("\n")) >= 0) {
@@ -197,6 +197,13 @@ export function serve(opts: { socket?: string; ready?: () => void } = {}): Promi
             if (!item) throw new Error("E_USAGE: item required");
             const value = getItemPassword(item);
             audit({ env, item, task, ok: true });
+            if (process.env.DIA_BW_AUDIT_CHAIN === "1") {
+              // 显式开启才写主审计链；动态 import 保证不改变模块加载顺序
+              try {
+                const log = await import("./audit.ts");
+                log.append({ session: task || "bw-broker", tool: "bw", decision: "allow", note: `${env || "-"}=${item}` });
+              } catch { /* 审计链不可用不阻断取用 */ }
+            }
             conn.write(JSON.stringify({ ok: true, value }) + "\n");
           } catch (e: any) {
             audit({ env, item, task, ok: false, error: String(e?.message || e) });

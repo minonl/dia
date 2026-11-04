@@ -7,6 +7,7 @@ let bw: any;
 let sock: string, audit: string;
 
 beforeAll(async () => {
+  process.env.DIA_BW_AUDIT_CHAIN = "0";
   const bin = join(mkdtempSync(join(tmpdir(), "dia-bwbin3-")), "bw");
   copyFileSync(join(import.meta.dir, "fixtures", "fake-bw.sh"), bin);
   chmodSync(bin, 0o755);
@@ -32,6 +33,7 @@ describe("bw broker（常驻）", () => {
       expect(last.task).toBe("t-1");
       expect(last.ok).toBe(true);
       expect(JSON.stringify(last)).not.toContain("secret-db");
+
     } finally { h.close(); }
     expect(existsSync(sock)).toBe(false);
   });

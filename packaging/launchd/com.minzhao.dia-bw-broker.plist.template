@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- 模板：把 @DIA_BIN@ / @HOME@ 替换后放到 ~/Library/LaunchAgents/ -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.minzhao.dia-bw-broker</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>@DIA_BIN@</string>
+    <string>env</string>
+    <string>bw</string>
+    <string>serve</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>@HOME@/.local/share/dia/logs/bw-broker.out.log</string>
+  <key>StandardErrorPath</key><string>@HOME@/.local/share/dia/logs/bw-broker.err.log</string>
+</dict>
+</plist>

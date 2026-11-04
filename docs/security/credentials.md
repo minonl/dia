@@ -81,6 +81,8 @@ dia env bw get --item db --task t-1    # 走 broker，写审计行
 
 实现约束：`BW_SESSION` 只存在于 bw 子进程环境；映射外的键一律不注入；任一条取不到 → 不执行命令（fail-closed）。
 
+**常驻化**：`packaging/launchd/` 有 broker 的 launchd 模板（RunAtLoad + KeepAlive）；前置是先 `dia env bw unlock`。
+
 **判据（POC 验收）**
 
 1. agent 进程环境里**没有** `BW_SESSION`；

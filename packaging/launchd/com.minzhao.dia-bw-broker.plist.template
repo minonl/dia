@@ -10,6 +10,9 @@
     <string>env</string>
     <string>bw</string>
     <string>serve</string>
+    <!-- 可选：启动时自动解锁（密码文件必须 0600；不填则等人工 unlock） -->
+    <string>--passwordfile</string>
+    <string>@BW_PASSWORD_FILE@</string>
   </array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>

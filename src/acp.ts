@@ -31,6 +31,12 @@ export class AcpClient {
       if (typeof d.id === "number" && this.pending.has(d.id)) {
         const p = this.pending.get(d.id)!; this.pending.delete(d.id); clearTimeout(p.timer);
         if (d.error) p.reject(new Error("E_ACP: " + JSON.stringify(d.error))); else p.resolve(d.result);
+      } else if (d.method === "session/request_permission") {
+        const opts = d.params?.options || [];
+        const allow = opts.find((o: any) => /allow/i.test(o.kind || "") || /allow/i.test(o.optionId || ""));
+        this.child.stdin.write(JSON.stringify(allow
+          ? { jsonrpc: "2.0", id: d.id, result: { outcome: { outcome: "selected", optionId: allow.optionId } } }
+          : { jsonrpc: "2.0", id: d.id, result: { outcome: { outcome: "cancelled" } } }) + "\n");
       } else if (d.method === "session/update") {
         const sid = d.params?.sessionId; const u = d.params?.update;
         if (sid && u?.sessionUpdate === "agent_message_chunk" && u.content?.type === "text") {

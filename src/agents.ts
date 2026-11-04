@@ -17,6 +17,7 @@ export interface AgentRecord {
   pane?: string;          // tmux pane id，如 %3
   session?: string;       // tmux session name
   cwd?: string;
+  acp_cmd?: string;      // 例："dsh --profile acp"
   pid?: number;
   registered_at: string;
   last_seen?: string;

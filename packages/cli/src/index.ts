@@ -9,6 +9,7 @@ import * as persona from "../../../src/persona.ts";
 import * as msg from "../../../src/msg.ts";
 import * as agents from "../../../src/agents.ts";
 import * as tmux from "../../../src/tmux.ts";
+import * as msgAcp from "../../../src/msg-acp.ts";
 import * as kit from "../../../src/kit.ts";
 import * as scope from "../../../src/scope.ts";
 import * as active from "../../../src/active.ts";
@@ -155,7 +156,7 @@ usage:
   dia wt create|form|list|status|check|route|scope|clean|prune-merged …
   dia cmd <name> [args…]              # 只查 persona 声明的命令（可绕开同名内置）
   dia <persona-cmd> [args…]           # 一级委派（内置优先）
-  dia msg send|show|inbox|ack|delivered|deliver|reply|thread|escalate|agents\n  dia agents list|register|unregister|discover\n  dia task add|list|status|done
+  dia msg send|show|inbox|ack|delivered|deliver|reply|thread|escalate|agents\n  dia agents list|register|unregister|discover\n  dia msg deliver <agent> <id> [--transport tmux|acp]\n  dia task add|list|status|done
   dia team run <id> --mock | --acp|--dsh --workspace DIR
   dia team gate|accept|reject|next
   dia team accept <id> [--note ...] [--pr N [--repo R] [--merge]]   # --pr：先验 CI，绿才接受/合并
@@ -479,7 +480,7 @@ async function agentsCli(argv: string[]): Promise<number> {
     if (sub === "register") {
       const agent = flag(args, "--agent") || positional(args)[0];
       if (!agent) { err("usage: dia agents register --agent X --host codex [--pane %3] [--cwd DIR]"); return 2; }
-      const r = agents.register({ agent, host: flag(args, "--host") || "codex", pane: flag(args, "--pane"), cwd: flag(args, "--cwd"), session: flag(args, "--session"), pid: flag(args, "--pid") ? Number(flag(args, "--pid")) : undefined });
+      const r = agents.register({ agent, host: flag(args, "--host") || "codex", pane: flag(args, "--pane"), cwd: flag(args, "--cwd"), session: flag(args, "--session"), acp_cmd: flag(args, "--acp-cmd"), pid: flag(args, "--pid") ? Number(flag(args, "--pid")) : undefined });
       out(asJson ? JSON.stringify(r) : `registered ${r.agent} (${r.host}) pane=${r.pane ?? "-"}`);
       return 0;
     }
@@ -536,7 +537,13 @@ async function msgCli(argv: string[]): Promise<number> {
     }
     if (sub === "deliver") {
       const [agent, id] = positional(args);
-      if (!agent || !id) { err("usage: dia msg deliver <agent> <id> [--force]"); return 2; }
+      if (!agent || !id) { err("usage: dia msg deliver <agent> <id> [--transport tmux|acp] [--force]"); return 2; }
+      const transport = flag(args, "--transport") || "tmux";
+      if (transport === "acp") {
+        const r = await msgAcp.deliverAcp(agent, id);
+        out(asJson ? JSON.stringify(r) : `delivered ${r.id} → ${r.agent} (acp)${r.reply ? `\nreply: ${r.reply.slice(0, 200)}` : ""}`);
+        return 0;
+      }
       const r = tmux.deliver(agent, id, { force: has(args, "--force") });
       out(asJson ? JSON.stringify(r) : `delivered ${r.id} → ${r.agent} (${r.pane})`);
       return 0;

@@ -17,7 +17,10 @@ import * as doctor from "../../../src/doctor.ts";
 import * as envx from "../../../src/env.ts";
 import * as bw from "../../../src/bw.ts";
 import * as deps from "../../../src/deps.ts";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { mkdirSync, openSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve as resolvePath, sep as pathSep } from "node:path";
@@ -156,7 +159,7 @@ usage:
   dia wt create|form|list|status|check|route|scope|clean|prune-merged …
   dia cmd <name> [args…]              # 只查 persona 声明的命令（可绕开同名内置）
   dia <persona-cmd> [args…]           # 一级委派（内置优先）
-  dia msg send|show|inbox|ack|delivered|deliver|reply|thread|escalate|agents\n  dia agents list|register|unregister|discover\n  dia msg deliver <agent> <id> [--transport tmux|acp]\n  dia task add|list|status|done
+  dia msg send|show|inbox|ack|delivered|deliver [--wait]|reply|thread|escalate|agents\n  dia agents list|register|unregister|discover\n  dia msg deliver <agent> <id> [--transport tmux|acp]\n  dia task add|list|status|done
   dia team run <id> --mock | --acp|--dsh --workspace DIR
   dia team gate|accept|reject|next
   dia team accept <id> [--note ...] [--pr N [--repo R] [--merge]]   # --pr：先验 CI，绿才接受/合并
@@ -500,6 +503,22 @@ async function agentsCli(argv: string[]): Promise<number> {
   return 2;
 }
 
+function spawnDetachedDelivery(args: string[]): { pid?: number; log: string } {
+  const root = process.env.DIA_MSG_ROOT || join(homedir(), ".local", "share", "dia", "msg");
+  const agent = positional(args)[0] || "unknown";
+  const id = positional(args)[1] || `unknown-${Date.now()}`;
+  const dir = join(root, agent);
+  mkdirSync(dir, { recursive: true });
+  const log = join(dir, `deliver-${id}.log`);
+  const fd = openSync(log, "a");
+  const bin = process.argv[1];
+  const child = spawn(process.execPath, [bin, "msg", "deliver", ...args, "--wait"], {
+    detached: true, stdio: ["ignore", fd, fd], env: process.env,
+  });
+  child.unref();
+  return { pid: child.pid, log };
+}
+
 async function msgCli(argv: string[]): Promise<number> {
   const [sub, ...args] = argv;
   const asJson = has(args, "--json");
@@ -537,8 +556,15 @@ async function msgCli(argv: string[]): Promise<number> {
     }
     if (sub === "deliver") {
       const [agent, id] = positional(args);
-      if (!agent || !id) { err("usage: dia msg deliver <agent> <id> [--transport tmux|acp] [--force]"); return 2; }
+      if (!agent || !id) { err("usage: dia msg deliver <agent> <id> [--transport tmux|acp] [--wait] [--force]"); return 2; }
       const transport = flag(args, "--transport") || "tmux";
+      // 默认异步：投递即返回，回执走 dia msg reply / 状态机；长任务不再阻塞调用方。
+      if (!has(args, "--wait")) {
+        const child = spawnDetachedDelivery(args);
+        out(asJson ? JSON.stringify({ dispatched: true, pid: child.pid, agent, id, transport, log: child.log })
+                   : `dispatched ${id} → ${agent}（${transport}，异步 ${child.pid}；日志 ${child.log}）`);
+        return 0;
+      }
       if (transport === "acp") {
         const r = await msgAcp.deliverAcp(agent, id);
         out(asJson ? JSON.stringify(r) : `delivered ${r.id} → ${r.agent} (acp)${r.reply ? `\nreply: ${r.reply.slice(0, 200)}` : ""}`);

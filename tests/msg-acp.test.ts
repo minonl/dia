@@ -29,6 +29,23 @@ describe("dia msg ACP 传输", () => {
     expect(inbox[0].state).toBe("replied");
   });
 
+  test("默认异步投递：立即返回，后台完成并落 reply", async () => {
+    run(["agents", "register", "--agent", "asyncmock", "--host", "dsh", "--cwd", "/tmp", "--acp-cmd", `node ${mock}`]);
+    const id = JSON.parse(run(["msg", "send", "asyncmock", "--from", "ops", "--kind", "question", "--subject", "s", "--json"]).stdout).id;
+    const t0 = Date.now();
+    const d = run(["msg", "deliver", "asyncmock", id, "--transport", "acp", "--json"]);
+    expect(d.status).toBe(0);
+    expect(JSON.parse(d.stdout).dispatched).toBe(true);
+    expect(Date.now() - t0).toBeLessThan(2000);
+    let state = "pending";
+    for (let i = 0; i < 20 && state !== "replied"; i++) {
+      const inbox = JSON.parse(run(["msg", "inbox", "asyncmock", "--json"]).stdout);
+      state = inbox[0]?.state || "pending";
+      if (state !== "replied") await new Promise((r) => setTimeout(r, 200));
+    }
+    expect(state).toBe("replied");
+  });
+
   test("未登记 acp_cmd 时报 E_NO_ACP", () => {
     run(["agents", "register", "--agent", "plain", "--host", "dsh", "--cwd", "/tmp"]);
     const id = JSON.parse(run(["msg", "send", "plain", "--from", "ops", "--kind", "notify", "--subject", "s", "--json"]).stdout).id;

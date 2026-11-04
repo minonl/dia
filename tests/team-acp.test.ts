@@ -139,6 +139,7 @@ describe("team redteam high 自动修复", () => {
     const redPath = join(data, "runs", id, "redteam.json");
     const red = JSON.parse(readFileSync(redPath, "utf8"));
     expect(red.findings).toEqual([]); // 第二轮已清零
+    expect(red.round).toBe(2);
     expect(run(["team", "gate", id]).status).toBe(0);
 
     // 篡改出一条 high：gate 必须拦住
@@ -147,4 +148,106 @@ describe("team redteam high 自动修复", () => {
     expect(g.status).toBe(30);
     expect(g.stdout).toContain("redteam high");
   });
+
+  test("修复后 still high → escalated（不写 awaiting_acceptance）", () => {
+    const id = newTask("test -f a.txt");
+    const r = run(["team", "run", id, "--acp", "--workspace", workspace], { FAKE_REDTEAM_HIGH: "always" });
+    expect(r.status).toBe(30);
+    const dir = join(data, "runs", id);
+    const red = JSON.parse(readFileSync(join(dir, "redteam.json"), "utf8"));
+    expect(red.round).toBe(2);
+    expect(red.findings.length).toBe(1);
+    expect(red.findings[0].severity).toBe("high");
+    const packet = readFileSync(join(dir, "packet.md"), "utf8");
+    expect(packet).toContain("已升级");
+    expect(packet).toContain("剩余 high：1");
+    expect(taskStatus(id)).toBe("escalated");
+    expect(run(["team", "gate", id]).status).not.toBe(0);
+  });
+
+  test("builder-fix 的真实改动写回 diff.patch（验收包不留修复前快照）", () => {
+    const id = newTask("test -f a.txt");
+    const name = "redteam-fix-acp.txt";
+    const r = run(["team", "run", id, "--acp", "--workspace", workspace], { FAKE_REDTEAM_HIGH: "1", FAKE_JUDGE: "test -f a.txt", FAKE_BUILDER_FIX: name });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("awaiting_acceptance");
+    // 修复真的落到工作区
+    expect(existsSync(join(workspace, name))).toBe(true);
+    // 且必须出现在验收包的 diff.patch 里（人对它拍板）
+    const diff = readFileSync(join(data, "runs", id, "diff.patch"), "utf8");
+    expect(diff).toContain(name);
+    expect(run(["team", "gate", id]).status).toBe(0);
+  });
+
+  test("修复后判据非 0 → escalated（判据现场重跑，不采信角色自述）", () => {
+    const id = newTask("test -f missing.txt");
+    const r = run(["team", "run", id, "--acp", "--workspace", workspace], { FAKE_REDTEAM_HIGH: "1", FAKE_JUDGE: "test -f missing.txt" });
+    expect(r.status).toBe(30);
+    const dir = join(data, "runs", id);
+    // 复检轮 high 已清零，升级只可能来自判据重跑
+    expect(JSON.parse(readFileSync(join(dir, "redteam.json"), "utf8")).findings).toEqual([]);
+    const packet = readFileSync(join(dir, "packet.md"), "utf8");
+    expect(packet).toContain("已升级");
+    expect(packet).toContain("judge exit：1");
+    expect(taskStatus(id)).toBe("escalated");
+  });
+});
+
+describe("team run --dsh：redteam high 自动修复", () => {
+  const rolesOf = (id: string) => JSON.parse(readFileSync(join(data, "runs", id, "usage.json"), "utf8")).by_role.map((r: any) => r.role);
+
+  test("第一轮 high → builder 修 + redteam-2 复检清零 → awaiting_acceptance + gate ok", () => {
+    const id = newTask("test -f a.txt");
+    const r = run(["team", "run", id, "--dsh", "--workspace", workspace], { FAKE_REDTEAM_HIGH: "1" });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("awaiting_acceptance");
+
+    const dir = join(data, "runs", id);
+    const red = JSON.parse(readFileSync(join(dir, "redteam.json"), "utf8"));
+    expect(red.findings).toEqual([]);
+    expect(red.round).toBe(2);
+    expect(readFileSync(join(dir, "packet.md"), "utf8")).toContain("反驳：0 条");
+    // 用量记账覆盖修复链路的每一段（与 ACP 路径同名）
+    expect(rolesOf(id)).toEqual(expect.arrayContaining(["builder-fix", "redteam-2"]));
+    // 复检用的第二份快照用完即删
+    expect(existsSync(join(dir, "redteam-ws-2"))).toBe(false);
+    expect(taskStatus(id)).toBe("awaiting_acceptance");
+    expect(run(["team", "gate", id]).status).toBe(0);
+  }, 60000);
+
+  test("builder-fix 的真实改动写回 diff.patch（dsh 路径同源）", () => {
+    const id = newTask("test -f a.txt");
+    const name = "redteam-fix-dsh.txt";
+    const r = run(["team", "run", id, "--dsh", "--workspace", workspace], { FAKE_REDTEAM_HIGH: "1", FAKE_BUILDER_FIX: name });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("awaiting_acceptance");
+    expect(existsSync(join(workspace, name))).toBe(true);
+    expect(readFileSync(join(data, "runs", id, "diff.patch"), "utf8")).toContain(name);
+    expect(run(["team", "gate", id]).status).toBe(0);
+  }, 60000);
+
+  test("修复后 still high → escalated", () => {
+    const id = newTask("test -f a.txt");
+    const r = run(["team", "run", id, "--dsh", "--workspace", workspace], { FAKE_REDTEAM_HIGH: "always" });
+    expect(r.status).toBe(30);
+    const dir = join(data, "runs", id);
+    const red = JSON.parse(readFileSync(join(dir, "redteam.json"), "utf8"));
+    expect(red.round).toBe(2);
+    expect(red.findings.length).toBe(1);
+    expect(readFileSync(join(dir, "packet.md"), "utf8")).toContain("剩余 high：1");
+    expect(rolesOf(id)).toEqual(expect.arrayContaining(["builder-fix", "redteam-2"]));
+    expect(taskStatus(id)).toBe("escalated");
+  }, 60000);
+
+  test("修复后判据非 0 → escalated", () => {
+    const id = newTask("test -f missing.txt");
+    const r = run(["team", "run", id, "--dsh", "--workspace", workspace], { FAKE_REDTEAM_HIGH: "1", FAKE_JUDGE: "test -f missing.txt" });
+    expect(r.status).toBe(30);
+    const dir = join(data, "runs", id);
+    expect(JSON.parse(readFileSync(join(dir, "redteam.json"), "utf8")).findings).toEqual([]);
+    const packet = readFileSync(join(dir, "packet.md"), "utf8");
+    expect(packet).toContain("已升级");
+    expect(packet).toContain("judge exit：1");
+    expect(taskStatus(id)).toBe("escalated");
+  }, 60000);
 });

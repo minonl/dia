@@ -38,6 +38,30 @@ function runJudge(workspace: string, judge: string) {
   return { code: 0, out: String(r) };
 }
 
+/** 同 runJudge，但把非 0 退出码当结果返回而不是抛异常。 */
+function runJudgeSafe(workspace: string, judge: string): { code: number; out: string } {
+  try {
+    return runJudge(workspace, judge);
+  } catch (e: any) {
+    return { code: typeof e?.status === "number" ? e.status : 1, out: String(e?.stdout || e?.message || "") };
+  }
+}
+
+/** 用量落盘（acp/dsh 两条驱动路径共用同一份 usage.json 结构）。 */
+function writeUsage(dir: string, id: string, acc: { rows: any[]; input: number; output: number; total: number; cost: number; unpriced: number }) {
+  writeFileSync(join(dir, "usage.json"), JSON.stringify({ task_id: id, calls: acc.rows.length, input_tokens: acc.input, output_tokens: acc.output, total_tokens: acc.total, cost_usd: acc.cost, unpriced_calls: acc.unpriced, by_role: acc.rows }, null, 1));
+}
+
+/** 判据在哪个 workspace 跑：以 run.json 为准（gate 也这么做），缺失才回退。 */
+function judgeWorkspace(dir: string, fallback: string): string {
+  try {
+    const run = JSON.parse(readFileSync(join(dir, "run.json"), "utf8"));
+    const ws = String(run?.workspace || "");
+    if (ws) return ws;
+  } catch {}
+  return fallback;
+}
+
 export function gate(id: string) {
   const dir = runDir(id);
   const need = ["plan.md", "diff.patch", "test.log", "verify.json", "redteam.json", "packet.md", "run.json"];
@@ -78,7 +102,7 @@ export function gate(id: string) {
   const started = Date.now();
   let exit = 1, out = "";
   try {
-    const r = execFileSync("sh", ["-c", judgeCmd], { cwd: workspace, encoding: "utf8", timeout: 600_000, stdio: ["ignore", "pipe", "pipe"] });
+    const r = execFileSync("sh", ["-c", judgeCmd], { cwd: workspace, encoding: "utf8", timeout: 600_000, maxBuffer: 20 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
     exit = 0;
     out = String(r);
   } catch (e: any) {
@@ -175,8 +199,56 @@ export function snapshotWorkspace(src: string, dest: string): string {
 export function cleanupSnapshots(runDir: string) {
   if (process.env.DIA_KEEP_SNAPSHOTS === "1") return;
   for (const e of readdirSync(runDir)) {
-    if (e.startsWith("verify-ws-") || e === "redteam-ws") rmSync(join(runDir, e), { recursive: true, force: true });
+    if (e.startsWith("verify-ws-") || e === "redteam-ws" || e.startsWith("redteam-ws-")) rmSync(join(runDir, e), { recursive: true, force: true });
   }
+}
+
+/**
+ * redteam high 回灌修复闭环（acp/dsh 两条驱动路径共用）。
+ * 修完复跑判据（workspace 取自 run.json）+ 再复检一轮；仍不达标就升级——判据只有这一份。
+ */
+async function repairRedteamHighs(o: {
+  id: string;
+  dir: string;
+  task: any;
+  workspace: string;
+  judge: string;
+  redteam: any;
+  usageAcc: { rows: any[]; input: number; output: number; total: number; cost: number; unpriced: number };
+  builderFix: (findings: any[]) => Promise<void>;
+  round2: (ws: string, diff: string) => Promise<{ value: any; repaired: boolean }>;
+}): Promise<{ redteam: any; escalated: boolean }> {
+  const { id, dir, task: t, judge, usageAcc } = o;
+  let redteam = o.redteam;
+  const high = highFindings(redteam);
+  if (!high.length) return { redteam, escalated: false };
+
+  // 1) 把 high 发现回灌 builder 修（提示词与 ACP 路径一致：保持判据绿，不许改判据）
+  await o.builderFix(high);
+
+  // 2) 复跑判据（不采信角色自述）
+  const workspace = judgeWorkspace(dir, o.workspace);
+  const jr = runJudgeSafe(workspace, judge);
+  writeFileSync(join(dir, "test.log"), `judge: ${judge}\nexit=${jr.code}\n${jr.out}`.slice(0, 20000));
+
+  // 3) builder-fix 的真实改动必须写回验收包：packet.md 只写「变更：见 diff.patch」，
+  //    diff.patch 停在修复前 = 人对不含修复的 diff 拍板（acp/dsh 两条路径共用此处）。
+  const diff2 = gitDiff(workspace);
+  writeFileSync(join(dir, "diff.patch"), diff2);
+
+  // 4) 重新快照 + 再复检一轮
+  const ws2 = snapshotWorkspace(workspace, join(dir, "redteam-ws-2"));
+  const p2 = await o.round2(ws2, diff2);
+  redteam = { ...normalizeRedteam(p2.value), repaired: p2.repaired, round: 2 };
+  writeFileSync(join(dir, "redteam.json"), JSON.stringify(redteam, null, 1));
+
+  if (jr.code !== 0 || highFindings(redteam).length) {
+    writeFileSync(join(dir, "packet.md"), `# 验收包 ${id}\n\n- 任务：${t.title}\n- 结论：**已升级**（redteam 修复后仍不达标）\n- judge exit：${jr.code}\n- 剩余 high：${highFindings(redteam).length}\n- 变更：见 diff.patch\n`);
+    writeUsage(dir, id, usageAcc);
+    setStatus(id, "escalated", "redteam: high findings remain");
+    return { redteam, escalated: true };
+  }
+  return { redteam, escalated: false };
 }
 
 export function normalizeVerify(v: any): any {
@@ -246,7 +318,7 @@ export async function runAcp(id: string, workspace: string) {
       plan = planned.value;
     } catch (e: any) {
       writeFileSync(join(dir, "packet.md"), `# 验收包 ${id}\n\n- 任务：${t.title}\n- 结论：**已升级**（planner 输出无法解析）\n- 错误：${e.message}\n`);
-      writeFileSync(join(dir, "usage.json"), JSON.stringify({ task_id: id, calls: usageAcc.rows.length, input_tokens: usageAcc.input, output_tokens: usageAcc.output, total_tokens: usageAcc.total, cost_usd: usageAcc.cost, unpriced_calls: usageAcc.unpriced, by_role: usageAcc.rows }, null, 1));
+      writeUsage(dir, id, usageAcc);
       setStatus(id, "escalated", "planner: " + e.message);
       return { dir, escalated: true, error: e.message };
     }
@@ -289,10 +361,14 @@ export async function runAcp(id: string, workspace: string) {
 
     if (verify?.conclusion !== "通过") {
       writeFileSync(join(dir, "packet.md"), `# 验收包 ${id}\n\n- 任务：${t.title}\n- 结论：**已升级**（验证未通过）\n- 验证：${verify?.conclusion}\n- 修复重试：${verify?.repaired ? "是" : "否"}\n- 证据：\n${(verify?.evidence || []).map((e: string) => "- " + e).join("\n")}\n- 变更：见 diff.patch\n`);
-      writeFileSync(join(dir, "usage.json"), JSON.stringify({ task_id: id, calls: usageAcc.rows.length, input_tokens: usageAcc.input, output_tokens: usageAcc.output, total_tokens: usageAcc.total, cost_usd: usageAcc.cost, unpriced_calls: usageAcc.unpriced, by_role: usageAcc.rows }, null, 1));
+      writeUsage(dir, id, usageAcc);
       setStatus(id, "escalated", "verify: " + verify?.conclusion);
       return { dir, verify, escalated: true };
     }
+
+    // 判据命令与工作区由 harness 记录，gate 会**重新执行**它（不信任任何角色写的证据）；
+    // redteam high 修复后的判据复跑同样以 run.json 的 workspace 为准。
+    writeFileSync(join(dir, "run.json"), JSON.stringify({ mock: false, mode: "acp", workspace, judge, ts: new Date().toISOString() }, null, 1));
 
     const rws = snapshotWorkspace(workspace, join(dir, "redteam-ws"));
     const redNs = await acp.newSession(rws);
@@ -305,46 +381,35 @@ export async function runAcp(id: string, workspace: string) {
       recordModelCall(id, "redteam-repair", modelOf(redNs), r.usage, usageAcc, prices);
       return r.text;
     });
-    let redteam: any = { ...normalizeRedteam(fixed.value), repaired: fixed.repaired };
+    let redteam: any = { ...normalizeRedteam(fixed.value), repaired: fixed.repaired, round: 1 };
     writeFileSync(join(dir, "redteam.json"), JSON.stringify(redteam, null, 1));
 
     // redteam 的 high 级反驳必须回灌 builder 修（gate 也会拦）；修完复跑判据 + 复检一轮。
-    if (highFindings(redteam).length) {
-      const fixNs = await acp.newSession(workspace);
-      await acp.setMode(fixNs.sessionId, "dabo-builder");
-      const fOut = await acp.prompt(fixNs.sessionId, `Fix these high-severity findings. Keep the judge green; do not change the judge itself.\n${JSON.stringify(highFindings(redteam))}\nReturn a brief summary.`);
-      recordModelCall(id, "builder-fix", modelOf(fixNs), fOut.usage, usageAcc, prices);
+    const repaired = await repairRedteamHighs({
+      id, dir, task: t, workspace, judge, redteam, usageAcc,
+      builderFix: async (findings) => {
+        const fixNs = await acp.newSession(workspace);
+        await acp.setMode(fixNs.sessionId, "dabo-builder");
+        const fOut = await acp.prompt(fixNs.sessionId, `Fix these high-severity findings. Keep the judge green; do not change the judge itself.\n${JSON.stringify(findings)}\nReturn a brief summary.`);
+        recordModelCall(id, "builder-fix", modelOf(fixNs), fOut.usage, usageAcc, prices);
+      },
+      round2: async (rws2, diff2) => {
+        const red2 = await acp.newSession(rws2);
+        await acp.setMode(red2.sessionId, "dabo-redteam");
+        const rOut2 = await acp.prompt(red2.sessionId, `Repo: ${rws2}\nDiff:\n${diff2.slice(0, 20000)}\nReturn only the JSON object.`);
+        recordModelCall(id, "redteam-2", modelOf(red2), rOut2.usage, usageAcc, prices);
+        return await parseRoleJsonWithRepair(rOut2.text, async (msg) => {
+          const r = await acp.prompt(red2.sessionId, msg);
+          recordModelCall(id, "redteam-2-repair", modelOf(red2), r.usage, usageAcc, prices);
+          return r.text;
+        });
+      },
+    });
+    redteam = repaired.redteam;
+    if (repaired.escalated) return { dir, verify, redteam, escalated: true };
 
-      let judgeCode = 0, judgeOut = "";
-      try { const r = runJudge(workspace, judge); judgeOut = r.out; } catch (e: any) { judgeCode = typeof e?.status === "number" ? e.status : 1; judgeOut = String(e?.stdout || e?.message || ""); }
-      writeFileSync(join(dir, "test.log"), `judge: ${judge}\nexit=${judgeCode}\n${judgeOut}`.slice(0, 20000));
-
-      const diff2 = gitDiff(workspace);
-      const rws2 = snapshotWorkspace(workspace, join(dir, "redteam-ws-2"));
-      const red2 = await acp.newSession(rws2);
-      await acp.setMode(red2.sessionId, "dabo-redteam");
-      const rOut2 = await acp.prompt(red2.sessionId, `Repo: ${rws2}\nDiff:\n${diff2.slice(0, 20000)}\nReturn only the JSON object.`);
-      recordModelCall(id, "redteam-2", modelOf(red2), rOut2.usage, usageAcc, prices);
-      const parsed2 = await parseRoleJsonWithRepair(rOut2.text, async (msg) => {
-        const r = await acp.prompt(red2.sessionId, msg);
-        recordModelCall(id, "redteam-2-repair", modelOf(red2), r.usage, usageAcc, prices);
-        return r.text;
-      });
-      redteam = { ...normalizeRedteam(parsed2.value), repaired: parsed2.repaired, round: 2 };
-      writeFileSync(join(dir, "redteam.json"), JSON.stringify(redteam, null, 1));
-
-      if (judgeCode !== 0 || highFindings(redteam).length) {
-        writeFileSync(join(dir, "packet.md"), `# 验收包 ${id}\n\n- 任务：${t.title}\n- 结论：**已升级**（redteam 修复后仍不达标）\n- judge exit：${judgeCode}\n- 剩余 high：${highFindings(redteam).length}\n- 变更：见 diff.patch\n`);
-        writeFileSync(join(dir, "usage.json"), JSON.stringify({ task_id: id, calls: usageAcc.rows.length, input_tokens: usageAcc.input, output_tokens: usageAcc.output, total_tokens: usageAcc.total, cost_usd: usageAcc.cost, unpriced_calls: usageAcc.unpriced, by_role: usageAcc.rows }, null, 1));
-        setStatus(id, "escalated", "redteam: high findings remain");
-        return { dir, verify, redteam, escalated: true };
-      }
-    }
-
-    writeFileSync(join(dir, "usage.json"), JSON.stringify({ task_id: id, calls: usageAcc.rows.length, input_tokens: usageAcc.input, output_tokens: usageAcc.output, total_tokens: usageAcc.total, cost_usd: usageAcc.cost, unpriced_calls: usageAcc.unpriced, by_role: usageAcc.rows }, null, 1));
+    writeUsage(dir, id, usageAcc);
     writeFileSync(join(dir, "packet.md"), `# 验收包 ${id}\n\n- 任务：${t.title}\n- 判据：${judge}\n- 验证：${verify?.conclusion}\n- 修复重试：${verify?.repaired ? "是" : "否"} / redteam：${redteam.repaired ? "是" : "否"}\n- 反驳：${(redteam.findings || []).length} 条\n- 模型调用：${usageAcc.rows.length} 次 / ${usageAcc.total} tokens\n`);
-    // 判据命令与工作区由 harness 记录，gate 会**重新执行**它（不信任任何角色写的证据）
-    writeFileSync(join(dir, "run.json"), JSON.stringify({ mock: false, mode: "acp", workspace, judge, ts: new Date().toISOString() }, null, 1));
     setStatus(id, "awaiting_acceptance", "acp run");
     return { dir, verify, redteam };
   } finally {
@@ -443,7 +508,7 @@ export async function runDsh(id: string, workspace: string) {
       plan = planned.value;
     } catch (e: any) {
       writeFileSync(join(dir, "packet.md"), `# 验收包 ${id}\n\n- 任务：${t.title}\n- 结论：**已升级**（planner 输出无法解析）\n- 错误：${e.message}\n`);
-      writeFileSync(join(dir, "usage.json"), JSON.stringify({ task_id: id, calls: usageAcc.rows.length, input_tokens: usageAcc.input, output_tokens: usageAcc.output, total_tokens: usageAcc.total, cost_usd: usageAcc.cost, unpriced_calls: usageAcc.unpriced, by_role: usageAcc.rows }, null, 1));
+      writeUsage(dir, id, usageAcc);
       setStatus(id, "escalated", "planner: " + e.message);
       return { dir, escalated: true, error: e.message };
     }
@@ -480,10 +545,13 @@ export async function runDsh(id: string, workspace: string) {
 
     if (verify?.conclusion !== "通过") {
       writeFileSync(join(dir, "packet.md"), `# 验收包 ${id}\n\n- 任务：${t.title}\n- 结论：**已升级**（验证未通过）\n- 验证：${verify?.conclusion}\n- 修复重试：${verify?.repaired ? "是" : "否"}\n- 证据：\n${(verify?.evidence || []).map((e: string) => "- " + e).join("\n")}\n- 变更：见 diff.patch\n`);
-      writeFileSync(join(dir, "usage.json"), JSON.stringify({ task_id: id, calls: usageAcc.rows.length, input_tokens: usageAcc.input, output_tokens: usageAcc.output, total_tokens: usageAcc.total, cost_usd: usageAcc.cost, unpriced_calls: usageAcc.unpriced, by_role: usageAcc.rows }, null, 1));
+      writeUsage(dir, id, usageAcc);
       setStatus(id, "escalated", "verify: " + verify?.conclusion);
       return { dir, verify, escalated: true };
     }
+
+    // 判据命令与工作区由 harness 记录，gate 会**重新执行**它；redteam 修复后的判据复跑也以 run.json 为准。
+    writeFileSync(join(dir, "run.json"), JSON.stringify({ mock: false, mode: "dsh", workspace, judge, ts: new Date().toISOString() }, null, 1));
 
     const rws = snapshotWorkspace(workspace, join(dir, "redteam-ws"));
     const rOut = await callDsh("redteam", rws, `Repo: ${rws}\nDiff:\n${diff.slice(0, 20000)}\nReturn only the JSON object.`, tracker);
@@ -493,10 +561,32 @@ export async function runDsh(id: string, workspace: string) {
       recordModelCall(id, "redteam-repair", r.model, r.usage, usageAcc, prices);
       return r.text;
     });
-    const redteam = { ...normalizeRedteam(fixed.value), repaired: fixed.repaired };
+    let redteam: any = { ...normalizeRedteam(fixed.value), repaired: fixed.repaired, round: 1 };
     writeFileSync(join(dir, "redteam.json"), JSON.stringify(redteam, null, 1));
-    writeFileSync(join(dir, "usage.json"), JSON.stringify({ task_id: id, calls: usageAcc.rows.length, input_tokens: usageAcc.input, output_tokens: usageAcc.output, total_tokens: usageAcc.total, cost_usd: usageAcc.cost, unpriced_calls: usageAcc.unpriced, by_role: usageAcc.rows }, null, 1));
+
+    // 与 ACP 路径同一套闭环：high 回灌 builder 修 → 复跑判据 → 再复检一轮；仍不达标就升级。
+    const repaired = await repairRedteamHighs({
+      id, dir, task: t, workspace, judge, redteam, usageAcc,
+      builderFix: async (findings) => {
+        const fOut = await callDsh("builder", workspace, `Fix these high-severity findings. Keep the judge green; do not change the judge itself.\n${JSON.stringify(findings)}\nReturn a brief summary.`, tracker);
+        recordModelCall(id, "builder-fix", fOut.model, fOut.usage, usageAcc, prices);
+      },
+      round2: async (rws2, diff2) => {
+        const rOut2 = await callDsh("redteam", rws2, `Repo: ${rws2}\nDiff:\n${diff2.slice(0, 20000)}\nReturn only the JSON object.`, tracker);
+        recordModelCall(id, "redteam-2", rOut2.model, rOut2.usage, usageAcc, prices);
+        return await parseRoleJsonWithRepair(rOut2.text, async (msg) => {
+          const r = await callDsh("redteam", rws2, `Repo: ${rws2}\nDiff:\n${diff2.slice(0, 20000)}\n${msg}`, tracker);
+          recordModelCall(id, "redteam-2-repair", r.model, r.usage, usageAcc, prices);
+          return r.text;
+        });
+      },
+    });
+    redteam = repaired.redteam;
+    if (repaired.escalated) return { dir, verify, redteam, escalated: true };
+
+    writeUsage(dir, id, usageAcc);
     writeFileSync(join(dir, "packet.md"), `# 验收包 ${id}\n\n- 任务：${t.title}\n- 判据：${judge}\n- 验证：${verify?.conclusion}\n- 修复重试：${verify?.repaired ? "是" : "否"} / redteam：${redteam.repaired ? "是" : "否"}\n- 反驳：${(redteam.findings || []).length} 条\n- 模型调用：${usageAcc.rows.length} 次 / ${usageAcc.total} tokens\n`);
+    writeFileSync(join(dir, "run.json"), JSON.stringify({ mock: false, mode: "dsh", workspace, judge, ts: new Date().toISOString() }, null, 1));
     setStatus(id, "awaiting_acceptance", "dsh run");
     return { dir, verify, redteam };
   } finally {

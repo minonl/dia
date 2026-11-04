@@ -1,6 +1,6 @@
 # dia 状态页（单一事实源）
 
-> 更新：2026-11-03（复核：`bun test tests` 253/32 全绿）。任何"现在做到哪了"的问题，以本页为准；其他文档是细节。
+> 更新：2026-11-03（复核：`bun test tests` 268/34 全绿）。任何"现在做到哪了"的问题，以本页为准；其他文档是细节。
 > 规则：状态必须能追到**命令/测试/提交**；没有证据的写"未验证"。
 
 ---
@@ -89,10 +89,11 @@
 | D0.20 | 组合自检 | **完成** | `dia doctor`（persona/kit/knowledge/dsh preset/wt；exit 0/1/2） |
 | D0.21 | worktree 抽取 `packages/wt` | **完成** | 7 处 python→node；`dia wt`；4 套测试原样迁移全绿 |
 | D0.23 | doctor 平台版本自检 | **完成** | `platform:opencode` / `platform:dsh` 报版本（缺宿主 = warn，不判红）；`tests/active-doctor.test.ts` |
+| D0.35 | dsh 驱动自动修复对齐 ACP | **完成**（团队产出 + 人工补齐） | 抽出 `repairRedteamHighs`（ACP/dsh 共用）：high → builder 修 → 复跑判据（20MB buffer / 600s）→ 复检；dsh 成功路径写 `run.json`；268 tests |
 | D0.34 | 判据证据由 gate 现场重跑 | **完成**（团队升级后人工补齐） | gate 只认任务台账的 judge，在 `run.json` 记录的 workspace 里重跑；忽略任何角色写的 `judge.json`；mock run 不再能当验收证据；`tests/team.test.ts` 覆盖 |
 | D0.33 | audit off-box checkpoint | **完成**（团队产出） | `DIA_AUDIT_CHECKPOINT`：两阶段（pending 公告 → 落盘 → 确认）、`checkpoint_id`、路径校验（绝对/不在审计目录/非常规文件）；`protection=anchored:*` 判定；248 tests |
 | D0.32 | doctor 渲染产物检查 | **完成**（团队产出） | `persona.renderDrift`（只读，复用 compareDir 口径）+ `persona.render` 检查：宿主产物被改/丢失 → warn 并给 `dia persona render <id>`；跳过场景不拉红；237 tests |
-| D0.31 | redteam high 自动修复 | **完成** | `team gate` 遇 high 判 fail；`run --acp` 把 high 回灌 builder 修一轮 → 复跑判据 + 复检，仍不达标则 escalated；`tests/team-acp.test.ts` 覆盖 |
+| D0.31 | redteam high 自动修复 | **完成** | `team gate` 遇 high 判 fail；`run --acp` / `run --dsh` 同一套闭环：high 回灌 builder 修一轮 → 复跑判据（`run.json` 的 workspace）+ 复检一轮，仍不达标则 escalated；`redteam.json` 带 `repaired/round`；`tests/team-acp.test.ts` 两条驱动路径均覆盖 |
 | D0.30 | 清理过期内容 | **完成** | `docs/framework-bootstrap.md` → `docs/history/`（归档并标注不采用）；删除 `doctor.ts` 未用常量；全仓无 `deps.yaml` 残留引用 |
 | D0.29 | audit 哈希链（M3） | **完成**（团队自动循环 + 人工修正） | `audit append` 写 `seq/prev_hash/hash`；`audit verify --chain`；锚点 `audit/head.json`（原子写，截断/锚点缺失 fail-closed）；mkdir 锁串行化写入；坏行判链断点；离箱检查点 `DIA_AUDIT_CHECKPOINT`（两阶段公告/确认写、head→checkpoint 顺序、写失败回滚、同域伪造/回滚/未公告行检出、缺失/损坏 fail-closed、未配置仅告警）；`tests/audit.test.ts` 46 例 |
 | D0.28 | ACP 默认超时 10 分钟 | **完成** | `DEFAULT_ACP_TIMEOUT=600000`（180s 实测会掐断 builder）；`tests/team.test.ts` |

@@ -3,8 +3,9 @@
 > 日期 2026-10-28。目标：**计划→实现→验证→对抗→修复全自动循环；人只在验收阶段拍板。**
 >
 > **状态（2026-11-03 更新）**：部分实现。已落地：`dia team run --mock|--acp|--dsh`、`gate/accept/reject`、`task` 台账；
-> **redteam 的 high 级反驳会自动回灌 builder 修一轮**（复跑判据 + 复检，仍不达标才 escalated），gate 对 high 直接判 fail。
-> 未落地：多轮修复后的模型重打分、dsh 驱动的同款自动修复、验收包的机器可读格式。
+> **redteam 的 high 级反驳会自动回灌 builder 修一轮**（复跑判据 + 复检，仍不达标才 escalated），gate 对 high 直接判 fail；
+> `--acp` 与 `--dsh` 两条驱动路径共用同一闭环与同一判据。
+> 未落地：多轮修复后的模型重打分、验收包的机器可读格式。
 > 前提：每个角色是宿主里的独立 persona；编排由确定性脚本驱动；模型只做角色内判断。
 
 ---
@@ -155,6 +156,7 @@ planner 出计划 → builder 写文件 → verifier 亲自跑判据（通过，
 
 判据：用一个真实小任务跑完整圈，人在 acceptance 只做一次 accept/reject；全程无人工触发 verifier。
 
-**自动化回归（2026-11-01）**：`tests/team-acp.test.ts` 用假 ACP 服务器（`tests/fixtures/fake-acp.mjs`）跑通
+**自动化回归（2026-11-01，2026-11-04 补 dsh high 修复闭环）**：`tests/team-acp.test.ts` 用假 ACP 服务器（`tests/fixtures/fake-acp.mjs`）跑通
 `team run --acp` 与 `--dsh`：planner → builder → verifier（通过/不通过两条路径）→ redteam → gate / accept，
-**不花模型钱**、结果确定；覆盖 `escalated`（退出码 30）与无判据 `E_TASK`。真实模型链路仍需人工跑一次。
+**不花模型钱**、结果确定；覆盖 `escalated`（退出码 30）、无判据 `E_TASK`，以及 high → builder 修复 + `redteam-2` 复检
+（清零 → awaiting_acceptance；仍 high 或判据非 0 → escalated，两条驱动路径各三例）。真实模型链路仍需人工跑一次。

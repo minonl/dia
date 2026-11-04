@@ -1,7 +1,6 @@
 {
   "name": "@minonl/dia",
   "version": "0.0.1",
-  "private": true,
   "type": "module",
   "description": "dia (嗲) — lightweight agent framework: knowledge index, audit, session ingest",
   "bin": {
@@ -10,6 +9,8 @@
   "files": [
     "bin",
     "dist",
+    "packages/wt",
+    "packages/job",
     "docs",
     "README.md"
   ],
@@ -34,5 +35,13 @@
   "packageManager": "pnpm@12.5.1",
   "devDependencies": {
     "@dia/kb": "workspace:*"
-  }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/minonl/dia.git"
+  },
+  "homepage": "https://github.com/minonl/dia"
 }

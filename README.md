@@ -48,6 +48,17 @@ Python 原型已完成使命（行为对齐后删除）；其基线数字保留�
 
 ## 安装
 
+### npm（全局 CLI）
+
+```bash
+npm i -g @minonl/dia
+dia version && dia doctor
+```
+
+> 包里带 `dist` + `packages/{wt,job}`；persona 仍需单独 `dia persona add …`。
+
+### 从仓库（开发/本地）
+
 ```bash
 git clone https://github.com/minonl/dia ~/repos/github/dia
 cd ~/repos/github/dia

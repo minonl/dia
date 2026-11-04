@@ -5161,6 +5161,7 @@ git for-each-ref
 | D0.21 | worktree 抽取 `packages/wt` | **完成** | 7 处 python→node；`dia wt`；4 套测试原样迁移全绿 |
 | D0.23 | doctor 平台版本自检 | **完成** | `platform:opencode` / `platform:dsh` 报版本（缺宿主 = warn，不判红）；`tests/active-doctor.test.ts` |
 | D0.44 | 配置迁移走 LLM 任务 | **完成** | `docs/migrations/llm-migration.md`：升级只改声明；迁移=任务+判据+回滚；禁止代码里堆版本分支（安全敏感/原子场景例外） |
+| D0.46 | npm 包准备 | **完成（待发布）** | 去掉 `private`、`publishConfig.access=public`、`files` 含 `packages/{wt,job}`；`npm pack` + 本地全局安装实测通过 |
 | D0.45 | 发版脚本 | **完成** | `scripts/release.sh <patch|minor|major|x.y.z> [--dry-run]`：干净 main + 同步校验 → bump → tag → push → `gh release create`（私有仓默认不发 npm） |
 | D0.43 | broker 取用写主审计链 | **完成** | `DIA_BW_AUDIT_CHAIN=1` 时成功取用追加 `audit.jsonl`（tool=bw、note=ENV=item，无值）；默认关，避免测试/日常噪声；失败只留 `bw.jsonl` |
 | D0.42 | env run 接 bw 白名单 | **完成** | `dia env run --bw KEY=item …`：白名单 + broker 取用合并注入；子进程环境剔除 `BW_SESSION`/`BW_PASSWORD`；`serve --passwordfile` 支持启动解锁；`tests/bw-cli.test.ts` |

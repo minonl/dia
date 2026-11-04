@@ -59,7 +59,8 @@ dia version && dia doctor
 >
 > **发布方式**：GitHub Actions + npm **Trusted Publishing**（OIDC，仓库里不放 token）；
 > 打 release 即触发 `.github/workflows/publish.yml`。npmjs 侧需配 Trusted Publisher：
-> repo `minonl/dia`、workflow `publish.yml`。**provenance 要求仓库公开**，私有仓需先过 public-release 门禁。
+> repo `minonl/dia`、workflow `publish.yml`。
+> **私有仓也能发**；只是 npm 不为私有仓生成 **provenance**（官方限制），workflow 会自动降级。
 
 ### 从仓库（开发/本地）
 

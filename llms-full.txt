@@ -4963,8 +4963,8 @@ dia env bw get --item db --task t-1    # 走 broker，写审计行
 
 > 状态：**BLOCKED until audit**（2026-10-30）
 >
-> 2026-11-04：npm **provenance** 要求包源码可公开访问；仓库仍是 private 时 `npm publish --provenance` 会失败。
-> 所以「发 npm」与「仓库转公开」是同一道门：先过本文件的门禁。
+> 2026-11-04 更正：**发 npm 不需要仓库公开**（Trusted Publishing 对私有仓可用）；只有 **provenance** 需要公开仓。
+> 所以「发 npm」与「转公开」不是同一道门：私有仓可先发不带 provenance 的版本，公开后再补 provenance。
 > 适用：把 `minonl/dia` 从 private 改为 public 之前。任何一项失败都不得公开。
 
 ---

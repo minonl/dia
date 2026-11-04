@@ -32,5 +32,11 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run build
       - run: bun test tests
-      - name: publish (trusted, provenance)
-        run: npm publish --access public --provenance
+      - name: publish (trusted; provenance 仅公开仓可用)
+        run: |
+          if [ "${{ github.event.repository.private }}" = "true" ]; then
+            echo "private repo → 不发 provenance（npm 已知限制）"
+            npm publish --access public --provenance=false
+          else
+            npm publish --access public --provenance
+          fi

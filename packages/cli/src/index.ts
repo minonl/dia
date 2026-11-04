@@ -559,6 +559,11 @@ async function msgCli(argv: string[]): Promise<number> {
       if (!agent || !id) { err("usage: dia msg deliver <agent> <id> [--transport tmux|acp] [--wait] [--force]"); return 2; }
       const transport = flag(args, "--transport") || "tmux";
       // 默认异步：投递即返回，回执走 dia msg reply / 状态机；长任务不再阻塞调用方。
+      // 但目标必须**先校验**（离线/身份不符直接报错，不能把错误留给后台子进程吞掉）。
+      if (!has(args, "--wait") && transport === "tmux") {
+        try { agents.resolveTarget(agent); }
+        catch (e: any) { err(String(e?.message || e)); return 1; }
+      }
       if (!has(args, "--wait")) {
         const child = spawnDetachedDelivery(args);
         out(asJson ? JSON.stringify({ dispatched: true, pid: child.pid, agent, id, transport, log: child.log })

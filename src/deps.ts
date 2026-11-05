@@ -6,6 +6,7 @@ import { existsSync, readFileSync, mkdirSync, writeFileSync, chmodSync } from "n
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { execFileSync } from "node:child_process";
+import * as paths from "./paths.ts";
 
 export interface DepEntry {
   id: string;
@@ -31,7 +32,7 @@ const home = () => process.env.DIA_HOME || homedir();
 export function candidates(): string[] {
   const out: string[] = [];
   if (process.env.DIA_DEPS_FILE) out.push(process.env.DIA_DEPS_FILE);
-  const install = process.env.DIA_HOME_INSTALL || join(home(), ".local", "share", "dia");
+  const install = paths.installDir();
   out.push(join(install, "registry", "deps.jsonl"));
   out.push(join(process.cwd(), "docs", "deps.jsonl"));
   return out;

@@ -13,6 +13,7 @@ import * as active from "./active.ts";
 import * as dsh from "./dsh.ts";
 import * as platforms from "./platforms.ts";
 import * as deps from "./deps.ts";
+import * as paths from "./paths.ts";
 import { indexStatus, type IndexStatus } from "./kb.ts";
 
 export interface Check { name: string; status: "ok" | "warn" | "fail"; detail: string }
@@ -198,7 +199,7 @@ export async function run(opts: { persona?: string } = {}): Promise<{
   checks.push(...depsChecks());
   checks.push(...platformChecks());
 
-  const wt = join(process.env.DIA_HOME_INSTALL || join(home(), ".local", "share", "dia"), "packages/wt/bin/dia-wt");
+  const wt = join(paths.installDir(), "packages/wt/bin/dia-wt");
   checks.push({ name: "wt", status: existsSync(wt) ? "ok" : "warn", detail: existsSync(wt) ? wt : "dia wt 未安装（dia install.sh）" });
 
   const verdict = checks.some((c) => c.status === "fail") ? "fail" : checks.some((c) => c.status === "warn") ? "warn" : "ok";

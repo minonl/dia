@@ -8,6 +8,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
+import * as paths from "./paths.ts";
 
 export interface PlatformEntry {
   supported: boolean;
@@ -25,7 +26,7 @@ const home = () => process.env.DIA_HOME || homedir();
 export function registryCandidates(): string[] {
   const out: string[] = [];
   if (process.env.DIA_PLATFORMS_FILE) out.push(process.env.DIA_PLATFORMS_FILE);
-  const install = process.env.DIA_HOME_INSTALL || join(home(), ".local", "share", "dia");
+  const install = paths.installDir();
   out.push(join(install, "registry", "platforms.json"));
   out.push(join(process.cwd(), "docs", "platforms", "registry.json"));
   return out;

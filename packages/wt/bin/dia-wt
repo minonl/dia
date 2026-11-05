@@ -214,8 +214,29 @@ console.log(`   repo=${d.repo}｜ gitRepo=${d.gitRepo}｜ writable=` + (d.writab
 JS
 }
 
+# adopt 写入的路径模板（<git-common-dir>/dia/config.json 的 template）；未 adopt → 空
+wt_repo_template() {
+  local repo="$1" common cfg
+  common="$(wt_common_dir "$repo" 2>/dev/null)" || return 1
+  cfg="$common/dia/config.json"
+  [ -f "$cfg" ] || return 1
+  python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("template") or "")' "$cfg" 2>/dev/null
+}
+wt_expand_template() {
+  local tmpl="$1" repo="$2" feature="$3"
+  local parent base
+  parent="$(cd "$(dirname "$repo")" && pwd)"; base="$(basename "$repo")"
+  printf '%s' "$tmpl" | sed -e "s|{{parent}}|$parent|g" -e "s|{{repo}}|$base|g" \
+                              -e "s|{{wtRoot}}|$repo/.worktrees|g" -e "s|{{feature}}|$feature|g"
+}
 wt_path() {
-  local repo="$1" feature="$2" form="$3"
+  local repo="$1" feature="$2" form="$3" tmpl dest
+  # 模板优先（adopt 后策略即 SSOT）；未 adopt 维持凭 form 推导（默认平级，零迁移）
+  if tmpl="$(wt_repo_template "$repo")" && [ -n "$tmpl" ]; then
+    dest="$(wt_expand_template "$tmpl" "$repo" "$feature")"
+    case "$dest" in /*) ;; *) dest="$repo/$dest" ;; esac
+    printf '%s' "$dest"; return 0
+  fi
   local parent; parent="$(cd "$(dirname "$repo")" && pwd)"
   local base;   base="$(basename "$repo")"
   if [ "$form" = hidden ]; then printf '%s/.worktrees/%s' "$repo" "$feature"
@@ -1191,7 +1212,7 @@ cmd_adopt() {
     --template) template="$2"; shift 2 ;;
     --default-branch) def="$2"; shift 2 ;;
     --json) json=1; shift ;;
-    --force) shift ;;
+    --force) echo "[dia-wt] --force 已忽略：adopt 幂等、无破坏性默认行为" >&2; shift ;;
     -h|--help) sed -n '2,6p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) die "未知参数：$1" ;;
     *) repo="$1"; shift ;;

@@ -96,6 +96,14 @@ echo b > "$TD/repo5-worktree--x/b.txt"; git -C "$TD/repo5-worktree--x" add b.txt
 git -C "$TD/repo5-worktree--x" commit -qm feat-x --no-verify 2>/dev/null
 if git -C "$TD/repo5-worktree--x" push -q origin feat/x >/dev/null 2>&1; then ok "worktree push 放行"; else bad "worktree push 被误拦"; fi
 
+# ── template 生效（P2-6）：adopt 后 create 按 config.template 推导路径 ─────────
+out="$(bash "$WT" create "$R5" t1 --dry-run 2>&1 || true)"
+printf '%s' "$out" | grep -q "repo5-worktree--t1" && ok "默认模板 create 路径" || bad "默认模板 create: $out"
+bash "$WT" adopt "$R5" --apply --template '{{parent}}/{{repo}}.wt.{{feature}}' >/dev/null 2>&1 || bad "template apply 失败"
+out="$(bash "$WT" create "$R5" t1 --dry-run 2>&1 || true)"
+printf '%s' "$out" | grep -q "repo5.wt.t1" && ok "自定义模板 create 路径生效" || bad "自定义模板: $out"
+bash "$WT" adopt "$R5" --apply >/dev/null 2>&1
+
 # ── gate：成功 / 失败（P1-3 精确匹配）────────────────────────────────────────
 bash "$WT" gate "$R5" x >/dev/null 2>&1 && ok "gate 成功" || bad "gate 失败"
 if bash "$WT" gate "$R5" xb >/dev/null 2>&1; then bad "gate 子串误匹配（x 命中 xb）"; else ok "gate 精确匹配 feature"; fi

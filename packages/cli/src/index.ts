@@ -8,6 +8,7 @@ import { resumeCard } from "../../../src/resume.ts";
 import * as persona from "../../../src/persona.ts";
 import * as msg from "../../../src/msg.ts";
 import * as collab from "../../../src/collab.ts";
+import * as claims from "../../../src/claims.ts";
 import * as defaultMsg from "../../../src/default-msg.ts";
 import * as paths from "../../../src/paths.ts";
 import * as agents from "../../../src/agents.ts";
@@ -183,6 +184,7 @@ usage:
   dia agents list|register|unregister|discover
   dia msg deliver <agent> <id> [--transport tmux|acp]
   dia task add|list|status|done
+  dia claim <path> [--reason R] [--ttl 4h] [--session S] | dia claims [--all] [--mine] | dia unclaim <path|id> [--force]
   dia team run <id> --mock | --acp|--dsh --workspace DIR
   dia team gate|accept|reject|next
   dia team accept <id> [--note ...] [--pr N [--repo R] [--merge]]   # --pr：先验 CI，绿才接受/合并
@@ -713,6 +715,48 @@ async function msgCli(argv: string[]): Promise<number> {
     return 31;
   }
   err("usage: dia msg send|inbox|ack|delivered|reply|thread|escalate|agents");
+  return 2;
+}
+
+async function claimsCli(argv: string[]): Promise<number> {
+  const [sub, ...args] = argv;
+  const asJson = has(args, "--json");
+  const session = flag(args, "--session");
+  try {
+    if (sub === "claim") {
+      const path = positional(args)[0];
+      if (!path) { err("usage: dia claim <path> [--reason R] [--ttl 4h] [--session S] [--json]"); return 2; }
+      const r = claims.claim(path, { reason: flag(args, "--reason"), ttl: flag(args, "--ttl"), session });
+      if (asJson) out(JSON.stringify(r, null, 1));
+      else {
+        out(`claimed ${r.claim.id}  ${r.claim.scope}:${r.claim.path}  holder=${r.claim.holder}  expires=${r.claim.expires_at}`);
+        for (const o of r.overlaps) out(`  ⚠ overlap: ${o.holder} (${o.reason || "no reason"}) expires=${o.expires_at}`);
+      }
+      return 0;
+    }
+    if (sub === "claims") {
+      const mine = has(args, "--mine") ? collab.resolveSessionId(session) : undefined;
+      const rows = claims.list({ all: has(args, "--all"), mine });
+      out(asJson ? JSON.stringify(rows, null, 1)
+        : rows.map((c) => `${c.path}\t${c.holder}\t${c.reason || ""}\t${c.expires_at}${claims.isActive(c) ? "" : "\t(expired)"}`).join("\n") || "(none)");
+      return 0;
+    }
+    if (sub === "unclaim") {
+      const target = positional(args)[0];
+      if (!target) { err("usage: dia unclaim <path|id> [--force] [--session S]"); return 2; }
+      const c = claims.unclaim(target, { session, force: has(args, "--force") });
+      out(asJson ? JSON.stringify(c, null, 1) : `released ${c.id}  ${c.scope}:${c.path}`);
+      return 0;
+    }
+  } catch (e: any) {
+    const m = e?.message || String(e);
+    err(m);
+    if (m.startsWith("E_NO_SESSION") || m.startsWith("E_USAGE") || m.startsWith("E_CLAIM_PATH")) return 2;
+    if (m.startsWith("E_CLAIM_OWNER")) return 22;
+    if (m.startsWith("E_CLAIM:")) return 21;
+    return 31;
+  }
+  err("usage: dia claim|claims|unclaim ...");
   return 2;
 }
 
@@ -1471,6 +1515,7 @@ export async function main(rawArgv: string[]): Promise<number> {
   }
   if (cmd === "task") return taskCli(argv.slice(1));
   if (cmd === "msg") return msgCli(argv.slice(1));
+  if (cmd === "claim" || cmd === "claims" || cmd === "unclaim") return claimsCli(argv);
   if (cmd === "collab") return collabCli(argv.slice(1));
   if (["whoami", "in", "out", "ack", "reply", "close", "show"].includes(cmd)) return collabCli(argv);
   if (cmd === "agents") return agentsCli(argv.slice(1));

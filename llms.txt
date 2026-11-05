@@ -26,6 +26,8 @@
 - [dia monorepo：框架模块的归属](https://github.com/minonl/dia/blob/main/docs/monorepo.md): 结论：dia-job 回 dia monorepo，作为 packages/job；kb 作为 packages/kb。
 - [dia msg M0：送达与可读（设计 v0.1）](https://github.com/minonl/dia/blob/main/docs/msg-collab-m0-design.md): 一句话：任意两个活会话互发消息，收件方无需用户手敲命令即可读到；正文持久、有 ack/reply/close。
 - [dia msg M0 使用说明（送达与可读）](https://github.com/minonl/dia/blob/main/docs/msg-collab-m0.md): 一句话：任意两个活着的 dia 会话可以互发消息；收件方开工就能看到未读，正文不依赖临时文件。
+- [dia msg M1：共享热点 claim + 任务依赖 + graph JSON（设计 v0.1）](https://github.com/minonl/dia/blob/main/docs/msg-collab-m1-design.md): 日期：2026-11-05 ｜ 状态：设计（待实现） ｜ 上游：docs/research/msg-collaboration-grill.md（C1–C3 / D1）
+- [dia claim：共享热点文件声明（M1a）](https://github.com/minonl/dia/blob/main/docs/msg-collab-m1.md): 一句话：在改共享文件前先 dia claim，让其它会话看见“谁在改、为什么、什么时候过期”；只告警，不阻断。
 - [dia / yan / dabo 现状总览](https://github.com/minonl/dia/blob/main/docs/overview.md): 2026-11-03 实测。本条是三方合起来的「现在长什么样」；docs/status.md 管 dia 的阶段与证据，
 - [Patch：对已安装 persona / kit 的本地补丁](https://github.com/minonl/dia/blob/main/docs/patching.md): 参考 npm/patch-package，但只作用于本地安装副本，不改上游。
 - [Persona / Kit 安装：用 dia 从 git 地址装](https://github.com/minonl/dia/blob/main/docs/persona-install.md): 命名已定：persona = 可被选中的 agent 定义，kit = 知识/技能/工具内容，profile = 宿主运行环境（dsh）。

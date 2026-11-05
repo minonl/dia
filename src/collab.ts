@@ -122,7 +122,7 @@ function sleep(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-function withLock<T>(name: string, fn: () => T): T {
+export function withLock<T>(name: string, fn: () => T): T {
   const dir = join(root(), ".locks");
   ensureDir(dir);
   const safe = name.replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 100);

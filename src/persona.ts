@@ -7,10 +7,11 @@ import * as kit from "./kit.ts";
 import * as config from "./config.ts";
 import * as active from "./active.ts";
 import { parseJsonc, setTopLevelKey } from "./jsonc.ts";
+import * as paths from "./paths.ts";
 
 // 目录惰性解析（测试与多 persona 场景 env 会变）
-const dataDir = () => process.env.DIA_DATA_DIR || join(homedir(), ".local", "share", "dia");
-const cacheDir = () => process.env.DIA_CACHE_DIR || join(homedir(), ".cache", "dia", "src");
+const dataDir = () => paths.diaHome();
+const cacheDir = () => paths.srcCacheDir();
 const opencodeAgents = () => process.env.DIA_OPENCODE_AGENTS_DIR || join(homedir(), ".config", "opencode", "agents");
 const dshProfiles = () => process.env.DIA_DSH_PROFILES_DIR || join(homedir(), ".dsh", "profiles");
 // codex 没有「profile」概念，隔离单位是 HOME：codex 读 $CODEX_HOME/AGENTS.md（默认 $HOME/.codex），

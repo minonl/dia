@@ -7,8 +7,9 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, appendFileSync, writeFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import { join } from "node:path";
+import * as paths from "./paths.ts";
 
-const dataDir = () => process.env.DIA_DATA_DIR || join(homedir(), ".local", "share", "dia");
+const dataDir = () => paths.diaHome();
 const stateDir = () => join(dataDir(), "state");
 const activeFile = () => join(stateDir(), "active.json");
 const auditFile = () => join(stateDir(), "active.jsonl");

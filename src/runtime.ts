@@ -1,8 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import * as paths from "./paths.ts";
 
-const DATA = process.env.DIA_DATA_DIR || join(homedir(), ".local", "share", "dia");
+const DATA = () => paths.diaHome();
 
 export interface CallRecord {
   run_id: string;
@@ -16,7 +17,7 @@ export interface CallRecord {
 }
 
 export function callsFile(): string {
-  return join(DATA, "runtime", "calls.jsonl");
+  return join(DATA(), "runtime", "calls.jsonl");
 }
 
 export function allCalls(): CallRecord[] {

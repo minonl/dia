@@ -4,8 +4,9 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { list as listTasks } from "./task.ts";
 import * as deps from "./deps.ts";
+import * as paths from "./paths.ts";
 
-const DATA = process.env.DIA_DATA_DIR || join(homedir(), ".local", "share", "dia");
+const DATA = () => paths.diaHome();
 
 export interface Proposal {
   id: string;
@@ -35,7 +36,7 @@ function readJson(path: string): any {
 }
 
 function collectRuns(out: Proposal[]) {
-  const root = join(DATA, "runs");
+  const root = join(DATA(), "runs");
   if (!existsSync(root)) return;
   for (const id of readdirSync(root)) {
     const dir = join(root, id);

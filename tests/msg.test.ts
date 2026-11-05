@@ -8,7 +8,7 @@ let root: string;
 const cli = join(import.meta.dir, "..", "packages", "cli", "src", "index.ts");
 const run = (args: string[]) => spawnSync("bun", [cli, "msg", ...args], {
   encoding: "utf8",
-  env: { ...process.env, DIA_MSG_ROOT: root },
+  env: { ...process.env, DIA_ROOT: root },
 });
 const json = (s: string) => JSON.parse(s);
 

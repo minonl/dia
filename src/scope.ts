@@ -6,9 +6,10 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import * as active from "./active.ts";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import * as paths from "./paths.ts";
 
 // 目录在调用时解析（同 kit.ts：模块加载时固化会污染跨测试/多 persona 场景）
-const dataDir = () => process.env.DIA_DATA_DIR || join(homedir(), ".local", "share", "dia");
+const dataDir = () => paths.diaHome();
 const homeDir = () => process.env.DIA_HOME || homedir();
 
 export interface KitScope {

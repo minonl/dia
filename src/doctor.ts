@@ -14,6 +14,7 @@ import * as dsh from "./dsh.ts";
 import * as platforms from "./platforms.ts";
 import * as deps from "./deps.ts";
 import * as paths from "./paths.ts";
+import * as job from "./job.ts";
 import { indexStatus, type IndexStatus } from "./kb.ts";
 
 export interface Check { name: string; status: "ok" | "warn" | "fail"; detail: string }
@@ -208,6 +209,13 @@ export async function run(opts: { persona?: string } = {}): Promise<{
 
   const wt = join(install, "packages/wt/bin/dia-wt");
   checks.push({ name: "wt", status: existsSync(wt) ? "ok" : "warn", detail: existsSync(wt) ? wt : "dia wt 未安装（dia install.sh）" });
+
+  const jobRoot = job.jobRootResolved();
+  checks.push({
+    name: "job",
+    status: existsSync(jobRoot) ? "ok" : "warn",
+    detail: `${jobRoot}${existsSync(jobRoot) ? "" : "（未创建；dia job install 首次运行会建）"}`,
+  });
 
   const verdict = checks.some((c) => c.status === "fail") ? "fail" : checks.some((c) => c.status === "warn") ? "warn" : "ok";
   return { persona: ids.length === 1 ? ids[0] : null, personas: ids, checks, verdict };

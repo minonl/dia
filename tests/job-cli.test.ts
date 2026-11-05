@@ -50,3 +50,37 @@ describe("dia job routing", () => {
     expect(r.stdout.trim()).toBe(hostPlatform());
   });
 });
+
+describe("dia job 数据根跟随 ~/.dia", () => {
+  function stub(dir: string) {
+    const bin = join(dir, "stub");
+    writeFileSync(bin, "#!/bin/sh\necho \"ROOT:$DIA_JOB_ROOT\"\n");
+    chmodSync(bin, 0o755);
+    return bin;
+  }
+  test("新根存在 → 用 ~/.dia/job", () => {
+    const home = mkdtempSync(join(tmpdir(), "dia-job-root-new-"));
+    spawnSync("mkdir", ["-p", join(home, ".dia", "job")]);
+    // DIA_ROOT / DIA_DATA_DIR 可能被其它测试文件污染（bun test 同进程），显式清空
+    const r = runJob(["x"], { HOME: home, DIA_JOB_BIN: stub(home), DIA_ROOT: "", DIA_DATA_DIR: "" });
+    expect(r.stdout.trim()).toBe(`ROOT:${join(home, ".dia", "job")}`);
+  });
+  test("迁移期：新根不存在、旧根存在 → 回退旧根", () => {
+    const home = mkdtempSync(join(tmpdir(), "dia-job-root-old-"));
+    spawnSync("mkdir", ["-p", join(home, ".local", "share", "dia-job")]);
+    // DIA_ROOT / DIA_DATA_DIR 可能被其它测试文件污染（bun test 同进程），显式清空
+    const r = runJob(["x"], { HOME: home, DIA_JOB_BIN: stub(home), DIA_ROOT: "", DIA_DATA_DIR: "" });
+    expect(r.stdout.trim()).toBe(`ROOT:${join(home, ".local", "share", "dia-job")}`);
+  });
+  test("都没有 → 默认 ~/.dia/job", () => {
+    const home = mkdtempSync(join(tmpdir(), "dia-job-root-none-"));
+    // DIA_ROOT / DIA_DATA_DIR 可能被其它测试文件污染（bun test 同进程），显式清空
+    const r = runJob(["x"], { HOME: home, DIA_JOB_BIN: stub(home), DIA_ROOT: "", DIA_DATA_DIR: "" });
+    expect(r.stdout.trim()).toBe(`ROOT:${join(home, ".dia", "job")}`);
+  });
+  test("显式 DIA_JOB_ROOT 优先", () => {
+    const home = mkdtempSync(join(tmpdir(), "dia-job-root-env-"));
+    const r = runJob(["x"], { HOME: home, DIA_JOB_BIN: stub(home), DIA_JOB_ROOT: "/tmp/explicit-job", DIA_ROOT: "" });
+    expect(r.stdout.trim()).toBe("ROOT:/tmp/explicit-job");
+  });
+});

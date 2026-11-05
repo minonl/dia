@@ -10,7 +10,7 @@ ok(){ echo "  ✓ $1"; PASS=$((PASS+1)); }; bad(){ echo "  ✗ $1"; FAIL=$((FAIL
 
 R="$TD/repo"; mkdir -p "$R"; git -C "$R" init -q -b main
 git -C "$R" config user.email t@example.com; git -C "$R" config user.name t
-echo a > "$R/a.txt"; git -C "$R" add -A; git -C "$R" commit -qm init --no-verify
+echo a > "$R/a.txt"; git -C "$R" add -A; git -C "$R" commit -qm init
 
 out="$(bash "$WT" adopt "$R" --json)"
 printf '%s' "$out" | grep -q '"defaultBranch":"main"' && ok "dry-run 识别默认分支" || bad "dry-run: $out"
@@ -59,7 +59,7 @@ bash "$WT" adopt "$R" --revert >/dev/null 2>&1 || bad "revert 失败"
 # ── 原 hooksPath 保留 + 二次 apply 不改写 hooksPrevious（review P2-7）──────────
 R2="$TD/repo2"; mkdir -p "$R2" "$TD/orighooks"; git -C "$R2" init -q -b main
 git -C "$R2" config user.email t@example.com; git -C "$R2" config user.name t
-echo a > "$R2/a.txt"; git -C "$R2" add -A; git -C "$R2" commit -qm init --no-verify
+echo a > "$R2/a.txt"; git -C "$R2" add -A; git -C "$R2" commit -qm init
 printf '#!/bin/sh\nexit 0\n' > "$TD/orighooks/pre-commit"; chmod +x "$TD/orighooks/pre-commit"
 git -C "$R2" config --local core.hooksPath "$TD/orighooks"
 bash "$WT" adopt "$R2" --apply >/dev/null 2>&1 || bad "R2 apply 失败"
@@ -80,7 +80,7 @@ git -C "$R2" config --local core.hooksPath "$R2/.git/dia/hooks"; bash "$WT" adop
 # ── 自定义默认分支受保护（review P1-1 + P1-2）────────────────────────────────
 R3="$TD/repo3"; mkdir -p "$R3"; git -C "$R3" init -q -b trunk
 git -C "$R3" config user.email t@example.com; git -C "$R3" config user.name t
-echo a > "$R3/a.txt"; git -C "$R3" add -A; git -C "$R3" commit -qm init --no-verify
+echo a > "$R3/a.txt"; git -C "$R3" add -A; git -C "$R3" commit -qm init
 bash "$WT" adopt "$R3" --apply --default-branch trunk >/dev/null 2>&1 || bad "自定义分支 apply 失败"
 bash "$WT" adopt "$R3" --check >/dev/null 2>&1 && ok "自定义默认分支 check 通过" || bad "自定义默认分支 check 失败"
 bash "$WT" doctor "$R3" >/dev/null 2>&1 && ok "自定义默认分支 doctor 通过" || bad "自定义默认分支 doctor 失败"
@@ -92,7 +92,7 @@ git -C "$R3" reset -q
 bash "$WT" doctor "$R3" >/dev/null 2>&1 || true
 R4="$TD/repo4"; mkdir -p "$R4"; git -C "$R4" init -q -b main
 git -C "$R4" config user.email t@example.com; git -C "$R4" config user.name t
-echo a > "$R4/a.txt"; git -C "$R4" add -A; git -C "$R4" commit -qm init --no-verify
+echo a > "$R4/a.txt"; git -C "$R4" add -A; git -C "$R4" commit -qm init
 if bash "$WT" doctor "$R4" >/dev/null 2>&1; then bad "未 adopt 的仓 doctor 误报通过"; else ok "未 adopt 的仓 doctor 失败"; fi
 bash "$WT" doctor >/dev/null 2>&1; [ $? = 2 ] && ok "doctor 无参数 exit 2" || bad "doctor 无参数未 exit 2"
 
@@ -100,17 +100,18 @@ bash "$WT" doctor >/dev/null 2>&1; [ $? = 2 ] && ok "doctor 无参数 exit 2" ||
 R5="$TD/repo5"; ORIGIN5="$TD/origin5.git"; git init -q --bare "$ORIGIN5"
 mkdir -p "$R5"; git -C "$R5" init -q -b main
 git -C "$R5" config user.email t@example.com; git -C "$R5" config user.name t
-echo a > "$R5/a.txt"; git -C "$R5" add -A; git -C "$R5" commit -qm init --no-verify
-git -C "$R5" remote add origin "$ORIGIN5"; git -C "$R5" push -q --no-verify origin main
+echo a > "$R5/a.txt"; git -C "$R5" add -A; git -C "$R5" commit -qm init
+git -C "$R5" remote add origin "$ORIGIN5"; git -C "$R5" push -q origin main
 git -C "$R5" fetch -q origin
 git -C "$R5" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
 bash "$WT" adopt "$R5" --apply >/dev/null 2>&1 || bad "R5 apply 失败"
-echo x >> "$R5/a.txt"; git -C "$R5" commit -qam dirty-main --no-verify 2>/dev/null
-if git -C "$R5" push origin main >/dev/null 2>&1; then bad "主 checkout push 未被拦截"; else ok "主 checkout push 被拦截"; fi
-git -C "$R5" reset -q --hard origin/main
+# 主 checkout 的 pre-push 拒绝的是「从这里发起的任何 push」（含 feature 分支），不需要脏提交
+git -C "$R5" branch feat/push-probe origin/main
+if git -C "$R5" push origin feat/push-probe >/dev/null 2>&1; then bad "主 checkout push 未被拦截"; else ok "主 checkout push 被拦截"; fi
+git -C "$R5" branch -D feat/push-probe >/dev/null 2>&1 || true
 git -C "$R5" worktree add -q -b feat/x "$TD/repo5-worktree--x" main
 echo b > "$TD/repo5-worktree--x/b.txt"; git -C "$TD/repo5-worktree--x" add b.txt
-git -C "$TD/repo5-worktree--x" commit -qm feat-x --no-verify 2>/dev/null
+git -C "$TD/repo5-worktree--x" commit -qm feat-x 2>/dev/null
 if git -C "$TD/repo5-worktree--x" push -q origin feat/x >/dev/null 2>&1; then ok "worktree push 放行"; else bad "worktree push 被误拦"; fi
 
 # ── template 生效（P2-6）：adopt 后 create 按 config.template 推导路径 ─────────
@@ -124,7 +125,7 @@ bash "$WT" adopt "$R5" --apply >/dev/null 2>&1
 # ── 过期 origin/HEAD（远端分支已删）不误判默认分支 ──────────────────────────
 R6="$TD/repo6"; mkdir -p "$R6"; git -C "$R6" init -q -b main
 git -C "$R6" config user.email t@example.com; git -C "$R6" config user.name t
-echo a > "$R6/a.txt"; git -C "$R6" add -A; git -C "$R6" commit -qm init --no-verify
+echo a > "$R6/a.txt"; git -C "$R6" add -A; git -C "$R6" commit -qm init
 git -C "$R6" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/gone
 out="$(bash "$WT" adopt "$R6" --json)"
 printf '%s' "$out" | grep -q '"defaultBranch":"main"' && ok "过期 origin/HEAD 回落到 main" || bad "过期 origin/HEAD: $out"
@@ -134,7 +135,7 @@ R7="$TD/repo7"; mkdir -p "$R7/.githooks"; git -C "$R7" init -q -b main
 git -C "$R7" config user.email t@example.com; git -C "$R7" config user.name t
 printf '#!/bin/sh\necho chained >> "$(git rev-parse --show-toplevel)/chain.log"\n' > "$R7/.githooks/pre-commit"
 chmod +x "$R7/.githooks/pre-commit"
-echo a > "$R7/a.txt"; git -C "$R7" add -A; git -C "$R7" commit -qm init --no-verify
+echo a > "$R7/a.txt"; git -C "$R7" add -A; git -C "$R7" commit -qm init
 git -C "$R7" config --local core.hooksPath .githooks
 bash "$WT" adopt "$R7" --apply >/dev/null 2>&1 || bad "R7 apply 失败"
 python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));sys.exit(0 if d.get("hooksChain")==".githooks" else 1)' "$R7/.git/dia/config.json" \
@@ -151,7 +152,7 @@ AR="$TD/allroot"; mkdir -p "$AR/a" "$AR/b"
 for r in a b; do
   git -C "$AR/$r" init -q -b main
   git -C "$AR/$r" config user.email t@example.com; git -C "$AR/$r" config user.name t
-  echo x > "$AR/$r/x.txt"; git -C "$AR/$r" add -A; git -C "$AR/$r" commit -qm init --no-verify
+  echo x > "$AR/$r/x.txt"; git -C "$AR/$r" add -A; git -C "$AR/$r" commit -qm init
 done
 git -C "$AR/a" worktree add -q -b feat/w "$AR/a-worktree--w" main
 out="$(DIA_WT_REPOS_ROOT="$AR" DIA_WT_DATA_ROOT="$TD/dr2" bash "$WT" adopt --all --apply --json 2>&1)"
@@ -166,7 +167,7 @@ DIA_WT_REPOS_ROOT="$TD/empty-root" DIA_WT_DATA_ROOT="$TD/dr3" bash "$WT" adopt -
 # ── doctor --fix：钩子被覆盖后能无损重建 ────────────────────────────────────
 R8="$TD/repo8"; mkdir -p "$R8"; git -C "$R8" init -q -b main
 git -C "$R8" config user.email t@example.com; git -C "$R8" config user.name t
-echo a > "$R8/a.txt"; git -C "$R8" add -A; git -C "$R8" commit -qm init --no-verify
+echo a > "$R8/a.txt"; git -C "$R8" add -A; git -C "$R8" commit -qm init
 bash "$WT" adopt "$R8" --apply >/dev/null 2>&1
 rm -f "$R8/.git/dia/hooks/post-checkout"
 printf '#!/bin/sh\nexit 0\n' > "$R8/.git/dia/hooks/pre-commit"; chmod +x "$R8/.git/dia/hooks/pre-commit"

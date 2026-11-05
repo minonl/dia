@@ -28,7 +28,9 @@ dia --persona yan kb scene S1
 | cache | `~/.dia/cache`（kb 索引会重建） |
 | msg/agents | `~/.dia/msg`、`~/.dia/agents` |
 | dsh profile / opencode agent | 不变（`~/.dsh/profiles`、`~/.config/opencode`） |
-| ~/.local/bin/dia 软链 | 指向 `~/.dia/bin/dia.js`（install.sh 自动） |
+| 安装物 | `<install>/{bin,dist,packages,registry}`（默认 `~/.local/share/dia`，`DIA_INSTALL_DIR` 可覆盖） |
+| 数据 | `~/.dia/{personas,msg,agents,state,cache,job,runs,audit}` |
+| ~/.local/bin/dia 软链 | 指向 `<install>/bin/dia.js` |
 
 ## 回滚
 

@@ -1212,6 +1212,7 @@ export async function main(rawArgv: string[]): Promise<number> {
   if (cmd === "doctor") {
     if (has(argv, "--paths")) {
       const roots = {
+        install: paths.installDir(),
         data: paths.diaHome(), personas: paths.personasDir(), msg: paths.msgRoot(),
         agents: paths.agentsRoot(), state: paths.stateDir(), cache: paths.cacheRoot(), job: paths.jobRoot(),
       };

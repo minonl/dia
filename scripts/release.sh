@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# release.sh —— 打版本 + GitHub Release（发布全程不碰主 checkout 的 pre-push）
+# release.sh —— 打版本 + GitHub Release（发布全程在 worktree 里做，不碰主 checkout）
 #
 # 用法：scripts/release.sh <patch|minor|major|x.y.z> [--dry-run]
 # 前置：main 干净且与 origin 同步；CI 由 PR + branch protection 保证
 #
 # 流程：临时 worktree 里 bump → 推分支 → PR → 等 checks → squash 合并 → 取 origin/main 打 tag → 推 tag
 # 为什么不在主 checkout 直接做：dia wt adopt 后主 checkout 的 pre-push 拒绝一切 push
-# （含 tag/feature），用 --no-verify 等于绕过守卫；发布也应当走 worktree + PR。
+# （含 tag/feature）——守卫没有逃生口，发布必须走 worktree + PR。
 set -uo pipefail
 BUMP="${1:-}"; DRY=0
 [ "${2:-}" = "--dry-run" ] && DRY=1

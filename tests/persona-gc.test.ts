@@ -23,7 +23,7 @@ beforeAll(() => {
 function commitVersion(v: string) {
   writeFileSync(join(repo, "dia.json"), JSON.stringify({ schema: 1, kind: "persona", id: "p", version: v, hosts: ["codex"], entry: { codex: "AGENTS.md" } }));
   writeFileSync(join(repo, "AGENTS.md"), `v${v}\n`);
-  git("add", "-A"); git("commit", "-qm", v, "--no-verify");
+  git("add", "-A"); git("commit", "-qm", v);
 }
 
 describe("persona gc", () => {

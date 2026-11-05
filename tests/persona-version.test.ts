@@ -25,7 +25,7 @@ beforeAll(() => {
   writeFileSync(join(repo, "dia.json"), JSON.stringify({ schema: 1, kind: "persona", id: "p", version: "0.1.0", hosts: ["codex"], entry: { codex: "AGENTS.md" } }));
   writeFileSync(join(repo, "AGENTS.md"), "v1\n");
   git("add", "-A");
-  git("commit", "-qm", "v1", "--no-verify");
+  git("commit", "-qm", "v1");
 });
 
 describe("persona 版本槽位", () => {
@@ -33,7 +33,7 @@ describe("persona 版本槽位", () => {
     expect(run(["add", "p", "--from", repo, "--host", "codex"]).status).toBe(0);
     writeFileSync(join(repo, "AGENTS.md"), "v2\n");
     git("add", "-A");
-    git("commit", "-qm", "v2", "--no-verify");
+    git("commit", "-qm", "v2");
     expect(run(["add", "p", "--from", repo, "--host", "codex", "--force"]).status).toBe(0);
     const dirs = readdirSync(join(root, "personas", "p")).filter((n) => n.startsWith("0.1.0"));
     expect(dirs.length).toBe(2);

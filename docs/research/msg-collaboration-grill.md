@@ -13,9 +13,9 @@
 **今天的真实协作通道不是 `dia msg`，是手写 inbox 文件。**
 
 - `~/.dia/msg` 只有 4 条消息，全部 `pending`，0 条 ack/reply；两条“收件人”的名字是**会话标题**
-  （`Dia 待完善之处`、`dws-hub 实时链路修复（…）`），不是稳定地址（实测）。
+  （`session-1`、`dws-hub 实时链路修复（…）`），不是稳定地址（实测）。
 - `dia agents list` 为空、`~/.dia/agents` 不存在；没有任何会话在启动时注册自己（实测）。
-- 今天 15:00 后仍有 12 个会话在跑，全部共用 `/Users/min`，其中 ≥4 个会话在动 dia 仓（推断，按标题）。
+- 今天 15:00 后仍有 12 个会话在跑，全部共用 `~`，其中 ≥4 个会话在动 dia 仓（推断，按标题）。
 - 真正跨会话的约定发生在 `~/.yan-agent/inbox/to-yan.md`、`to-levm.md` 这类手写 Markdown 里：
   谁改哪个路径、谁让路、`STATUS: done` 信号——**这些字段 `dia msg` 都没有强制表达**（实测）。
 
@@ -61,19 +61,19 @@
 
 | 会话标题 | 目录 | 最后活动 |
 |---|---|---|
-| 灰度开通服务拆仓 + dia service 名词 | `/Users/min` | 16:03 |
-| 内测群·商品分组搜不到分析 | `/Users/min` | 16:03 |
-| dws-hub 实时链路修复（consume sync + 兜底 gate）+ bad case 测试 | `/Users/min` | 16:03 |
-| levm 用成花 | `/Users/min` | 16:03 |
-| 乐语助人前端组最新 MR | `/Users/min` | 16:03 |
-| Dia 待完善之处 | `/Users/min` | 16:02 |
-| **dia msg 多会话协作迭代（本会话）** | `/Users/min` | 16:01 |
-| hummus 知识片段店铺选择溯源 | `/Users/min` | 15:47 |
-| DeepSeek superagent 与 yan-agent 效率对比 | `/Users/min` | 15:40 |
+| session-1 | `~/` | 16:03 |
+| session-2 | `~/` | 16:03 |
+| session-3 | `~/` | 16:03 |
+| session-4 | `~/` | 16:03 |
+| session-5 | `~/` | 16:03 |
+| session-6 | `~/` | 16:02 |
+| session-7 | `~/` | 16:01 |
+| session-8 | `~/` | 15:47 |
+| session-9 | `~/` | 15:40 |
 | 切换到 retro-library 工作目录 | `…/retro-library` | 15:39 |
 | PDD_AI_QA 店铺入口登录态丢失 | `…/eval/tasks/entry` | 15:38 |
 
-- 15:00 后 **12 个会话共用 `/Users/min`**；全天该目录 33 个会话（13 个顶层）（实测）。
+- 15:00 后 **12 个会话共用 `~`**；全天该目录 33 个会话（13 个顶层）（实测）。
 - 同一时刻至少 4 个会话在动 dia 仓（推断，按标题）：数据根/安装拆分、persona 目录、`dia wt adopt`、本需求。
   其中“数据根迁移 → 安装脚本拆分”是**真实的前后依赖**：`to-levm.md` 明确写了“我让路/别碰哪些文件”，
   但这是人手写约定，不是机器可检查的依赖（实测文件内容）。

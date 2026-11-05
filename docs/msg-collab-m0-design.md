@@ -35,7 +35,7 @@ yan-agent 只保留「什么时候用」的 persona 行为规则，不承载插�
 > E_NO_SESSION            # 明确报错，禁止猜
 ```
 
-- **不按 cwd/标题猜会话**：今天 12 个会话共用 `/Users/min`，猜必错。
+- **不按 cwd/标题猜会话**：今天 12 个会话共用 `~`，猜必错。
 - **不打印 env 值**（R37）；只判断存在性，错误信息只说变量名。
 - dsh/codex 暂无等价变量 → M0 标 `unaddressable`，不回退到 tmux 猜测。
 
@@ -48,8 +48,8 @@ yan-agent 只保留「什么时候用」的 persona 行为规则，不承载插�
   "schema": 1,
   "session_id": "ses_...",
   "host": "opencode",
-  "display_name": "Dia 待完善之处",
-  "cwd": "/Users/min",
+  "display_name": "session-1",
+  "cwd": "~",
   "project": "global",
   "host_pid": 12345,
   "started_at": "...",
@@ -100,9 +100,9 @@ yan-agent 只保留「什么时候用」的 persona 行为规则，不承载插�
   "seq": 1,
   "from": {
     "session_id": "ses_...",
-    "display_name": "Dia 待完善之处",
+    "display_name": "session-1",
     "host": "opencode",
-    "cwd": "/Users/min"
+    "cwd": "~"
   },
   "to": {
     "session_id": "ses_...",

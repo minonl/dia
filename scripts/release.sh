@@ -46,7 +46,7 @@ git -C "$WT" push -q -u origin "$BR" || { echo "E_PUSH: 分支推送失败" >&2;
 
 gh pr create --repo "$REPO" --head "$BR" --base main --title "chore(release): v$NEW" --body "版本号 v$NEW；合后打 tag 并触发 publish。" >/dev/null
 gh pr checks "$BR" --repo "$REPO" --watch --interval 10 >/dev/null || { echo "E_CI: 检查未通过" >&2; exit 1; }
-gh pr merge --repo "$REPO" --squash >/dev/null || { echo "E_MERGE: 合并失败" >&2; exit 1; }
+gh pr merge "$BR" --repo "$REPO" --squash >/dev/null || { echo "E_MERGE: 合并失败" >&2; exit 1; }
 git -C "$WT" push -q origin --delete "$BR" 2>/dev/null || true
 
 git fetch -q origin main

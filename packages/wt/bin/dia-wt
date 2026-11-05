@@ -1379,6 +1379,11 @@ data = {
 }
 json.dump(data, open(cfg, "w"), ensure_ascii=False, indent=1)
 PY
+  # 提示：simple-git-hooks / husky 的 postinstall 会重写 core.hooksPath 下的钩子，
+  # 每次 `pnpm/npm install` 后可能把守卫冲掉 → 用 `dia wt doctor --fix` 或重跑 adopt --apply 修复。
+  if grep -qs '"simple-git-hooks"\|"husky"\|lefthook' "$repo/package.json" "$repo/.lefthook.yml" 2>/dev/null; then
+    echo "[dia-wt] 注意：该仓使用 hook manager（simple-git-hooks/husky/lefthook），install 后若守卫被重写，跑 dia wt doctor --fix" >&2
+  fi
   wt_write_hook "$hooksdir" pre-commit "$def" "$chain"
   wt_write_hook "$hooksdir" pre-push "$def" "$chain"
   wt_write_hook "$hooksdir" post-checkout "$def" "$chain"
@@ -1387,11 +1392,12 @@ PY
 }
 
 cmd_doctor() {
-  local json=0 all=0 repos=()
+  local json=0 all=0 fix=0 repos=()
   while [ $# -gt 0 ]; do case "$1" in
     --json) json=1; shift ;;
     --all) all=1; shift ;;
-    --strict|--fix) shift ;;
+    --fix) fix=1; shift ;;
+    --strict) shift ;;
     -*) die "未知参数：$1" ;;
     *) repos+=("$1"); shift ;;
   esac; done
@@ -1414,6 +1420,19 @@ cmd_doctor() {
       def="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("defaultBranch") or "")' "$cfg" 2>/dev/null || true)"
     fi
     [ -n "$def" ] || def="$(wt_default_branch "$repo")"
+    # --fix：无损修复（重写三个守卫钩子 + hooksPath 绝对路径）。只对已 adopt 的仓生效。
+    if [ "$fix" = 1 ] && [ -f "$cfg" ]; then
+      local fixChain=""
+      fixChain="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("hooksChain") or "")' "$cfg" 2>/dev/null || true)"
+      [ -n "$fixChain" ] || fixChain="$common/hooks"
+      mkdir -p "$hooksdir"
+      wt_write_hook "$hooksdir" pre-commit "$def" "$fixChain"
+      wt_write_hook "$hooksdir" pre-push "$def" "$fixChain"
+      wt_write_hook "$hooksdir" post-checkout "$def" "$fixChain"
+      [ "$prev" = "$hooksdir" ] || git -C "$repo" config --local core.hooksPath "$hooksdir"
+      prev="$hooksdir"
+      [ "$json" = 0 ] && echo "FIX $repo 钩子已重装（chain=$fixChain）"
+    fi
     local bad=0
     [ -f "$cfg" ] || { echo "FAIL D01 $repo 未 adopt"; bad=1; }
     case "$prev" in /*) ;; *) echo "FAIL D02 $repo hooksPath 非绝对（$prev）"; bad=1 ;; esac
@@ -1501,7 +1520,8 @@ dia wt —— worktree 目录形式选型 + 创建（唯一实现）
   dia wt adopt  <repo>|--all [--apply|--check|--revert] [--template T] [--default-branch B] [--json]
                                                # 配置路径模板 + 守卫钩子（默认 dry-run；--all 扫仓根）
                                                # 守卫含推送前敏感扫描（DIA_WT_GUARD_SCAN=0 可临时关闭）
-  dia wt doctor [<repo>...] [--all] [--json]    # 巡检：配置/钩子/探针/主 checkout/worktree 卫生
+  dia wt doctor [<repo>...] [--all] [--json] [--fix]
+                                               # 巡检：配置/钩子/探针/主 checkout/worktree 卫生；--fix 重装守卫钩子
   dia wt gate   <repo> <feature>               # 提交 MR 前：check + doctor + 干净 + ahead>0
   dia wt route  <repo-path>              # ★ 开工前必查：走 MR 还是直推（R1.7，配置驱动）
   dia wt scope  <repo|worktree> [--feature <slug>] [--session <id>]   # ★ 产出作用域声明（设计 §4.5）

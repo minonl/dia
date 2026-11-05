@@ -157,6 +157,18 @@ done
 DIA_WT_REPOS_ROOT="$TD/empty-root" DIA_WT_DATA_ROOT="$TD/dr3" bash "$WT" adopt --all >/dev/null 2>&1
 [ $? = 2 ] && ok "adopt --all 空结果 exit 2" || bad "adopt --all 空结果未 exit 2"
 
+# ── doctor --fix：钩子被覆盖后能无损重建 ────────────────────────────────────
+R8="$TD/repo8"; mkdir -p "$R8"; git -C "$R8" init -q -b main
+git -C "$R8" config user.email t@example.com; git -C "$R8" config user.name t
+echo a > "$R8/a.txt"; git -C "$R8" add -A; git -C "$R8" commit -qm init --no-verify
+bash "$WT" adopt "$R8" --apply >/dev/null 2>&1
+rm -f "$R8/.git/dia/hooks/post-checkout"
+printf '#!/bin/sh\nexit 0\n' > "$R8/.git/dia/hooks/pre-commit"; chmod +x "$R8/.git/dia/hooks/pre-commit"
+if bash "$WT" doctor "$R8" >/dev/null 2>&1; then bad "钩子被覆盖后 doctor 仍通过"; else ok "钩子被覆盖后 doctor 报失败"; fi
+bash "$WT" doctor "$R8" --fix >/dev/null 2>&1 || bad "doctor --fix 失败"
+bash "$WT" doctor "$R8" >/dev/null 2>&1 && ok "doctor --fix 后恢复 ok" || bad "doctor --fix 后仍失败"
+[ -x "$R8/.git/dia/hooks/post-checkout" ] && ok "doctor --fix 补回 post-checkout" || bad "post-checkout 未补回"
+
 # ── gate：成功 / 失败（P1-3 精确匹配）────────────────────────────────────────
 bash "$WT" gate "$R5" x >/dev/null 2>&1 && ok "gate 成功" || bad "gate 失败"
 if bash "$WT" gate "$R5" xb >/dev/null 2>&1; then bad "gate 子串误匹配（x 命中 xb）"; else ok "gate 精确匹配 feature"; fi

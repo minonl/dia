@@ -53,4 +53,4 @@ if [ -f "$SRC/docs/deps.jsonl" ]; then run cp "$SRC/docs/deps.jsonl" "$DIA_INSTA
 run chmod +x "$DIA_INSTALL_DIR/packages/wt/bin/dia-wt"
 run chmod +x "$DIA_INSTALL_DIR/bin/dia.js" "$DIA_INSTALL_DIR/packages/job/bin/dia-job"
 run ln -sfn "$DIA_INSTALL_DIR/bin/dia.js" "$DIA_BIN_DIR/dia"
-echo "dia installed: $DIA_INSTALL_DIR（安装物）；data root: $DATA_ROOT（数据）-> $DIA_BIN_DIR/dia"
+echo "dia installed: ${DIA_INSTALL_DIR}（安装物）；data root: ${DATA_ROOT}（数据）-> $DIA_BIN_DIR/dia"

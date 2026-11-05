@@ -276,6 +276,9 @@ export function install(from: string, opts: { ref?: string; dryRun?: boolean; js
   if (!kitRoot.startsWith(target + sep) && kitRoot !== target) throw new Error("E_MANIFEST: root escapes kit");
 
   // 先做一遍纯校验（冲突检查写盘前完成，失败不留半装目录）
+  const hasContent = ["files", "skills", "bin", "dirs", "knowledge", "commands", "config"]
+    .some((k) => ((m as any)[k]?.length ?? 0) > 0);
+  if (!hasContent) throw new Error("E_MANIFEST: kit 未声明任何内容（files/skills/bin/dirs/knowledge/commands/config）");
   const planned = renderContent(src.dir, target, m, { dryRun: true }) ?? [];
   if (opts.dryRun) return { id: m.id, version: m.version, dir: target, root: kitRoot, rendered: planned, hash: null, changed: false };
 
@@ -290,6 +293,10 @@ export function install(from: string, opts: { ref?: string; dryRun?: boolean; js
   const appliedConfig = config.apply(m.config ?? []);
 
   const hash = hashTree(target);
+  if (hash === "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855") {
+    rmSync(target, { recursive: true, force: true });
+    throw new Error(`E_KIT_EMPTY: kit ${m.id}@${m.version} 内容为空（检查 source 与清单路径）`);
+  }
   writeFileSync(join(target, "kit.lock"), JSON.stringify({
     id: m.id, version: m.version, commit: src.commit, root: kitRootRel, hash,
     rendered, commands: m.commands ?? [], knowledge: m.knowledge ?? [], dataRoot: m.data_root ?? null, env: m.env ?? null, config: appliedConfig,

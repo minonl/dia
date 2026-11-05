@@ -139,3 +139,12 @@ describe("kit 边界", () => {
     expect(r1.hash).toBe(r2.hash);
   });
 });
+
+
+describe("kit 空内容拒绝", () => {
+  test("清单未声明任何内容 → E_MANIFEST", () => {
+    const root = mkdtempSync(join(tmpdir(), "dia-kit-empty-"));
+    writeFileSync(join(root, "dia.json"), JSON.stringify({ schema: 1, kind: "kit", id: "empty", version: "0.1.0" }));
+    expect(() => kit.install(root)).toThrow(/E_MANIFEST/);
+  });
+});

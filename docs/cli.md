@@ -95,7 +95,7 @@ dia persona remove dabo
 | `persona update <id>` | **已实现** | 从 lock 记录的 source+ref 重装，并把 active 指向新版本；本地源亦可；`--force` 覆盖宿主/内联内容冲突（先备份） |
 | `persona default <id>` | **已实现** | 改宿主 `default_agent`：备份原文件 + 记原值，`--unset` 精确还原；非严格 JSON 直接拒绝 |
 | `persona create / render` | **已实现** | `create` 出骨架；`render --check` 只比对不写盘（跳过宿主自写文件，如 dsh `cordis.yml` / `package.json` / 锁文件）；`render` 只覆盖 persona 产物，不整树重建宿主 profile |
-| `kit add / list / verify / remove` | **已实现** | 复制/软链/记账；冲突写盘前全量检查（`E_CONFLICT`）；`src/kit.ts` + `tests/kit.test.ts` |
+| `kit add / list / verify / remove` | **已实现** | 复制/软链/记账；冲突写盘前全量检查（`E_CONFLICT`）；**空清单/空内容拒绝**（`E_MANIFEST`/`E_KIT_EMPTY`）；`src/kit.ts` + `tests/kit.test.ts` |
 | `env list / check / run` | **已实现** | 白名单注入、不回显值、`--redact`、密钥不进 argv；清单由 persona 声明（`src/env.ts` + `tests/env.test.ts`） |
 | `update [--check]` | **已实现** | 查 npm `dist-tags`；`--check` 有新版 exit 1、领先/最新 exit 0；**按安装方式分流**：npm 全局包 → `npm i -g`；脚本安装 → 提示 `git pull && bun run build && bash install.sh`（避免装到不在 PATH 的 npm prefix） |
 | `deps list / record` | **已实现** | `list` = 登记 + 实测派生视图（required 缺失 exit 2）；`record` = 只追加一行（`--id/--kind/--version` 必填）；`src/deps.ts` + `tests/deps*.test.ts` |

@@ -461,7 +461,7 @@ cmd_prune_merged() {
     local -a roots=()
     [ -n "$dr" ] && [ -d "$dr/repos" ] && roots+=("$dr/repos")
     [ -d "$rr" ] && roots+=("$rr")
-    [ ${#roots[@]} -gt 0 ] || die "--all：未找到仓根（数据根 repos/ 与 ${rr}）"
+    [ ${#roots[@]} -gt 0 ] || { echo "usage: dia wt adopt --all（未找到仓根：${rr}）" >&2; exit 2; }
     local root sub
     for root in "${roots[@]}"; do
       for sub in "$root"/*; do
@@ -779,7 +779,7 @@ cmd_check() {
     rr="${DIA_WT_REPOS_ROOT:-$HOME/repos/leyan}"
     [ -n "$dr" ] && [ -d "$dr/repos" ] && roots+=("$dr/repos")
     [ -d "$rr" ] && roots+=("$rr")
-    [ ${#roots[@]} -gt 0 ] || die "--all：未找到仓根（数据根 repos/ 与 ${rr}）"
+    [ ${#roots[@]} -gt 0 ] || { echo "usage: dia wt adopt --all（未找到仓根：${rr}）" >&2; exit 2; }
     local root sub
     for root in "${roots[@]}"; do
       for sub in "$root"/*; do
@@ -1243,8 +1243,10 @@ PYGT
 }
 
 cmd_adopt() {
-  local repo="" mode="dry" template="" def="" json=0
+  local repo="" mode="dry" template="" def="" json=0 all=0
+  local -a orig=("$@")
   while [ $# -gt 0 ]; do case "$1" in
+    --all) all=1; shift ;;
     --apply) mode="apply"; shift ;;
     --check) mode="check"; shift ;;
     --revert) mode="revert"; shift ;;
@@ -1257,7 +1259,41 @@ cmd_adopt() {
     -*) die "未知参数：$1" ;;
     *) repo="$1"; shift ;;
   esac; done
-  [ -n "$repo" ] || die "用法: dia wt adopt <repo> [--apply|--check|--revert] [--template T] [--default-branch B] [--json]"
+  if [ "$all" = 1 ]; then
+    [ -z "$repo" ] || die "--all 不能与 <repo> 同时给（要么单个仓，要么全量）"
+    local -a roots=() repos=()
+    local dr rr
+    dr="$(dia_wt_data_root 2>/dev/null || true)"
+    rr="${DIA_WT_REPOS_ROOT:-$HOME/repos}"
+    [ -n "$dr" ] && [ -d "$dr/repos" ] && roots+=("$dr/repos")
+    [ -d "$rr" ] && roots+=("$rr")
+    [ ${#roots[@]} -gt 0 ] || { echo "usage: dia wt adopt --all（未找到仓根：${rr}）" >&2; exit 2; }
+    local root sub gd cd_
+    for root in "${roots[@]}"; do
+      while IFS= read -r -d '' gd; do
+        sub="$(dirname "$gd")"
+        case "$(basename "$sub")" in *-worktree--*) continue ;; esac
+        cd_="$(git -C "$sub" rev-parse --git-common-dir 2>/dev/null || true)"
+        # 统一物理路径（macOS /tmp → /private/tmp），否则等式比较会假失败
+        gd="$(cd "$sub" 2>/dev/null && cd "$gd" 2>/dev/null && pwd -P)"
+        cd_="$(cd "$sub" 2>/dev/null && cd "$cd_" 2>/dev/null && pwd -P)"
+        [ -n "$gd" ] && [ "$gd" = "$cd_" ] || continue   # 只处理主 checkout
+        repos+=("$sub")
+      done < <(find "$root" -maxdepth 3 -name .git -type d -print0 2>/dev/null)
+    done
+    [ ${#repos[@]} -gt 0 ] || { echo "usage: dia wt adopt --all（未匹配到任何主 checkout）" >&2; exit 2; }
+    local -a pass=()
+    local a
+    for a in "${orig[@]}"; do [ "$a" = "--all" ] && continue; pass+=("$a"); done
+    local okc=0 badc=0 r
+    for r in "${repos[@]}"; do
+      if cmd_adopt "$r" "${pass[@]}"; then okc=$((okc+1)); else badc=$((badc+1)); echo "FAIL $r" >&2; fi
+    done
+    [ "$json" = 1 ] && python3 -c 'import json,sys;print(json.dumps({"repos":int(sys.argv[1]),"ok":int(sys.argv[2]),"fail":int(sys.argv[3])},separators=(",",":")))' "${#repos[@]}" "$okc" "$badc"
+    [ "$badc" = 0 ] || return 1
+    return 0
+  fi
+  [ -n "$repo" ] || die "用法: dia wt adopt <repo>|--all [--apply|--check|--revert] [--template T] [--default-branch B] [--json]"
   [ -d "$repo" ] || die "目录不存在：$repo"
   git -C "$repo" rev-parse --git-dir >/dev/null 2>&1 || die "不是 git 仓库：$repo"
 
@@ -1462,8 +1498,8 @@ dia wt —— worktree 目录形式选型 + 创建（唯一实现）
   dia wt status [repo-path]              # ★ 清理前必查：唯一工作副本 + 改动重叠（只读）
   dia wt check  [<repo>...] [--all] [--deep] [--quiet]
                                                # ★ 依赖体检（R20）：软链/逃逸/悬空；--all 扫全部仓
-  dia wt adopt  <repo> [--apply|--check|--revert] [--template T] [--default-branch B] [--json]
-                                               # 配置路径模板 + 守卫钩子（默认 dry-run）
+  dia wt adopt  <repo>|--all [--apply|--check|--revert] [--template T] [--default-branch B] [--json]
+                                               # 配置路径模板 + 守卫钩子（默认 dry-run；--all 扫仓根）
                                                # 守卫含推送前敏感扫描（DIA_WT_GUARD_SCAN=0 可临时关闭）
   dia wt doctor [<repo>...] [--all] [--json]    # 巡检：配置/钩子/探针/主 checkout/worktree 卫生
   dia wt gate   <repo> <feature>               # 提交 MR 前：check + doctor + 干净 + ahead>0

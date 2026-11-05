@@ -6726,13 +6726,12 @@ dia wt prune-merged [<repo>] [--all] [--apply]
 | 3 | 未 adopt |
 | 4 | worktree 歧义（多个候选） |
 
-## 6. 逃生口
+## 6. 没有逃生口：钩子慢就优化
 
-确需在主 checkout 自动化提交/推送（release 脚本、内部仓直推 main）：
+本仓**不提供**跳过钩子的开关，也不在文档/脚本里给绕过示例：
 
-```bash
-git commit --no-verify -m "..."
-git push --no-verify
-```
+- 钩子执行慢 → **先量**（`time git commit` / `time git push`），定位到具体钩子；
+- 优化手段：缓存（如 lint 增量、`nx affected`）、把重活下沉到 CI、减少扫描范围；
+- 优化前宁可短暂变慢，也不跳过——一次跳过等于把质量门禁变成装饰。
 
-**必须在 commit / PR 说明里写清原因**；不要为此开白名单（长期例外会钝化守卫）。
+自动化脚本（release 等）同理：**必须在 worktree 里跑**，不得在主 checkout 上做提交/推送。

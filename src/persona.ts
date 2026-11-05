@@ -241,7 +241,7 @@ export function install(from: string, opts: { ref?: string; host?: string; home?
         reuseTarget = true;
       } else if (!opts.force) {
         rmSync(staging, { recursive: true, force: true });
-        throw new Error(`E_VERSION_COLLISION: ${m.id}@${slot} 已存在且内容不同（换 commit/ref 会得到新槽位）`);
+        throw new Error(`E_VERSION_COLLISION: ${m.id}@${slot} 已存在且内容不同（换 commit/ref 会得到新槽位；或 --force 覆盖 / 删除该槽位后重试）`);
       } else {
         rmSync(target, { recursive: true, force: true });
       }
@@ -311,7 +311,7 @@ export function install(from: string, opts: { ref?: string; host?: string; home?
   // persona 自带内容（内联 kit 语义）：baseDir = target，链接指向 persona 树自身
   // codex-only persona 的 skills 由下面的 codex 分支落到假 HOME；不要同时链到真实 ~/.agents/skills
   const inlineManifest = hosts.some((h) => h === "opencode" || h === "dsh") ? m : { ...m, skills: [] };
-  const inline = [...(kit.renderContent(target, target, inlineManifest) ?? []), ...codexLinks];
+  const inline = [...(kit.renderContent(target, target, inlineManifest, { force: opts.force }) ?? []), ...codexLinks];
   const appliedConfig = config.apply((m.config ?? []) as any);
 
   // kits：包内相对路径，装完树后逐个分发（内容归 kit，人格只引用）
@@ -976,14 +976,14 @@ export function checkUpstream(id: string, version?: string): UpstreamState {
 }
 
 /** 从记录源重新取回（update/heal）：装到新版本号后把 active 指针指过去。 */
-export function update(id: string, opts: { ref?: string } = {}): { installed: Installed; previous: string | null } {
+export function update(id: string, opts: { ref?: string; force?: boolean } = {}): { installed: Installed; previous: string | null } {
   const idDir = join(dataDir(), "personas", id);
   if (!existsSync(idDir)) throw new Error("E_NOT_INSTALLED");
   const cur = active.effective(id)?.version ?? readdirSync(idDir).sort().pop()!;
   const lock = JSON.parse(readFileSync(join(idDir, cur, "dia.lock"), "utf8"));
   if (!lock.source) throw new Error("E_SOURCE: 该 persona 由本地目录安装，无法 update（重新 persona add）");
   const host = (lock.rendered?.[0] ?? "").includes("agents") ? "opencode" : undefined;
-  const r = install(lock.source, { ref: opts.ref ?? lock.ref ?? undefined, host });
+  const r = install(lock.source, { ref: opts.ref ?? lock.ref ?? undefined, host, force: opts.force });
   const u = active.use(id, r.version, { reason: `update from ${lock.source}` });
   return { installed: r, previous: u.previous };
 }

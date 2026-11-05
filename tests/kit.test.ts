@@ -1,6 +1,7 @@
 import { describe, expect, test, beforeAll } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { dirname } from "node:path";
 import { join } from "node:path";
 
 let kit: any;
@@ -38,6 +39,19 @@ beforeAll(async () => {
 });
 
 describe("kit install", () => {
+  test("renderContent：默认冲突拒绝；--force 覆盖并备份", () => {
+    const dest = join(home, ".config/opencode/AGENTS.md");
+    mkdirSync(dirname(dest), { recursive: true });
+    writeFileSync(dest, "old\n");
+    const m = { files: [{ from: "core/knowledge/scenes.md", to: "~/.config/opencode/AGENTS.md" }] };
+    expect(() => kit.renderContent(src, src, m)).toThrow(/E_CONFLICT/);
+    kit.renderContent(src, src, m, { force: true });
+    expect(readFileSync(dest, "utf8")).toContain("# scenes");
+    const bdir = join(process.env.DIA_DATA_DIR!, "backups");
+    expect(readdirSync(bdir).length).toBeGreaterThan(0);
+    rmSync(dest, { force: true }); // 不影响后续「dry-run 不写」断言
+  });
+
   test("dry-run 不写任何东西", () => {
     const r = kit.install(src, { dryRun: true });
     expect(r.hash).toBeNull();

@@ -1040,7 +1040,7 @@ async function personaCli(argv: string[]): Promise<number> {
     const id = positional(args)[0];
     if (!id) { err("missing id"); return 2; }
     try {
-      const r = persona.update(id, { ref: flag(args, "--ref") });
+      const r = persona.update(id, { ref: flag(args, "--ref"), force: has(args, "--force") });
       out(asJson ? JSON.stringify(r) : `updated ${id} → ${r.installed.version}（${String(r.installed.commit || r.installed.hash || "?").slice(0, 8)}, 原 ${r.previous ?? "-"}）`);
       return 0;
     } catch (e: any) {

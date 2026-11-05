@@ -34,6 +34,25 @@ export function jobRootResolved(): string {
   return !existsSync(next) && existsSync(legacy) ? legacy : next;
 }
 
+/** 捕获式执行（供 `dia job status` 追列：health 列必须读缓存、零执行）。 */
+export function runJobCapture(argv: string[]): { status: number; stdout: string; stderr: string } {
+  const { bin, error } = jobBin();
+  if (!bin) {
+    process.stderr.write(`dia job: ${error || "未找到 dia-job；先跑 packages/job/install.sh 或设置 DIA_JOB_BIN"}\n`);
+    return { status: 2, stdout: "", stderr: "" };
+  }
+  const r = spawnSync(bin, argv, {
+    encoding: "utf8",
+    stdio: ["inherit", "pipe", "pipe"],
+    env: { ...process.env, DIA_JOB_ROOT: jobRootResolved() },
+  });
+  if (r.error) {
+    process.stderr.write(`dia job: ${r.error.message}\n`);
+    return { status: 1, stdout: "", stderr: "" };
+  }
+  return { status: r.status ?? 1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+}
+
 export function runJob(argv: string[]): number {
   const { bin, error } = jobBin();
   if (!bin) {

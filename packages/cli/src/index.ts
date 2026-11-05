@@ -33,7 +33,7 @@ import * as task from "../../../src/task.ts";
 import * as team from "../../../src/team.ts";
 import { loadPrices } from "../../../src/pricing.ts";
 import { propose } from "../../../src/proposal.ts";
-import { runJob } from "../../../src/job.ts";
+import { runJob, runJobCapture } from "../../../src/job.ts";
 import * as service from "../../../src/service.ts";
 
 function out(s: string) { process.stdout.write(s + "\n"); }
@@ -1663,7 +1663,18 @@ export async function main(rawArgv: string[]): Promise<number> {
   if (["whoami", "in", "out", "ack", "reply", "close", "show"].includes(cmd)) return collabCli(argv);
   if (cmd === "agents") return agentsCli(argv.slice(1));
   if (cmd === "team") return teamCli(argv.slice(1));
-  if (cmd === "job") return runJob(argv.slice(1));
+  if (cmd === "job") {
+    const rest = argv.slice(1);
+    // `dia job status|list`：追一列 health（只读缓存，不执行检查；见 docs/service-noun.md §6）
+    if (rest[0] === "status" || rest[0] === "list") {
+      const r = runJobCapture(rest);
+      if (r.stderr) process.stderr.write(r.stderr);
+      const text = service.decorateStatus(r.stdout, (id) => service.readServiceHealth(id));
+      if (text) out(text.replace(/\n$/, ""));
+      return r.status;
+    }
+    return runJob(rest);
+  }
   if (cmd === "price") {
     const table = loadPrices();
     if (has(argv.slice(1), "--json")) out(JSON.stringify(table, null, 1));

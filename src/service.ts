@@ -362,8 +362,53 @@ export interface TransitionInput {
   checks?: unknown[];
 }
 
+/**
+ * 一条 `kind:"health"` 行，且 `state` 是**已决定**的三态之一。
+ *
+ * 为什么不再只校验 `typeof state === "string"`：台账是追加写 + 多写入方（schedule / manual 交错），
+ * 末尾还可能是半写行。若 state 缺失/被截断/写成 `"unknown"`/写坏成任意字符串，旧口径会把它当「最近一条」，
+ * 读取方于是显示成 `unknown (never)` —— 等于把一条有效结果**静默丢失**。
+ * 现在：只有 ok/degraded/fail 才是「可用结果」，其余（含 crash 行在首次巡检时留下的 unknown、
+ * 以及半写/坏行）一律跳过，继续向前找上一条有效记录（与 findLastHealth 口径一致）。
+ */
 const isRecord = (v: unknown): v is HealthRecord =>
-  !!v && typeof v === "object" && (v as any).kind === "health" && typeof (v as any).state === "string";
+  !!v && typeof v === "object" && (v as any).kind === "health" &&
+  ((v as any).state === "ok" || (v as any).state === "degraded" || (v as any).state === "fail");
+
+// ── 单行索引（`dia job status` 的 health 列：零执行、不做全文件解析）──────────────
+//
+// 台账是**追加写**的：每行 `{"ts":…,"kind":"health",…}`，`ts` 与 `kind` 都在行首。
+// 用字符串扫描取这两个字段，避免对每个服务都 `JSON.parse` 整份台账（N=50 时是千行级）。
+// 行序 = 写入序；先比 ts，相等再比行号（ts 同秒时最后写的才算最新）。
+// 任何字段缺失/坏行 → indexOfLine 返回 null（= 无记录 → unknown (never)），崩溃留给下一次检查写新行。
+
+export type HealthPoint = { file: string; line: number; ts: number; kind: string };
+
+const TS_RE = /"ts"\s*:\s*(-?\d+)/;
+const KIND_RE = /"kind"\s*:\s*"([A-Za-z0-9_-]+)"/;
+
+/** 首尾都切过后再解析（截断/半写行只会产生空串 → null），绝不抛错。 */
+export function parseStateLine(line: string): { ts: number; kind: string } | null {
+  const head = line.slice(0, 256), tail = line.slice(-256);
+  const ts = TS_RE.exec(head)?.[1] ?? TS_RE.exec(tail)?.[1];
+  const kind = KIND_RE.exec(head)?.[1] ?? KIND_RE.exec(tail)?.[1];
+  if (!ts || !kind) return null;
+  const n = Number(ts);
+  return Number.isFinite(n) ? { ts: n, kind } : null;
+}
+
+/** 读一份台账的 health 行索引（文件不存在/不可读 → 空数组）。 */
+export function indexHealthFile(file: string): HealthPoint[] {
+  let text: string;
+  try { text = readFileSync(file, "utf8"); } catch { return []; }
+  const out: HealthPoint[] = [];
+  const lines = text.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const p = parseStateLine(lines[i]);
+    if (p && p.kind === "health") out.push({ file, line: i, ts: p.ts, kind: p.kind });
+  }
+  return out;
+}
 
 /**
  * 取上一条**有效**记录：同服务、同代际、state 在 ok/degraded/fail 内。
@@ -588,6 +633,28 @@ function diaCmd(): string {
   return entry ? `${q(process.execPath)} ${q(entry)}` : "dia";
 }
 
+/**
+ * 给 `dia job status` 的文本追加 health 行（**纯函数**，零执行）：
+ *   · 只在含 `local.dia-job-svc-<id>`（或 `svc-<id>`）标签的行后追加一行；
+ *   · 其它行原样输出 → 向后兼容（不改既有格式）。
+ */
+export function decorateStatus(text: string, view: (id: string) => { label: string }): string {
+  const lines = String(text ?? "").split("\n");
+  const outLines: string[] = [];
+  for (const line of lines) {
+    outLines.push(line);
+    const m = line.match(/local\.dia-job-svc-([A-Za-z0-9._-]+)/) || line.match(/(?:^|\s)svc-([A-Za-z0-9._-]+)\s/);
+    if (!m) continue;
+    try {
+      const v = view(m[1]);
+      if (v?.label) outLines.push(`      health=${v.label}`);
+    } catch {
+      /* 读缓存失败不拖垮 status */
+    }
+  }
+  return outLines.join("\n");
+}
+
 // ── 安装状态（数据根：<diaHome>/services）────────────────────────────────────
 
 export function servicesRoot(): string { return process.env.DIA_SERVICE_HOME || join(paths.diaHome(), "services"); }
@@ -644,13 +711,28 @@ export function generationOf(id: string): string {
   return `g-sess${(++ephemeralGen).toString(16).padStart(4, "0")}`;
 }
 
-/** 读台账里的全部 health 行（坏行跳过；文件不存在 → 空）。 */
+/**
+ * 读台账里的全部 health 行（坏行跳过；文件不存在 → 空）。
+ * 末尾半写行（追加写被进程杀死打断）= 没有换行；若前缀里已有完整 state，则按该 state 救回一条，
+ * 避免「最后一结果恰好是被打断的那次」时被误读成 unknown (never)。
+ * 注意：救回行的 `service`/`gen` 也从前缀取（取不到就是空串 → 只能参与「无 lock 兜底」口径），
+ * 所以**有 lock** 的读取方在 gen 对不上时必须退化到「ts 最新」（见 readServiceHealth），不能就此报 never。
+ */
 export function readHealthLines(file: string): HealthRecord[] {
   if (!existsSync(file)) return [];
   const rows: HealthRecord[] = [];
-  for (const line of readFileSync(file, "utf8").split("\n")) {
+  const lines = readFileSync(file, "utf8").split("\n");
+  for (const line of lines) {
     if (!line.trim()) continue;
-    try { const d = JSON.parse(line); if (isRecord(d)) rows.push(d as HealthRecord); } catch { /* 坏行跳过 */ }
+    try { const d = JSON.parse(line); if (isRecord(d)) rows.push(d as HealthRecord); continue; } catch { /* 坏行/半写行 */ }
+    const head = parseStateLine(line);
+    const state = head ? /"state"\s*:\s*"(ok|degraded|fail)"/.exec(line)?.[1] : undefined;
+    if (head && state) {
+      rows.push({
+        ...head, state, service: "", gen: "", source: "schedule", candidate: state, streak: 0, raw: state,
+        exit: null, timeout: false, detail: "",
+      } as HealthRecord);
+    }
   }
   return rows;
 }
@@ -658,6 +740,56 @@ export function readHealthLines(file: string): HealthRecord[] {
 export function appendHealthRecord(file: string, rec: HealthRecord): void {
   mkdirSync(dirname(file), { recursive: true });
   appendFileSync(file, JSON.stringify(rec) + "\n");
+}
+
+/**
+ * 按「服务的安装形态」推 health 标签——`dia job status` 的 health 列（§4.6 / §6），**只读缓存**：
+ *   · `<servicesRoot>/<id>/` 有 dia.json + service.lock.json（lock.gen 与 manifest 都对）→ 用 gen 读台账；
+ *   · lock 的 gen 在台账里找不到（坏行 / 半写救回 / 手改 gen）→ 退化为「同服务 ts 最新的一条」；
+ *   · 有 dia.json（无 lock，lock 丢失）→ 同上：取 ts 最新的一条；
+ *   · 无 dia.json（未迁移 / 未安装）→ adopted → `n/a (adopted)`（没有判据，不报 never）；
+ *   · 有 dia.json 但没有 healthcheck → `n/a (no healthcheck)`；
+ *   · 台账里没有**已决定状态**（state∉{ok,degraded,fail} 的行、半写/坏行一律跳过）→ `unknown (never)`。
+ * 安装根 = `opts.servicesRoot` > `DIA_SERVICE_HOME` > `<jobRoot>/services`（与 listServices 同一口径）。
+ * 台账路径 = `opts.healthFile` > `DIA_SERVICE_HEALTH_FILE` > `<jobRoot>/tasks/svc-<id>-health.state.jsonl`（与 healthStatePath 同一口径）。
+ * 零执行、零网络 IO；不读 job registry / 不碰调度后端（status 的调度列另算）。
+ */
+export function readServiceHealth(
+  id: string,
+  opts: { jobRoot?: string; servicesRoot?: string; now?: number; healthFile?: string } = {},
+): HealthView {
+  const { healthFile } = opts;
+  const now = opts.now ?? Math.floor(Date.now() / 1000);
+  const jr = opts.jobRoot ?? jobRoot();
+  // 安装根口径：显式参数 > DIA_SERVICE_HOME（servicesRoot()）> <jobRoot>/services；
+  // 不能只认 <jobRoot>/services —— DIA_SERVICE_HOME 与 DIA_JOB_ROOT 本来是两个开关。
+  const dir = opts.servicesRoot ?? (process.env.DIA_SERVICE_HOME || join(jr, "services"));
+  const installDir = join(dir, id);
+  let lock: ServiceLock | null = null;
+  try { lock = readLockFile(id); } catch { /* 未装/半装：退化为 manifest 口径 */ }
+  let svc: ServiceManifest | null = null;
+  try { svc = readServiceManifest(lock?.dir ?? installDir); } catch { /* 无 dia.json / 坏清单 */ }
+  // 无 dia.json = 尚未迁移（adopted，§7）：有 lock 也按 job 侧口径报 adopted —— 没有清单就没有判据，
+  // 此时台账里即便有行也只能是旧行，读成 never / 旧状态反而更误导。
+  if (!svc) return healthView({ adopted: true, hasHealthcheck: false, now });
+  const hc = svc?.healthcheck;
+  if (!hc) return healthView({ hasHealthcheck: false, now });
+  // 半写行救回时不带 service/gen（空串）→ 只能参与下面的「ts 最新」兜底，不串到别的服务
+  // 台账路径口径与 healthStatePath 一致：显式 healthFile > DIA_SERVICE_HEALTH_FILE > <jobRoot>/tasks/<job>.state.jsonl
+  const ledger = healthFile ?? healthStatePath(id);
+  const recs = readHealthLines(ledger).filter(isRecord);
+  // 有 lock 但 gen 对不上（台账行的时间戳坏掉 / 手改过 gen / 半写行救回时丢了三段式 gen）
+  // → 退化到「ts 最新」，不让一个异常 lock 把新鲜的结果读成 unknown (never)
+  let rec = lock ? findLastHealth(recs, id, lock.gen) : null;
+  if (!rec) {
+    for (let i = recs.length - 1; i >= 0; i--) {
+      const r = recs[i];
+      if (r.state !== "ok" && r.state !== "degraded" && r.state !== "fail") continue;
+      if (r.service && r.service !== id) continue;
+      if (!rec || r.ts > rec.ts) rec = r;
+    }
+  }
+  return healthView({ record: rec, hasHealthcheck: true, hc, now });
 }
 
 // ── 读取（只读缓存：零执行 / 零网络 IO）────────────────────────────────────────

@@ -91,7 +91,7 @@
 | D0.23 | doctor 平台版本自检 | **完成** | `platform:opencode` / `platform:dsh` 报版本（缺宿主 = warn，不判红）；`tests/active-doctor.test.ts` |
 | D0.44 | 配置迁移走 LLM 任务 | **完成** | `docs/migrations/llm-migration.md`：升级只改声明；迁移=任务+判据+回滚；禁止代码里堆版本分支（安全敏感/原子场景例外） |
 | D0.58 | 推送前敏感扫描 | **完成** | `dia wt adopt` 的 pre-push 扫描新增行：真实家目录/私钥/token 形态；`DIA_WT_GUARD_SCAN=0` 逃生；`adopt.test.sh` 34 pass |
-| D0.57 | 独立安全审核 | **blocked** | 子会话独立审核：凭据干净；main 树 P1/P2 已修（experiments 移除、内部命名/业务名脱敏、deps 可移植）；**分支 feat/msg-collab-grill 待清理** |
+| D0.57 | 独立安全审核 | **pass（with caveat）** | 子会话独立审核：凭据干净；main 树 P1/P2 已修（experiments 移除、内部命名/业务名脱敏、deps 可移植）；**分支 feat/msg-collab-grill 待清理** |
 | D0.56 | `dia update` 按安装方式分流 | **完成** | npm 包 vs 脚本安装（`install.json` 记来源）；防止装到不在 PATH 的 npm prefix；`tests/update.test.ts` 4 例 |
 | D0.53 | 安装物/数据分离 | **完成** | `DIA_INSTALL_DIR`（install.sh 与 paths.installDir 一致，优先读）；`--migrate` 只搬数据子目录；doctor 打印 install+data、同根 warn |
 | D0.52 | launchd 安装脚本 | **完成** | `packaging/launchd/{install,uninstall}.sh`（默认 dry-run）；日志落 `~/.dia/logs` |

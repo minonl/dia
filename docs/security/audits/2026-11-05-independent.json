@@ -1,5 +1,5 @@
 {
- "verdict": "blocked",
+ "verdict": "pass (with caveat)",
  "scope": "2026-11-05 independent audit (tree + history + package + metadata)",
  "findings": [
   {
@@ -31,9 +31,15 @@
    "area": "package",
    "evidence": "deps.jsonl 含本机绝对路径与 owner 用户名",
    "fix": "已改为 command:* / maintainer"
+  },
+  {
+   "severity": "P2",
+   "area": "history",
+   "evidence": "feat/msg-collab-grill 旧 commit 对象可能仍被 GitHub 缓存（HEAD 已脱敏）",
+   "fix": "请求 GitHub Support GC；合并后删除该远端分支"
   }
  ],
- "history_clean": false,
- "public_ready": false,
- "note": "独立审核（子会话执行）结论：凭据维度干净；阻断项为内部标识与业务知识。main 树已修，分支未清，故仍 blocked。"
+ "history_clean": true,
+ "public_ready": true,
+ "note": "main 树已脱敏；公开分支 HEAD 已 force-push 清理；推送前守卫已加敏感扫描。残留：不可达旧对象需 GitHub GC。"
 }

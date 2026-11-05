@@ -30,13 +30,28 @@ switch (cmd) {
     }
     break;
   }
-  case "state-last": { // <file>
+  case "state-last": { // <file> [--raw]
+    // 取最后一条可解析行；无 kind 的历史行视为 run（dia job status 的主口径）。
+    // 按 kind 筛选由 state-kind 提供，本命令签名保持不变（向后兼容）。
     try {
       const d = JSON.parse(readFileSync(a[0], "utf8").trim().split("\n").pop());
+      if (a.includes("--raw")) { out(JSON.stringify(d) + "\n"); break; }
       const t = new Date((d.ts || 0) * 1000);
       const z = (n) => String(n).padStart(2, "0");
       out(`      上次运行: ${z(t.getMonth() + 1)}-${z(t.getDate())} ${z(t.getHours())}:${z(t.getMinutes())}:${z(t.getSeconds())} · exit=${d.exit}\n`);
     } catch { break; }
+    break;
+  }
+  case "state-kind": { // <file> <kind> -> 最后一条匹配行（JSON；找不到则空输出、exit 0）
+    // service healthcheck 台账读取：state.jsonl 追加的 {"kind":"health",...} 行。
+    // 无 kind 的历史行视为 "run"。无匹配时输出空，调用方据此区分 n/a 与 unknown。
+    const [file, kind] = a;
+    let lines = [];
+    try { lines = readFileSync(file, "utf8").split("\n").filter((l) => l.trim()); } catch { break; }
+    for (let i = lines.length - 1; i >= 0; i--) {
+      let d; try { d = JSON.parse(lines[i]); } catch { continue; }
+      if ((d.kind || "run") === kind) { out(JSON.stringify(d) + "\n"); break; }
+    }
     break;
   }
   case "log": { // <reg> <name> <default>

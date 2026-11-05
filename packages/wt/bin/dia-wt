@@ -1161,7 +1161,6 @@ prot=" main master develop dev "
 probe="${DIA_WT_GUARD_PROBE:-0}"
 wt_guard_scan() {
 local ls="$1" rs="$2" range="" base="" hits=""
-[ "${DIA_WT_GUARD_SCAN:-1}" = "1" ] || return 0
 if [ -n "$rs" ] && [ "$rs" != "0000000000000000000000000000000000000000" ] && git cat-file -e "$rs" 2>/dev/null; then
   range="$rs..$ls"
 else
@@ -1170,11 +1169,11 @@ else
 fi
 hits="$(git diff -U0 "$range" -- . 2>/dev/null | grep -E '^\+' | grep -vE '^\+\+\+' \
   | grep -vE '/(Users|home)/(you|user|example|runner|shared|me)(/|$)' \
-  | grep -nE '(/Users/[A-Za-z0-9._-]+|/home/[A-Za-z0-9._-]+|-----BEGIN [A-Z ]*PRIVATE KEY-----|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})' | head -5)"
+  | grep -nE '(^|[+ "'\''`(=])/(Users|home)/[A-Za-z0-9._-]+|-----BEGIN [A-Z ]*PRIVATE KEY-----|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}' | head -5)"
 if [ -n "$hits" ]; then
   echo "[dia-wt] 推送包含敏感内容（已阻断）：" >&2
   printf '%s\n' "$hits" >&2
-  echo "[dia-wt] 确认误报可临时关闭：DIA_WT_GUARD_SCAN=0 git push ..." >&2
+  echo "[dia-wt] 误报请修扫描规则（hooks 由 dia wt adopt 生成），不提供关闭开关" >&2
   return 1
 fi
 }
@@ -1519,7 +1518,7 @@ dia wt —— worktree 目录形式选型 + 创建（唯一实现）
                                                # ★ 依赖体检（R20）：软链/逃逸/悬空；--all 扫全部仓
   dia wt adopt  <repo>|--all [--apply|--check|--revert] [--template T] [--default-branch B] [--json]
                                                # 配置路径模板 + 守卫钩子（默认 dry-run；--all 扫仓根）
-                                               # 守卫含推送前敏感扫描（DIA_WT_GUARD_SCAN=0 可临时关闭）
+                                               # 守卫含推送前敏感扫描（不提供关闭开关；误报修规则）
   dia wt doctor [<repo>...] [--all] [--json] [--fix]
                                                # 巡检：配置/钩子/探针/主 checkout/worktree 卫生；--fix 重装守卫钩子
   dia wt gate   <repo> <feature>               # 提交 MR 前：check + doctor + 干净 + ahead>0

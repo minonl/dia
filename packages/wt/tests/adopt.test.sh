@@ -38,13 +38,19 @@ git -C "$R" reset -q
 # ── 推送前敏感扫描（PII/凭据形态）──
 BR="$TD/remote.git"; git init -q --bare "$BR"
 git -C "$R" remote add origin "$BR" 2>/dev/null || true
-git -C "$R" push -q --no-verify -u origin main 2>/dev/null || true
+git --git-dir="$BR" fetch -q "$R" main:main 2>/dev/null || true
+ git -C "$R" fetch -q origin 2>/dev/null || true
 git -C "$R" worktree add -q "$TD/wt" -b feat/scan 2>/dev/null || true
 BAD_HOME="/Users"; echo "$BAD_HOME/alice/secret" > "$TD/wt/bad.txt"
-git -C "$TD/wt" add -A && git -C "$TD/wt" commit -qm bad --no-verify
+git -C "$TD/wt" add -A && git -C "$TD/wt" commit -qm bad
 if git -C "$TD/wt" push -q origin feat/scan 2>/dev/null; then bad "敏感推送未被拦截"; else ok "敏感推送被拦截"; fi
-echo ok > "$TD/wt/bad.txt" && git -C "$TD/wt" add -A && git -C "$TD/wt" commit -qm fix --no-verify
+echo ok > "$TD/wt/bad.txt" && git -C "$TD/wt" add -A && git -C "$TD/wt" commit -qm fix
 git -C "$TD/wt" push -q origin feat/scan 2>/dev/null && ok "干净推送放行" || bad "干净推送被拒"
+
+# 误报回归：`$TD/home/kits/...` 这种相对片段不该被判成 /home/<user>
+printf 'path=$TD/home/kits/dia-msg/dia.json\n' > "$TD/wt/vars.txt"
+git -C "$TD/wt" add -A && git -C "$TD/wt" commit -qm vars
+git -C "$TD/wt" push -q origin feat/scan 2>/dev/null && ok "相对片段 home/ 不误报" || bad "相对片段被误判为敏感路径"
 
 bash "$WT" adopt "$R" --revert >/dev/null 2>&1 || bad "revert 失败"
 [ -z "$(git -C "$R" config --get core.hooksPath || true)" ] && ok "revert 还原 hooksPath" || bad "revert 未还原"

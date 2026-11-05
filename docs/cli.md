@@ -97,6 +97,7 @@ dia persona remove dabo
 | `persona create / render` | **已实现** | `create` 出骨架；`render --check` 只比对不写盘（跳过宿主自写文件，如 dsh `cordis.yml` / `package.json` / 锁文件）；`render` 只覆盖 persona 产物，不整树重建宿主 profile |
 | `kit add / list / verify / remove` | **已实现** | 复制/软链/记账；冲突写盘前全量检查（`E_CONFLICT`）；`src/kit.ts` + `tests/kit.test.ts` |
 | `env list / check / run` | **已实现** | 白名单注入、不回显值、`--redact`、密钥不进 argv；清单由 persona 声明（`src/env.ts` + `tests/env.test.ts`） |
+| `update [--check]` | **已实现** | 查 npm `dist-tags`；`--check` 有新版 exit 1、领先/最新 exit 0；不带参数 `npm i -g @minonl/dia@latest` |
 | `deps list / record` | **已实现** | `list` = 登记 + 实测派生视图（required 缺失 exit 2）；`record` = 只追加一行（`--id/--kind/--version` 必填）；`src/deps.ts` + `tests/deps*.test.ts` |
 | `doctor` | **已实现** | 组合自检：persona verify / **persona.render（宿主产物只读漂移，warn + 修复命令）** / default_agent / kit / knowledge（**索引新鲜度三态**，过期给重建命令）/ dsh preset / **deps 登记校验** / **platform 版本（读 `docs/platforms/registry.json`）** / wt；exit 0/1/2。不指定 persona 且装了多个 → **逐个自检**（条目加 `<id>.` 前缀），不再整体 `E_SCOPE` |
 | `wt …` | **已实现（需安装包）** | 转发 `packages/wt/bin/dia-wt`；未装时 `E_WT`（exit 33），`install.sh` 会分发 |

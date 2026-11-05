@@ -1134,6 +1134,8 @@ wt_is_main_checkout() {
 wt_default_branch() {
   local repo="$1" b=""
   b="$(git -C "$repo" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')"
+  # origin/HEAD 可能是**过期**的（远端分支已删，如 grayscale-open 指向 feat/init）→ 必须验证 ref 还在
+  if [ -n "$b" ] && ! git -C "$repo" show-ref --verify --quiet "refs/remotes/origin/$b"; then b=""; fi
   [ -n "$b" ] || { git -C "$repo" show-ref --verify --quiet refs/heads/main && b="main"; }
   [ -n "$b" ] || { git -C "$repo" show-ref --verify --quiet refs/heads/master && b="master"; }
   [ -n "$b" ] || b="$(git -C "$repo" config --get dia.defaultBranch 2>/dev/null || true)"

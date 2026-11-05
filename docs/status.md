@@ -90,6 +90,7 @@
 | D0.21 | worktree 抽取 `packages/wt` | **完成** | 7 处 python→node；`dia wt`；4 套测试原样迁移全绿 |
 | D0.23 | doctor 平台版本自检 | **完成** | `platform:opencode` / `platform:dsh` 报版本（缺宿主 = warn，不判红）；`tests/active-doctor.test.ts` |
 | D0.44 | 配置迁移走 LLM 任务 | **完成** | `docs/migrations/llm-migration.md`：升级只改声明；迁移=任务+判据+回滚；禁止代码里堆版本分支（安全敏感/原子场景例外） |
+| D0.48 | npm 预发布 dist-tag | **完成** | `publish.yml` 按版本自动 `next`/`latest`；
 | D0.47 | npm Trusted Publishing | **完成（待配置侧）** | `.github/workflows/publish.yml`：release published → OIDC → `npm publish --provenance`；`publishConfig.provenance=true`；仓库不放 token。npmjs 侧需配 Trusted Publisher（repo + workflow 名） |
 | D0.46 | npm 包准备 | **完成（待发布）** | 去掉 `private`、`publishConfig.access=public`、`files` 含 `packages/{wt,job}`；`npm pack` + 本地全局安装实测通过 |
 | D0.45 | 发版脚本 | **完成** | `scripts/release.sh <patch|minor|major|x.y.z> [--dry-run]`：干净 main + 同步校验 → bump → tag → push → `gh release create`（私有仓默认不发 npm） |

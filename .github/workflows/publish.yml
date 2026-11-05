@@ -39,11 +39,21 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run build
       - run: bun test tests
+      - name: 版本 → dist-tag（预发布走 next，正式走 latest）
+        id: tag
+        run: |
+          V=$(node -p "require('./package.json').version")
+          echo "version=$V"
+          case "$V" in
+            *-*) echo "tag=next"; echo "tag=next" >> "$GITHUB_OUTPUT" ;;
+            *)   echo "tag=latest"; echo "tag=latest" >> "$GITHUB_OUTPUT" ;;
+          esac
       - name: publish (trusted; provenance 仅公开仓可用)
         run: |
+          TAG="${{ steps.tag.outputs.tag }}"
           if [ "${{ github.event.repository.private }}" = "true" ]; then
-            echo "private repo → 不发 provenance（npm 已知限制）"
-            npm publish --access public --provenance=false
+            echo "private repo → 不发 provenance（npm 已知限制）；dist-tag=$TAG"
+            npm publish --access public --tag "$TAG" --provenance=false
           else
-            npm publish --access public --provenance
+            npm publish --access public --tag "$TAG" --provenance
           fi

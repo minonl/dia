@@ -5165,6 +5165,7 @@ git for-each-ref
 | D0.21 | worktree 抽取 `packages/wt` | **完成** | 7 处 python→node；`dia wt`；4 套测试原样迁移全绿 |
 | D0.23 | doctor 平台版本自检 | **完成** | `platform:opencode` / `platform:dsh` 报版本（缺宿主 = warn，不判红）；`tests/active-doctor.test.ts` |
 | D0.44 | 配置迁移走 LLM 任务 | **完成** | `docs/migrations/llm-migration.md`：升级只改声明；迁移=任务+判据+回滚；禁止代码里堆版本分支（安全敏感/原子场景例外） |
+| D0.48 | npm 预发布 dist-tag | **完成** | `publish.yml` 按版本自动 `next`/`latest`；
 | D0.47 | npm Trusted Publishing | **完成（待配置侧）** | `.github/workflows/publish.yml`：release published → OIDC → `npm publish --provenance`；`publishConfig.provenance=true`；仓库不放 token。npmjs 侧需配 Trusted Publisher（repo + workflow 名） |
 | D0.46 | npm 包准备 | **完成（待发布）** | 去掉 `private`、`publishConfig.access=public`、`files` 含 `packages/{wt,job}`；`npm pack` + 本地全局安装实测通过 |
 | D0.45 | 发版脚本 | **完成** | `scripts/release.sh <patch|minor|major|x.y.z> [--dry-run]`：干净 main + 同步校验 → bump → tag → push → `gh release create`（私有仓默认不发 npm） |
@@ -5755,6 +5756,17 @@ kits core@1.2.0+def (pinned), knowledge@idx-2026-10-28T10:00Z (rolling)
 
 1. **知识 kit 的默认策略**：滚动 + 记录索引哈希（推荐）vs 会话硬钉。
 2. **多版本宿主映射**：stable/dev 双通道（推荐）vs 每版本独立 agent id / profile。
+
+
+## 发布与 dist-tag（2026-11-05）
+
+| 版本 | dist-tag | 含义 |
+|---|---|---|
+| `x.y.z` | `latest` | 正式版；装 `@minonl/dia` 默认拿这个 |
+| `x.y.z-beta.N` | `next` | 预发布；用 `npm i @minonl/dia@next` 显式安装 |
+
+流程：先发 `-beta.N` 走 `next` 验证 OIDC/安装/升级，再发正式版覆盖 `latest`。
+`publish.yml` 按版本号自动选 tag；**不要**用正式版本号试流程。
 
 
 ---

@@ -224,3 +224,14 @@ kits core@1.2.0+def (pinned), knowledge@idx-2026-10-28T10:00Z (rolling)
 
 1. **知识 kit 的默认策略**：滚动 + 记录索引哈希（推荐）vs 会话硬钉。
 2. **多版本宿主映射**：stable/dev 双通道（推荐）vs 每版本独立 agent id / profile。
+
+
+## 发布与 dist-tag（2026-11-05）
+
+| 版本 | dist-tag | 含义 |
+|---|---|---|
+| `x.y.z` | `latest` | 正式版；装 `@minonl/dia` 默认拿这个 |
+| `x.y.z-beta.N` | `next` | 预发布；用 `npm i @minonl/dia@next` 显式安装 |
+
+流程：先发 `-beta.N` 走 `next` 验证 OIDC/安装/升级，再发正式版覆盖 `latest`。
+`publish.yml` 按版本号自动选 tag；**不要**用正式版本号试流程。

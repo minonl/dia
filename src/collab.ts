@@ -7,6 +7,7 @@ import {
   closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync,
 } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import * as paths from "./paths.ts";
 
@@ -396,39 +397,42 @@ export function markDelivered(sessionId: string, id: string): MessageV2 {
 
 export function ack(sessionId: string, id: string): MessageV2 {
   return mutate(sessionId, id, (m) => {
-    if (m.state === "replied" || m.state === "closed") throw new Error(`E_STATE: ${id} 已是 ${m.state}，不能再 ack`);
-    if (m.state === "pending" || m.state === "delivered") m.state = "acked";
+    if (m.state === "acked") return;
+    if (m.state !== "pending" && m.state !== "delivered") throw new Error(`E_STATE: ${id} 是 ${m.state}，不能 ack`);
+    m.state = "acked";
     m.acked_at = now();
   });
 }
 
 export function reply(sessionId: string, id: string, body: string, refs?: Record<string, string>): { reply: MessageV2; original: MessageV2 } {
   const idNorm = normalizeSessionId(sessionId);
-  const hit = findIn(idNorm, id);
-  if (!hit) throw new Error(`E_NOT_FOUND: ${id}`);
-  const o = hit.msg;
-  if (o.legacy) throw new Error(`E_LEGACY: ${id} 是迁移的旧消息，无法回复`);
-  if (o.state === "replied" || o.state === "closed") throw new Error(`E_STATE: ${id} 已是 ${o.state}，不能重复回复`);
-  if (o.hops >= 3) throw new Error("E_HOPS: 同一 thread 已往返 3 次，转人工");
-  const maxHops = Math.max(o.hops, ...threadMessages(o.thread_id).map((m) => m.hops));
-  const r = send({
-    from: idNorm,
-    to: o.from.session_id,
-    kind: "reply",
-    subject: `Re: ${o.subject}`,
-    body,
-    refs: { ...(o.refs || {}), ...(refs || {}) },
-    requiresReply: false,
-    threadId: o.thread_id,
-    replyTo: o.id,
-    hops: maxHops + 1,
+  return withLock(`reply-${idNorm}-${id}`, () => {
+    const hit = findIn(idNorm, id);
+    if (!hit) throw new Error(`E_NOT_FOUND: ${id}`);
+    const o = hit.msg;
+    if (o.legacy) throw new Error(`E_LEGACY: ${id} 是迁移的旧消息，无法回复`);
+    if (o.state === "replied" || o.state === "closed") throw new Error(`E_STATE: ${id} 已是 ${o.state}，不能重复回复`);
+    if (o.hops >= 3) throw new Error("E_HOPS: 同一 thread 已往返 3 次，转人工");
+    const maxHops = Math.max(o.hops, ...threadMessages(o.thread_id).map((m) => m.hops));
+    const r = send({
+      from: idNorm,
+      to: o.from.session_id,
+      kind: "reply",
+      subject: `Re: ${o.subject}`,
+      body,
+      refs: { ...(o.refs || {}), ...(refs || {}) },
+      requiresReply: false,
+      threadId: o.thread_id,
+      replyTo: o.id,
+      hops: maxHops + 1,
+    });
+    const original = mutate(idNorm, id, (m) => {
+      m.state = "replied";
+      m.replied_at = now();
+      m.reply_id = r.id;
+    });
+    return { reply: r, original };
   });
-  const original = mutate(idNorm, id, (m) => {
-    m.state = "replied";
-    m.replied_at = now();
-    m.reply_id = r.id;
-  });
-  return { reply: r, original };
 }
 
 export function close(sessionId: string, id: string, reason: string): MessageV2 {
@@ -468,8 +472,12 @@ export function migrateLegacy(opts: { dryRun?: boolean } = {}): { total: number;
       let bodyMissing = false;
       let bodyBytes = Buffer.byteLength(body || "");
       if (!body && old.body_file) {
-        if (existsSync(old.body_file)) {
-          const buf = readFileSync(old.body_file);
+        const abs = resolve(String(old.body_file));
+        const allowed = [resolve(oldRoot), resolve(tmpdir())].some((base) => abs === base || abs.startsWith(base + sep));
+        if (!allowed) {
+          bodyMissing = true;
+        } else if (existsSync(abs)) {
+          const buf = readFileSync(abs);
           bodyBytes = buf.byteLength;
           if (bodyBytes > MAX_BODY) { skipped++; continue; }
           body = buf.toString("utf8");

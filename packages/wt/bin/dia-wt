@@ -214,8 +214,29 @@ console.log(`   repo=${d.repo}｜ gitRepo=${d.gitRepo}｜ writable=` + (d.writab
 JS
 }
 
+# adopt 写入的路径模板（<git-common-dir>/dia/config.json 的 template）；未 adopt → 空
+wt_repo_template() {
+  local repo="$1" common cfg
+  common="$(wt_common_dir "$repo" 2>/dev/null)" || return 1
+  cfg="$common/dia/config.json"
+  [ -f "$cfg" ] || return 1
+  python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("template") or "")' "$cfg" 2>/dev/null
+}
+wt_expand_template() {
+  local tmpl="$1" repo="$2" feature="$3"
+  local parent base
+  parent="$(cd "$(dirname "$repo")" && pwd)"; base="$(basename "$repo")"
+  printf '%s' "$tmpl" | sed -e "s|{{parent}}|$parent|g" -e "s|{{repo}}|$base|g" \
+                              -e "s|{{wtRoot}}|$repo/.worktrees|g" -e "s|{{feature}}|$feature|g"
+}
 wt_path() {
-  local repo="$1" feature="$2" form="$3"
+  local repo="$1" feature="$2" form="$3" tmpl dest
+  # 模板优先（adopt 后策略即 SSOT）；未 adopt 维持凭 form 推导（默认平级，零迁移）
+  if tmpl="$(wt_repo_template "$repo")" && [ -n "$tmpl" ]; then
+    dest="$(wt_expand_template "$tmpl" "$repo" "$feature")"
+    case "$dest" in /*) ;; *) dest="$repo/$dest" ;; esac
+    printf '%s' "$dest"; return 0
+  fi
   local parent; parent="$(cd "$(dirname "$repo")" && pwd)"
   local base;   base="$(basename "$repo")"
   if [ "$form" = hidden ]; then printf '%s/.worktrees/%s' "$repo" "$feature"
@@ -368,7 +389,7 @@ cmd_status() {
       [ -n "$ST_FILES" ] && printf '%s\n' "$ST_FILES" | sed 's/^/        · /'
       [ -n "$ST_FILES" ] && dirty_map="${dirty_map}${p}"$'\t'"$(printf '%s' "$ST_FILES" | tr '\n' ',')"$'\n'
     fi
-  done < <(git -C "$repo" worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p')
+  done < <(git -C "$repo" -c core.quotePath=false worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p')
 
   # 重叠检测（设计 D6）：**同一仓内**两个以上 worktree 改同一**仓内相对路径**。
   # 不跨仓比较 —— 不同仓的同名相对路径属巧合，报出来是噪音。
@@ -1093,6 +1114,287 @@ EOS
   esac
 }
 
+# ── adopt / doctor / gate（2026-11-05）──────────────────────────────────────
+# 设计：core/docs/compose/spec/dia-wt-adopt-design.md
+# 纪律靠闸不靠 chmod：主 checkout 上 pre-commit/pre-push 拒绝 protected 分支；
+# 配置落 <git-common-dir>/dia/config.json；默认模板与现网 -worktree-- 布局一致（零迁移）。
+
+wt_common_dir() {
+  local repo="$1" d
+  d="$(git -C "$repo" rev-parse --git-common-dir 2>/dev/null)" || return 1
+  case "$d" in /*) printf '%s\n' "$d" ;; *) ( cd "$repo" && cd "$d" 2>/dev/null && pwd -P ) ;; esac
+}
+wt_is_main_checkout() {
+  local repo="$1" gd cd
+  gd="$(git -C "$repo" rev-parse --git-dir 2>/dev/null)" || return 2
+  cd="$(wt_common_dir "$repo")" || return 2
+  case "$gd" in /*) ;; *) gd="$(cd "$repo" && cd "$gd" 2>/dev/null && pwd -P)" ;; esac
+  [ "$gd" = "$cd" ]
+}
+wt_default_branch() {
+  local repo="$1" b=""
+  b="$(git -C "$repo" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')"
+  [ -n "$b" ] || { git -C "$repo" show-ref --verify --quiet refs/heads/main && b="main"; }
+  [ -n "$b" ] || { git -C "$repo" show-ref --verify --quiet refs/heads/master && b="master"; }
+  [ -n "$b" ] || b="$(git -C "$repo" config --get dia.defaultBranch 2>/dev/null || true)"
+  # 注意：**不回落到当前 HEAD**（在 feature 分支上 adopt 会把 feature 当默认分支）
+  printf '%s' "$b"
+}
+
+wt_write_hook() {
+  local hooksdir="$1" name="$2" extra="${3:-}"
+  cat > "$hooksdir/$name" <<'HOOK'
+#!/usr/bin/env bash
+# dia-wt guard（managed by `dia wt adopt`；勿手改）
+set -uo pipefail
+name="$(basename "$0")"
+top="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+common="$(git rev-parse --git-common-dir 2>/dev/null || true)"
+case "$common" in /*) ;; *) common="$(cd "$top" && cd "$common" 2>/dev/null && pwd -P)" ;; esac
+gd="$(git rev-parse --git-dir 2>/dev/null || true)"
+case "$gd" in /*) ;; *) gd="$(cd "$top" && cd "$gd" 2>/dev/null && pwd -P)" ;; esac
+is_main=0; [ "$gd" = "$common" ] && is_main=1
+branch="$(git symbolic-ref --short HEAD 2>/dev/null || true)"
+prot=" main master develop dev "
+probe="${DIA_WT_GUARD_PROBE:-0}"
+case "$name" in
+  pre-commit)
+    if [ "$probe" = 1 ]; then
+      { [ "$is_main" = 1 ] && [[ "$prot" == *" $branch "* ]]; } && exit 1 || exit 0
+    fi
+    if [ "$is_main" = 1 ] && [[ "$prot" == *" $branch "* ]]; then
+      echo "[dia-wt] 主 checkout 禁止在 $branch 直接提交；请先：dia wt create <repo> <feature>" >&2
+      exit 1
+    fi ;;
+  pre-push)
+    if [ "$probe" = 1 ]; then
+      [ "$is_main" = 1 ] && exit 1 || exit 0
+    fi
+    if [ "$is_main" = 1 ]; then
+      echo "[dia-wt] 主 checkout 禁止直接 push；请走 worktree 分支 + MR" >&2
+      exit 1
+    fi
+    while read -r _lr _ls rr _rs; do
+      case "${rr:-}" in
+        refs/heads/main|refs/heads/master|refs/heads/develop|refs/heads/dev)
+          echo "[dia-wt] 禁止直接 push ${rr#refs/heads/}；请走 MR" >&2; exit 1 ;;
+      esac
+    done ;;
+  post-checkout)
+    [ "$probe" = 1 ] && exit 0
+    if [ "$is_main" = 1 ] && [[ "$prot" != *" $branch "* ]]; then
+      echo "[dia-wt] 提示：主 checkout 当前在 $branch（建议回到默认分支）" >&2
+    fi ;;
+esac
+orig="$common/hooks/$name"
+if [ -x "$orig" ] && [ "$orig" != "$0" ]; then exec "$orig" "$@"; fi
+exit 0
+HOOK
+  if [ -n "$extra" ]; then
+    python3 - "$hooksdir/$name" "$extra" <<'PYGT'
+import sys, re
+p, extra = sys.argv[1], sys.argv[2]
+s = open(p).read()
+s = re.sub(r'^prot=" main master develop dev "$', f'prot=" main master develop dev {extra} "', s, flags=re.M)
+open(p, "w").write(s)
+PYGT
+  fi
+  chmod +x "$hooksdir/$name"
+}
+
+cmd_adopt() {
+  local repo="" mode="dry" template="" def="" json=0
+  while [ $# -gt 0 ]; do case "$1" in
+    --apply) mode="apply"; shift ;;
+    --check) mode="check"; shift ;;
+    --revert) mode="revert"; shift ;;
+    --dry-run) mode="dry"; shift ;;
+    --template) template="$2"; shift 2 ;;
+    --default-branch) def="$2"; shift 2 ;;
+    --json) json=1; shift ;;
+    --force) echo "[dia-wt] --force 已忽略：adopt 幂等、无破坏性默认行为" >&2; shift ;;
+    -h|--help) sed -n '2,6p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -*) die "未知参数：$1" ;;
+    *) repo="$1"; shift ;;
+  esac; done
+  [ -n "$repo" ] || die "用法: dia wt adopt <repo> [--apply|--check|--revert] [--template T] [--default-branch B] [--json]"
+  [ -d "$repo" ] || die "目录不存在：$repo"
+  git -C "$repo" rev-parse --git-dir >/dev/null 2>&1 || die "不是 git 仓库：$repo"
+
+  local common cfgdir cfg hooksdir prev
+  common="$(wt_common_dir "$repo")" || die "无法解析 git-common-dir"
+  cfgdir="$common/dia"; cfg="$cfgdir/config.json"; hooksdir="$cfgdir/hooks"
+  prev="$(git -C "$repo" config --get core.hooksPath 2>/dev/null || true)"
+  [ -n "$template" ] || template='{{parent}}/{{repo}}-worktree--{{feature}}'
+  [ -n "$def" ] || def="$(wt_default_branch "$repo")"
+
+  if [ "$mode" = "revert" ]; then
+    [ -f "$cfg" ] || die "未 adopt（缺 $cfg）"
+    local saved
+    saved="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("hooksPrevious") or "")' "$cfg")"
+    if [ "$prev" != "$hooksdir" ]; then
+      echo "[dia-wt] hooksPath 已被改动（$prev），跳过还原并保留 $cfgdir 备份" >&2
+      return 1
+    fi
+    if [ -n "$saved" ]; then git -C "$repo" config --local core.hooksPath "$saved"; else git -C "$repo" config --local --unset core.hooksPath 2>/dev/null || true; fi
+    rm -rf "$cfgdir"
+    echo "reverted：$cfgdir"
+    return 0
+  fi
+
+  if [ "$mode" = "check" ]; then
+    local bad=0
+    [ -f "$cfg" ] || { echo "FAIL D01 未 adopt（缺 $cfg）"; bad=1; }
+    # 策略 SSOT 是 config.json：默认分支以它为准（不从 remote 重猜，避免与已写入的钩子策略漂移）
+    if [ -f "$cfg" ]; then
+      local cfgDef; cfgDef="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("defaultBranch") or "")' "$cfg" 2>/dev/null || true)"
+      [ -n "$cfgDef" ] && def="$cfgDef"
+    fi
+    case "$prev" in /*) ;; *) echo "FAIL D02 core.hooksPath 不是绝对路径（$prev）"; bad=1 ;; esac
+    for h in pre-commit pre-push post-checkout; do
+      [ -x "$hooksdir/$h" ] || { echo "FAIL D02 缺 $h 钩子"; bad=1; }
+    done
+    if [ -n "$def" ] && [ -x "$hooksdir/pre-commit" ]; then
+      grep -q "prot=\" main master develop dev $def \"" "$hooksdir/pre-commit" \
+        || { echo "FAIL D03 钩子未保护默认分支 $def"; bad=1; }
+      if wt_is_main_checkout "$repo" && [ "$(git -C "$repo" symbolic-ref --short HEAD 2>/dev/null)" = "$def" ]; then
+        ( cd "$repo" && DIA_WT_GUARD_PROBE=1 "$hooksdir/pre-commit" >/dev/null 2>&1 ) \
+          && { echo "FAIL D03 守卫探针未拦截主 checkout 的 $def 提交"; bad=1; }
+      fi
+    fi
+    if [ "$json" = 1 ]; then
+      python3 -c 'import json,sys;print(json.dumps({"repo":sys.argv[1],"ok":sys.argv[2]=="0","defaultBranch":sys.argv[3]},ensure_ascii=False,separators=(",",":")))' "$repo" "$bad" "$def"
+    fi
+    return $bad
+  fi
+
+  local nwt
+  nwt="$(git -C "$repo" worktree list --porcelain 2>/dev/null | grep -c '^worktree ' || true)"
+  if [ "$mode" = "dry" ]; then
+    echo "adopt plan：$repo"
+    echo "  common=${common}"
+    echo "  defaultBranch=${def:-（无法解析，需 --default-branch）}"
+    echo "  template=${template}"
+    echo "  worktrees=${nwt}"
+    echo "  hooksPath=${prev:-（未设置）} → ${hooksdir}"
+    if [ "$json" = 1 ]; then
+      python3 -c 'import json,sys;print(json.dumps({"repo":sys.argv[1],"common":sys.argv[2],"defaultBranch":sys.argv[3],"template":sys.argv[4],"worktrees":int(sys.argv[5]),"hooksPath":sys.argv[6]},ensure_ascii=False,separators=(",",":")))' "$repo" "$common" "$def" "$template" "$nwt" "$prev"
+    fi
+    return 0
+  fi
+
+  [ -n "$def" ] || die "默认分支不可解析；请 --default-branch main"
+  mkdir -p "$hooksdir"
+  # 保留首次 adopt 记下的 hooksPrevious（重复 apply 时 prev 已是我们自己的 hooksdir）
+  local savedPrev=""
+  [ -f "$cfg" ] && savedPrev="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("hooksPrevious") or "")' "$cfg" 2>/dev/null || true)"
+  [ "$prev" = "$hooksdir" ] && prev="$savedPrev"
+  [ -f "$cfg" ] && cp "$cfg" "$cfgdir/config.json.bak.$(date +%s)"
+  python3 - "$cfg" "$repo" "$def" "$template" "$hooksdir" "$prev" <<'PY'
+import json, sys, datetime
+cfg, repo, br, tmpl, hooks, prev = sys.argv[1:7]
+data = {
+  "schema": 1, "repo": repo, "defaultBranch": br, "template": tmpl,
+  "hooksPath": hooks, "hooksPrevious": prev or None,
+  "adoptedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+}
+json.dump(data, open(cfg, "w"), ensure_ascii=False, indent=1)
+PY
+  wt_write_hook "$hooksdir" pre-commit "$def"
+  wt_write_hook "$hooksdir" pre-push "$def"
+  wt_write_hook "$hooksdir" post-checkout "$def"
+  git -C "$repo" config --local core.hooksPath "$hooksdir"
+  echo "adopted：$repo（hooksPath=$hooksdir）"
+}
+
+cmd_doctor() {
+  local json=0 all=0 repos=()
+  while [ $# -gt 0 ]; do case "$1" in
+    --json) json=1; shift ;;
+    --all) all=1; shift ;;
+    --strict|--fix) shift ;;
+    -*) die "未知参数：$1" ;;
+    *) repos+=("$1"); shift ;;
+  esac; done
+  if [ "$all" = 1 ] && [ ${#repos[@]} -eq 0 ]; then
+    while IFS= read -r -d '' d; do repos+=("$(dirname "$d")"); done < <(find "${HOME}/repos" -maxdepth 3 -name .git -type d -print0 2>/dev/null)
+  fi
+  if [ ${#repos[@]} -eq 0 ]; then
+    echo "usage: dia wt doctor <repo>... | --all（--all 未匹配到任何仓库）" >&2
+    exit 2
+  fi
+  local fails=0
+  for repo in "${repos[@]:-}"; do
+    [ -n "$repo" ] || continue
+    git -C "$repo" rev-parse --git-dir >/dev/null 2>&1 || continue
+    local common cfgdir cfg hooksdir prev def
+    common="$(wt_common_dir "$repo")"; cfgdir="$common/dia"; cfg="$cfgdir/config.json"; hooksdir="$cfgdir/hooks"
+    prev="$(git -C "$repo" config --get core.hooksPath 2>/dev/null || true)"
+    def=""
+    if [ -f "$cfg" ]; then
+      def="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("defaultBranch") or "")' "$cfg" 2>/dev/null || true)"
+    fi
+    [ -n "$def" ] || def="$(wt_default_branch "$repo")"
+    local bad=0
+    [ -f "$cfg" ] || { echo "FAIL D01 $repo 未 adopt"; bad=1; }
+    case "$prev" in /*) ;; *) echo "FAIL D02 $repo hooksPath 非绝对（$prev）"; bad=1 ;; esac
+    for h in pre-commit pre-push post-checkout; do
+      [ -x "$hooksdir/$h" ] || { echo "FAIL D02 $repo 缺 $h"; bad=1; }
+    done
+    if [ -n "$def" ] && [ -x "$hooksdir/pre-commit" ]; then
+      # 静态：钩子里的 protected 列表必须包含 defaultBranch
+      grep -q "prot=\" main master develop dev $def \"" "$hooksdir/pre-commit" \
+        || { echo "FAIL D03 $repo 钩子未保护默认分支 $def"; bad=1; }
+      # 动态：主 checkout 当前就在 def 上时必须被拦
+      if wt_is_main_checkout "$repo" && [ "$(git -C "$repo" symbolic-ref --short HEAD 2>/dev/null)" = "$def" ]; then
+        ( cd "$repo" && DIA_WT_GUARD_PROBE=1 "$hooksdir/pre-commit" >/dev/null 2>&1 ) \
+          && { echo "FAIL D03 $repo 守卫未拦截 $def 提交"; bad=1; }
+      fi
+    fi
+    if wt_is_main_checkout "$repo"; then
+      [ -z "$(git -C "$repo" status --porcelain 2>/dev/null)" ] || echo "WARN D04 $repo 主 checkout 有未提交改动"
+      [ "$(git -C "$repo" symbolic-ref --short HEAD 2>/dev/null)" = "$def" ] || echo "WARN D04 $repo 主 checkout 不在 $def"
+    fi
+    local missing=0
+    while IFS= read -r p; do [ -n "$p" ] && [ ! -d "$p" ] && { echo "FAIL D05 $repo worktree 路径缺失：$p"; missing=1; }; done \
+      < <(git -C "$repo" -c core.quotePath=false worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p')
+    [ "$missing" = 0 ] || bad=1
+    [ "$(git -C "$repo" -c core.quotePath=false worktree list --porcelain 2>/dev/null | grep -cE '^(prunable|locked)')" = 0 ] || { echo "FAIL D06 $repo 有 prunable/locked worktree"; bad=1; }
+    [ -z "$(git -C "$repo" -c core.quotePath=false worktree list --porcelain 2>/dev/null | sed -n 's/^branch refs\/heads\///p' | sort | uniq -d)" ] || { echo "FAIL D07 $repo 分支被多个 worktree 占用"; bad=1; }
+    [ -n "$def" ] || { echo "FAIL D11 $repo 默认分支不可解析"; bad=1; }
+    if [ "$json" = 1 ]; then
+      python3 -c 'import json,sys;print(json.dumps({"repo":sys.argv[1],"ok":sys.argv[2]=="0"},ensure_ascii=False))' "$repo" "$bad"
+    fi
+    [ "$bad" = 0 ] && [ "$json" = 0 ] && echo "ok $repo"
+    [ "$bad" = 1 ] && fails=$((fails+1))
+  done
+  [ "$fails" = 0 ]
+}
+
+cmd_gate() {
+  local repo="" feature=""
+  while [ $# -gt 0 ]; do case "$1" in
+    -*) shift ;;
+    *) if [ -z "$repo" ]; then repo="$1"; elif [ -z "$feature" ]; then feature="$1"; fi; shift ;;
+  esac; done
+  [ -n "$repo" ] && [ -n "$feature" ] || die "用法：dia wt gate <repo> <feature>"
+  echo "== check（R20）"; cmd_check "$repo" || { echo "gate FAIL: check"; return 1; }
+  echo "== doctor"; cmd_doctor "$repo" || { echo "gate FAIL: doctor"; return 1; }
+  local def; def="$(wt_default_branch "$repo")"
+  local wt=""
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    local br; br="$(git -C "$p" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+    if [ "$br" = "feat/$feature" ] || [ "$(basename "$p")" = "${repo##*/}-worktree--$feature" ]; then wt="$p"; break; fi
+  done < <(git -C "$repo" -c core.quotePath=false worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p')
+  [ -n "$wt" ] || { echo "gate FAIL: 找不到 feature=$feature 的 worktree"; return 1; }
+  [ -z "$(git -C "$wt" status --porcelain)" ] || { echo "gate FAIL: worktree 有未提交改动"; return 1; }
+  local ahead; ahead="$(git -C "$wt" rev-list --count "origin/${def}..HEAD" 2>/dev/null || echo 0)"
+  [ "$ahead" -gt 0 ] || { echo "gate FAIL: 相对 origin/${def} 没有提交"; return 1; }
+  echo "gate OK：$feature（ahead origin/${def} = $ahead）"
+}
+
+
 case "${1:-}" in
   create) shift; cmd_create "$@" ;;
   route)  shift; cmd_route "$@" ;;
@@ -1101,6 +1403,9 @@ case "${1:-}" in
   list)   shift; cmd_list "$@" ;;
   status) shift; cmd_status "$@" ;;
   check)  shift; cmd_check "$@" ;;
+  adopt)  shift; cmd_adopt "$@" ;;
+  doctor) shift; cmd_doctor "$@" ;;
+  gate)   shift; cmd_gate "$@" ;;
   clean)  shift; cmd_clean "$@" ;;
   prune-merged) shift; cmd_prune_merged "$@" ;;
   ""|help|-h|--help)
@@ -1114,6 +1419,10 @@ dia wt —— worktree 目录形式选型 + 创建（唯一实现）
   dia wt status [repo-path]              # ★ 清理前必查：唯一工作副本 + 改动重叠（只读）
   dia wt check  [<repo>...] [--all] [--deep] [--quiet]
                                                # ★ 依赖体检（R20）：软链/逃逸/悬空；--all 扫全部仓
+  dia wt adopt  <repo> [--apply|--check|--revert] [--template T] [--default-branch B] [--json]
+                                               # 配置路径模板 + 守卫钩子（默认 dry-run）
+  dia wt doctor [<repo>...] [--all] [--json]    # 巡检：配置/钩子/探针/主 checkout/worktree 卫生
+  dia wt gate   <repo> <feature>               # 提交 MR 前：check + doctor + 干净 + ahead>0
   dia wt route  <repo-path>              # ★ 开工前必查：走 MR 还是直推（R1.7，配置驱动）
   dia wt scope  <repo|worktree> [--feature <slug>] [--session <id>]   # ★ 产出作用域声明（设计 §4.5）
   dia wt scope  --show                   # 看与当前目录匹配的作用域声明

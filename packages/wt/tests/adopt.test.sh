@@ -40,7 +40,7 @@ BR="$TD/remote.git"; git init -q --bare "$BR"
 git -C "$R" remote add origin "$BR" 2>/dev/null || true
 git -C "$R" push -q --no-verify -u origin main 2>/dev/null || true
 git -C "$R" worktree add -q "$TD/wt" -b feat/scan 2>/dev/null || true
-echo "/Users/alice/secret" > "$TD/wt/bad.txt"
+BAD_HOME="/Users"; echo "$BAD_HOME/alice/secret" > "$TD/wt/bad.txt"
 git -C "$TD/wt" add -A && git -C "$TD/wt" commit -qm bad --no-verify
 if git -C "$TD/wt" push -q origin feat/scan 2>/dev/null; then bad "敏感推送未被拦截"; else ok "敏感推送被拦截"; fi
 echo ok > "$TD/wt/bad.txt" && git -C "$TD/wt" add -A && git -C "$TD/wt" commit -qm fix --no-verify

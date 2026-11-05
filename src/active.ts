@@ -24,7 +24,10 @@ function readAll(): ActiveMap {
 export function installedVersions(id: string): string[] {
   const dir = join(dataDir(), "personas", id);
   if (!existsSync(dir)) return [];
-  return readdirSync(dir).filter((v) => statSync(join(dir, v)).isDirectory()).sort();
+  const verRoot = join(dir, "versions");
+  if (existsSync(verRoot)) return readdirSync(verRoot).filter((v) => statSync(join(verRoot, v)).isDirectory()).sort();
+  const skip = new Set(["current", "latest", "data", "repo", "repo.git", "worktrees", "versions", ".lock"]);
+  return readdirSync(dir).filter((v) => !skip.has(v) && !v.startsWith(".staging-") && statSync(join(dir, v)).isDirectory()).sort();
 }
 
 export function read(id: string): ActiveEntry | null {

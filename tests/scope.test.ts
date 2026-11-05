@@ -1,8 +1,16 @@
 import { describe, expect, test, beforeAll } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
+
+/** 新布局：版本槽位 = <semver>+g<sha>（同 semver 不同 commit 并存） */
+function slotDir(root: string, id: string, prefix = "0.1.0"): string {
+  const dir = join(root, "personas", id);
+  const name = readdirSync(dir).find((n) => n.startsWith(prefix))!;
+  return join(dir, name);
+}
+
 
 // 注意：不 import persona.ts —— 它的目录常量在模块加载时固化，跨测试文件会互相污染。
 // 安装一律走 CLI 子进程（隔离 env）。
@@ -59,7 +67,7 @@ describe("persona → kit 联动", () => {
   test("install persona 会把引用的 kit 一并装上并记账", () => {
     const r = runCli(["persona", "add", "--from", src]);
     expect(r.status).toBe(0);
-    const lock = JSON.parse(readFileSync(join(data, "personas", "yan", "0.1.0", "dia.lock"), "utf8"));
+    const lock = JSON.parse(readFileSync(join(slotDir(data, "yan"), "dia.lock"), "utf8"));
     expect(lock.kits).toEqual([{ id: "yan-core", version: "0.1.0" }]);
     expect(existsSync(join(data, "kits", "yan-core", "0.1.0", "knowledge", "scenes.md"))).toBe(true);
   });
@@ -99,13 +107,13 @@ describe("persona → kit 联动", () => {
     expect(runCli(["persona", "add", "--from", src2]).status).toBe(0);
 
     // 模拟早期 add 落下的 lock：没有 content 段
-    const lockPath = join(data, "personas", "legacy", "0.1.0", "dia.lock");
+    const lockPath = join(slotDir(data, "legacy"), "dia.lock");
     const lock = JSON.parse(readFileSync(lockPath, "utf8"));
     delete lock.content;
     writeFileSync(lockPath, JSON.stringify(lock));
 
     const s = scope.current("legacy");
-    expect(s.knowledgeRoot).toBe(join(data, "personas", "legacy", "0.1.0", "knowledge"));
+    expect(s.knowledgeRoot).toBe(join(slotDir(data, "legacy"), "knowledge"));
     expect(s.kits[0].commands[0].name).toBe("old");
   });
 });

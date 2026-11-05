@@ -3,6 +3,14 @@ import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, readdi
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+/** 新布局：版本槽位 = <semver>+g<sha>（同 semver 不同 commit 并存） */
+function slotDir(root: string, id: string, prefix = "0.1.0"): string {
+  const dir = join(root, "personas", id);
+  const name = readdirSync(dir).find((n) => n.startsWith(prefix))!;
+  return join(dir, name);
+}
+
+
 let persona: any;
 let src: string, data: string, agents: string, cache: string, dshProfiles: string;
 
@@ -69,7 +77,7 @@ describe("persona security regressions", () => {
     persona.install(src);
     const yan = join(agents, "yan.md");
     writeFileSync(yan, "user yan\n");
-    const lockPath = join(data, "personas", "dabo", "0.1.0", "dia.lock");
+    const lockPath = join(slotDir(data, "dabo"), "dia.lock");
     const lock = JSON.parse(require("node:fs").readFileSync(lockPath, "utf8"));
     lock.rendered = [...(lock.rendered || []), yan];
     writeFileSync(lockPath, JSON.stringify(lock));

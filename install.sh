@@ -52,5 +52,7 @@ if [ -f "$SRC/docs/platforms/registry.json" ]; then run cp "$SRC/docs/platforms/
 if [ -f "$SRC/docs/deps.jsonl" ]; then run cp "$SRC/docs/deps.jsonl" "$DIA_INSTALL_DIR/registry/deps.jsonl"; fi
 run chmod +x "$DIA_INSTALL_DIR/packages/wt/bin/dia-wt"
 run chmod +x "$DIA_INSTALL_DIR/bin/dia.js" "$DIA_INSTALL_DIR/packages/job/bin/dia-job"
+# 记录来源：`dia update` 据此判断「脚本安装」并给出正确升级方式
+run node -e 'require("fs").writeFileSync(process.argv[1], JSON.stringify({tool:"dia",source:process.argv[2],installedAt:new Date().toISOString()},null,1)+"\n")' "$DIA_INSTALL_DIR/install.json" "$SRC"
 run ln -sfn "$DIA_INSTALL_DIR/bin/dia.js" "$DIA_BIN_DIR/dia"
 echo "dia installed: ${DIA_INSTALL_DIR}（安装物）；data root: ${DATA_ROOT}（数据）-> $DIA_BIN_DIR/dia"

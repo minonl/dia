@@ -5,7 +5,8 @@
 //   · 旧名 `DIA_DATA_DIR` 保留一个 release 作兼容；新代码一律用 diaHome()
 //   · msg/agents/state/cache/job 全部从数据根派生；**不读** DIA_MSG_ROOT / DIA_AGENTS_ROOT
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 /** 数据根：DIA_ROOT（新）> DIA_DATA_DIR（兼容，一个 release 后删）> ~/.dia
  *  ⚠️ 不用 DIA_HOME：现有语义是「展开 ~ 用的家目录」（scope.ts），与本根无关。 */
@@ -25,6 +26,10 @@ export const ingestDir = () => join(diaHome(), "ingest");
 export const runsDir = () => join(diaHome(), "runs");
 
 /** 安装目录（CLI/dist/packages）；安装器可用 DIA_HOME_INSTALL 覆盖 */
-export const installDir = () => process.env.DIA_HOME_INSTALL || diaHome();
+export function installDir(): string {
+  const env = process.env.DIA_INSTALL_DIR || process.env.DIA_HOME_INSTALL;
+  if (env) return env;
+  try { return dirname(dirname(fileURLToPath(import.meta.url))); } catch { return diaHome(); }
+}
 /** 源码缓存（克隆/检出）；兼容旧 DIA_CACHE_DIR */
 export const srcCacheDir = () => process.env.DIA_CACHE_DIR || join(cacheRoot(), "src");

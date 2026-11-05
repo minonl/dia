@@ -16,7 +16,7 @@
   </array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>@HOME@/.local/share/dia/logs/bw-broker.out.log</string>
-  <key>StandardErrorPath</key><string>@HOME@/.local/share/dia/logs/bw-broker.err.log</string>
+  <key>StandardOutPath</key><string>@HOME@/.dia/logs/bw-broker.out.log</string>
+  <key>StandardErrorPath</key><string>@HOME@/.dia/logs/bw-broker.err.log</string>
 </dict>
 </plist>

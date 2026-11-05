@@ -1921,7 +1921,9 @@ dia --persona yan kb scene S1
 | cache | `~/.dia/cache`（kb 索引会重建） |
 | msg/agents | `~/.dia/msg`、`~/.dia/agents` |
 | dsh profile / opencode agent | 不变（`~/.dsh/profiles`、`~/.config/opencode`） |
-| ~/.local/bin/dia 软链 | 指向 `~/.dia/bin/dia.js`（install.sh 自动） |
+| 安装物 | `<install>/{bin,dist,packages,registry}`（默认 `~/.local/share/dia`，`DIA_INSTALL_DIR` 可覆盖） |
+| 数据 | `~/.dia/{personas,msg,agents,state,cache,job,runs,audit}` |
+| ~/.local/bin/dia 软链 | 指向 `<install>/bin/dia.js` |
 
 ## 回滚
 
@@ -5267,6 +5269,8 @@ git for-each-ref
 | D0.21 | worktree 抽取 `packages/wt` | **完成** | 7 处 python→node；`dia wt`；4 套测试原样迁移全绿 |
 | D0.23 | doctor 平台版本自检 | **完成** | `platform:opencode` / `platform:dsh` 报版本（缺宿主 = warn，不判红）；`tests/active-doctor.test.ts` |
 | D0.44 | 配置迁移走 LLM 任务 | **完成** | `docs/migrations/llm-migration.md`：升级只改声明；迁移=任务+判据+回滚；禁止代码里堆版本分支（安全敏感/原子场景例外） |
+| D0.53 | 安装物/数据分离 | **完成** | `DIA_INSTALL_DIR`（install.sh 与 paths.installDir 一致，优先读）；`--migrate` 只搬数据子目录；doctor 打印 install+data、同根 warn |
+| D0.52 | launchd 安装脚本 | **完成** | `packaging/launchd/{install,uninstall}.sh`（默认 dry-run）；日志落 `~/.dia/logs` |
 | D0.51 | 快照隔离评估 | **完成（文档）** | `docs/security/snapshot-isolation.md`：威胁模型、A–E 方案对比、路线与触发条件；结论：短期不加沙箱，敏感任务走 `--dsh` |
 | D0.50 | 文档内链检查 | **完成** | `scripts/docs-link-check.mjs`：相对链接存在性 + 不越出 `docs/`（Pages 根）+ 可选 `--remote`；CI 跑；`docs:index` 的 llms 入口改绝对 URL |
 | D0.49 | `dia update` 自更新 | **完成** | `dia version` 改读 package.json；`update --check`（领先 latest 不算旧）；`install.sh` 分发 package.json；`tests/update.test.ts` |

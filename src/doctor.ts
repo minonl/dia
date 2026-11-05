@@ -199,7 +199,14 @@ export async function run(opts: { persona?: string } = {}): Promise<{
   checks.push(...depsChecks());
   checks.push(...platformChecks());
 
-  const wt = join(paths.installDir(), "packages/wt/bin/dia-wt");
+  const install = paths.installDir();
+  checks.push({
+    name: "paths",
+    status: install === paths.diaHome() ? "warn" : "ok",
+    detail: `install=${install} data=${paths.diaHome()}${install === paths.diaHome() ? "（安装物与数据同根）" : ""}`,
+  });
+
+  const wt = join(install, "packages/wt/bin/dia-wt");
   checks.push({ name: "wt", status: existsSync(wt) ? "ok" : "warn", detail: existsSync(wt) ? wt : "dia wt 未安装（dia install.sh）" });
 
   const verdict = checks.some((c) => c.status === "fail") ? "fail" : checks.some((c) => c.status === "warn") ? "warn" : "ok";

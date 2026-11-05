@@ -1,14 +1,13 @@
 # launchd：bw broker 常驻
 
 ```bash
-mkdir -p ~/Library/LaunchAgents ~/.local/share/dia/logs
-sed -e "s#@DIA_BIN@#$HOME/.local/bin/dia#g" -e "s#@HOME@#$HOME#g" \
-  -e "s#@BW_PASSWORD_FILE@#$HOME/.config/dia/bw-password#g" \
-  # 密码文件必须 0600，且只用 `--passwordfile`（不要 export BW_PASSWORD）
-  packaging/launchd/com.minzhao.dia-bw-broker.plist.template \
-  > ~/Library/LaunchAgents/com.minzhao.dia-bw-broker.plist
-launchctl load -w ~/Library/LaunchAgents/com.minzhao.dia-bw-broker.plist
+# 演练：只打印将要做的事
+packaging/launchd/install.sh --dry-run
+# 安装（可选自动解锁；密码文件必须 0600）
+packaging/launchd/install.sh --yes [--passwordfile ~/.config/dia/bw-password]
 launchctl list | grep dia-bw-broker
+# 卸载
+packaging/launchd/uninstall.sh
 ```
 
 - 解锁：模板默认带 `--passwordfile @BW_PASSWORD_FILE@`（启动即解锁，失败则 broker 不启动，fail-closed）；不想自动解锁就把这两行删掉，改用 `dia env bw unlock`

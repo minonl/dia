@@ -104,6 +104,14 @@ out="$(bash "$WT" create "$R5" t1 --dry-run 2>&1 || true)"
 printf '%s' "$out" | grep -q "repo5.wt.t1" && ok "自定义模板 create 路径生效" || bad "自定义模板: $out"
 bash "$WT" adopt "$R5" --apply >/dev/null 2>&1
 
+# ── 过期 origin/HEAD（远端分支已删）不误判默认分支 ──────────────────────────
+R6="$TD/repo6"; mkdir -p "$R6"; git -C "$R6" init -q -b main
+git -C "$R6" config user.email t@example.com; git -C "$R6" config user.name t
+echo a > "$R6/a.txt"; git -C "$R6" add -A; git -C "$R6" commit -qm init --no-verify
+git -C "$R6" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/gone
+out="$(bash "$WT" adopt "$R6" --json)"
+printf '%s' "$out" | grep -q '"defaultBranch":"main"' && ok "过期 origin/HEAD 回落到 main" || bad "过期 origin/HEAD: $out"
+
 # ── gate：成功 / 失败（P1-3 精确匹配）────────────────────────────────────────
 bash "$WT" gate "$R5" x >/dev/null 2>&1 && ok "gate 成功" || bad "gate 失败"
 if bash "$WT" gate "$R5" xb >/dev/null 2>&1; then bad "gate 子串误匹配（x 命中 xb）"; else ok "gate 精确匹配 feature"; fi

@@ -19,7 +19,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { execFileSync } from "node:child_process";
 import * as config from "./config.ts";
 import * as paths from "./paths.ts";
@@ -196,7 +196,7 @@ export function renderContent(
   baseDir: string,
   targetDir: string,
   m: ContentFields,
-  opts: { dryRun?: boolean } = {},
+  opts: { dryRun?: boolean; force?: boolean } = {},
 ): RenderedEntry[] | null {
   type Plan = { entry: RenderedEntry; dest: string; linkTarget?: string; content?: string };
   const plans: Plan[] = [];
@@ -223,12 +223,25 @@ export function renderContent(
   }
   const dirs = (m.dirs ?? []).map((d) => assertInsideHome(d));
 
-  // 冲突检查：写盘前全部过一遍，避免半装
+  // 冲突检查：写盘前全部过一遍，避免半装；--force 时备份后覆盖
+  const backupDir = opts.force ? join(dataDir(), "backups", `force-${new Date().toISOString().replace(/[:.]/g, "-")}`) : "";
   for (const p of plans) {
-    if (p.entry.type === "file" && p.content !== undefined) {
-      checkTargetFree(p.dest, "file", sha256(Buffer.from(p.content, "base64")));
-    } else if (p.linkTarget && (existsSync(p.dest) || isSymlink(p.dest))) {
-      if (!linkManaged(p.dest, p.linkTarget)) throw new Error(`E_CONFLICT: ${p.dest} exists and is not managed`);
+    let conflict = false;
+    try {
+      if (p.entry.type === "file" && p.content !== undefined) {
+        checkTargetFree(p.dest, "file", sha256(Buffer.from(p.content, "base64")));
+      } else if (p.linkTarget && (existsSync(p.dest) || isSymlink(p.dest))) {
+        if (!linkManaged(p.dest, p.linkTarget)) conflict = true;
+      }
+    } catch { conflict = true; }
+    if (!conflict) continue;
+    if (!opts.force) {
+      if (p.entry.type === "file") throw new Error(`E_CONFLICT: ${p.dest} exists and differs`);
+      throw new Error(`E_CONFLICT: ${p.dest} exists and is not managed`);
+    }
+    if (!isSymlink(p.dest) && existsSync(p.dest)) {
+      mkdirSync(backupDir, { recursive: true });
+      cpSync(p.dest, join(backupDir, basename(p.dest)));
     }
   }
   if (opts.dryRun) return plans.map((p) => p.entry);

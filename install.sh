@@ -2,15 +2,16 @@
 # dia global install: copy CLI + dist + job package; never point at a worktree.
 set -uo pipefail
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DIA_HOME="${DIA_HOME:-$HOME/.local/share/dia}"
+DIA_HOME="${DIA_HOME:-$HOME/.dia}"
 DIA_BIN_DIR="${DIA_BIN_DIR:-$HOME/.local/bin}"
-DRY=0; FORCE=0
+DRY=0; FORCE=0; MIGRATE=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --home) DIA_HOME="$2"; shift 2 ;;
     --bin) DIA_BIN_DIR="$2"; shift 2 ;;
     --dry-run) DRY=1; shift ;;
     --force) FORCE=1; shift ;;
+    --migrate) MIGRATE=1; shift ;;
     -h|--help) sed -n '2,3p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "usage: install.sh [--home DIR] [--bin DIR] [--dry-run] [--force]" >&2; exit 2 ;;
   esac

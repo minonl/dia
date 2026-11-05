@@ -18,6 +18,13 @@ const dshProfiles = () => process.env.DIA_DSH_PROFILES_DIR || join(homedir(), ".
 // skills 读 $HOME/.agents/skills。所以 codex host 渲染到一个**假 HOME**（默认 <data>/codex-home），
 // 由调用方把 HOME/CODEX_HOME 指过去；绝不写用户的真实 ~/.codex（否则会覆盖主 yan 身份）。
 const codexHomeDir = (home?: string) => resolve(home || process.env.DIA_CODEX_HOME || join(dataDir(), "codex-home"));
+// 多 persona 共享同一个全局 codex-home 会互相覆盖（rendered 哈希必然互相矛盾 ⇒ verify 恒 fail）。
+// 规则：显式 --home > DIA_CODEX_HOME > persona 自己声明的 data_root（角色隔离）> 全局 codex-home（单 persona 场景）。
+const expandTilde = (p: string) => (p === "~" ? homedir() : p.startsWith("~/") ? join(homedir(), p.slice(2)) : p);
+const codexHomeFor = (opts: { home?: string }, m: { data_root?: string }) =>
+  opts.home || process.env.DIA_CODEX_HOME
+    ? codexHomeDir(opts.home)
+    : codexHomeDir(m.data_root ? expandTilde(m.data_root) : undefined);
 const HOSTS = new Set(["opencode", "dsh", "codex"]);
 const assertHost = (h: string) => { if (!HOSTS.has(h)) throw new Error("E_HOST: host not implemented: " + h); };
 // opencode 的全局配置可能有 .json / .jsonc 两种文件名。顺序与宿主一致
@@ -185,7 +192,7 @@ export function install(from: string, opts: { ref?: string; host?: string; home?
   }
 
   const codexEntry = hosts.includes("codex") ? m.entry?.codex : undefined;
-  const codexHome = hosts.includes("codex") ? codexHomeDir(opts.home) : null;
+  const codexHome = hosts.includes("codex") ? codexHomeFor(opts, m) : null;
   if (hosts.includes("codex")) {
     if (!codexEntry) throw new Error("E_MANIFEST: missing entry.codex");
     const abs = resolve(src.dir, codexEntry);
@@ -654,7 +661,7 @@ export function render(id: string, opts: { host?: string; home?: string; check?:
     codexSrc = resolve(dir, entry);
     if (!codexSrc.startsWith(dir + sep)) throw new Error("E_MANIFEST: entry escapes persona dir");
     if (!existsSync(codexSrc)) throw new Error("E_MANIFEST: entry.codex file missing");
-    codexDest = join(codexHomeDir(opts.home), ".codex", "AGENTS.md");
+    codexDest = join(codexHomeFor(opts, m), ".codex", "AGENTS.md");
     if (!existsSync(codexDest)) drift.push({ path: codexDest, action: "missing" });
     else if (shaFile(codexDest) !== shaFile(codexSrc)) drift.push({ path: codexDest, action: "changed" });
   }
@@ -709,8 +716,17 @@ export function render(id: string, opts: { host?: string; home?: string; check?:
   // 只更新渲染产物记录；persona 内容哈希（lock.hash）不变。
   const lockPath = join(dir, "dia.lock");
   const lock = JSON.parse(readFileSync(lockPath, "utf8"));
-  const rendered: string[] = [...new Set([...(lock.rendered ?? []), ...(agentDest ? [agentDest] : []), ...(codexDest ? [codexDest] : [])])];
+  // 换 codex home 后，旧渲染路径要**剪掉**（否则 lock 里留着已不存在的路径 ⇒ verify 恒 missing）
+  const staleCodex = codexDest
+    ? (lock.rendered ?? []).filter((p: string) => p.endsWith("/.codex/AGENTS.md") && p !== codexDest)
+    : [];
+  const rendered: string[] = [...new Set([
+    ...(lock.rendered ?? []).filter((p: string) => !staleCodex.includes(p)),
+    ...(agentDest ? [agentDest] : []),
+    ...(codexDest ? [codexDest] : []),
+  ])];
   const renderedHashes: Record<string, string> = { ...(lock.renderedHashes ?? {}) };
+  for (const p of staleCodex) delete renderedHashes[p];
   if (agentDest) renderedHashes[agentDest] = shaFile(agentDest);
   if (codexDest) renderedHashes[codexDest] = shaFile(codexDest);
   const renderedDirs = [...(lock.renderedDirs ?? []).filter((d: any) => d.path !== dshDest)];

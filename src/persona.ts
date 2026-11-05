@@ -387,11 +387,49 @@ function readMarker(dir: string): { id?: string; version?: string } | null {
   try { return JSON.parse(readFileSync(p, "utf8")); } catch { return null; }
 }
 
+/** semver 比较（忽略 build metadata；prerelease < release） */
+function cmpSemver(a: string, b: string): number {
+  const parse = (v: string) => {
+    const [core, pre] = v.split("+")[0].split("-", 2);
+    return { nums: core.split(".").map(Number), pre: pre ?? null };
+  };
+  const A = parse(a), B = parse(b);
+  for (let i = 0; i < 3; i++) {
+    const x = A.nums[i] || 0, y = B.nums[i] || 0;
+    if (x !== y) return x - y;
+  }
+  if (A.pre && !B.pre) return -1;
+  if (!A.pre && B.pre) return 1;
+  if (A.pre && B.pre) return A.pre.localeCompare(B.pre);
+  return 0;
+}
+
+/** GC：保留 active + 最近 N 个（semver 排序），其余删除；dryRun 只报不删 */
+export function gc(id: string, opts: { keep?: number; dryRun?: boolean; force?: boolean } = {}): { kept: string[]; removed: string[]; skipped: string[] } {
+  const idDir = join(dataDir(), "personas", id);
+  if (!existsSync(idDir)) throw new Error("E_NOT_INSTALLED");
+  const all = versionDirs(idDir);
+  const activeVer = active.effective(id)?.version;
+  const keep = Math.max(1, opts.keep ?? 3);
+  const sorted = [...all].sort((a, b) => cmpSemver(b, a));
+  const keepSet = new Set<string>(sorted.slice(0, keep));
+  if (activeVer) keepSet.add(activeVer);
+  const kept: string[] = [], removed: string[] = [], skipped: string[] = [];
+  for (const v of all) {
+    if (keepSet.has(v)) { kept.push(v); continue; }
+    if (opts.dryRun) { removed.push(v); continue; }
+    rmSync(join(idDir, v), { recursive: true, force: true });
+    removed.push(v);
+  }
+  return { kept, removed, skipped };
+}
+
 export function verify(id: string, version?: string): VerifyResult {
   const idDir = join(dataDir(), "personas", id);
   if (!existsSync(idDir)) throw new Error("E_NOT_INSTALLED");
-  const v = version || readdirSync(idDir).sort().pop()!;
-  const dir = join(idDir, v);
+  const v = version || active.effective(id)?.version || versionDirs(idDir).sort((a, b) => cmpSemver(b, a))[0];
+  if (!v) throw new Error("E_NOT_INSTALLED");
+  const dir = existsSync(join(idDir, "versions", v)) ? join(idDir, "versions", v) : join(idDir, v);
   const lock = JSON.parse(readFileSync(join(dir, "dia.lock"), "utf8"));
   // lock 自身不参与内容哈希
   const files = walkFiles(dir).filter((f) => basename(f) !== "dia.lock");
@@ -755,8 +793,8 @@ export function remove(id: string): { removed: string[]; skipped: string[] } {
   const removed: string[] = [];
   const skipped: string[] = [];
   const allowed = resolve(opencodeAgents(), `${id}.md`);
-  for (const v of readdirSync(idDir)) {
-    const dir = join(idDir, v);
+  for (const v of versionDirs(idDir)) {
+    const dir = existsSync(join(idDir, "versions", v)) ? join(idDir, "versions", v) : join(idDir, v);
     const lockFile = join(dir, "dia.lock");
     if (existsSync(lockFile)) {
       const lock = JSON.parse(readFileSync(lockFile, "utf8"));

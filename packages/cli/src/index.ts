@@ -795,6 +795,19 @@ async function personaCli(argv: string[]): Promise<number> {
       return String(e?.message || "").startsWith("E_VERSION") ? 21 : 31;
     }
   }
+  if (sub === "gc") {
+    const id = positional(args)[0];
+    if (!id) { err("usage: dia persona gc <id> [--keep N] [--dry-run] [--json]"); return 2; }
+    try {
+      const r = persona.gc(id, { keep: Number(flag(args, "--keep") || 3), dryRun: has(args, "--dry-run") });
+      out(asJson ? JSON.stringify(r)
+        : `kept: ${r.kept.join(", ") || "-"}\nremoved: ${r.removed.join(", ") || "-"}${has(args, "--dry-run") ? "（dry-run，未删除）" : ""}`);
+      return 0;
+    } catch (e: any) {
+      err(e?.message || String(e));
+      return String(e?.message || "").startsWith("E_NOT_INSTALLED") ? 20 : 31;
+    }
+  }
   if (sub === "show") {
     const id = positional(args)[0];
     if (!id) { err("missing id"); return 2; }

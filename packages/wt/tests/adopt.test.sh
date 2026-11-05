@@ -140,6 +140,23 @@ git -C "$TD/repo7-worktree--y" commit -qm feat-y >/dev/null 2>&1
 bash "$WT" adopt "$R7" --revert >/dev/null 2>&1
 [ "$(git -C "$R7" config --get core.hooksPath)" = ".githooks" ] && ok "revert 还原原 hooksPath（相对）" || bad "revert 未还原 .githooks"
 
+# ── adopt --all：批量主 checkout，跳过 worktree 目录 ─────────────────────────
+AR="$TD/allroot"; mkdir -p "$AR/a" "$AR/b"
+for r in a b; do
+  git -C "$AR/$r" init -q -b main
+  git -C "$AR/$r" config user.email t@example.com; git -C "$AR/$r" config user.name t
+  echo x > "$AR/$r/x.txt"; git -C "$AR/$r" add -A; git -C "$AR/$r" commit -qm init --no-verify
+done
+git -C "$AR/a" worktree add -q -b feat/w "$AR/a-worktree--w" main
+out="$(DIA_WT_REPOS_ROOT="$AR" DIA_WT_DATA_ROOT="$TD/dr2" bash "$WT" adopt --all --apply --json 2>&1)"
+printf '%s' "$out" | grep -q '"repos":2,"ok":2,"fail":0' && ok "adopt --all 覆盖 2 个主 checkout" || bad "adopt --all: $out"
+for r in a b; do
+  [ -n "$(git -C "$AR/$r" config --get core.hooksPath || true)" ] && ok "adopt --all: $r 已配 hooksPath" || bad "adopt --all: $r 未配置"
+done
+[ ! -d "$AR/a-worktree--w/.git/dia" ] && ok "adopt --all 跳过 worktree 目录" || bad "adopt --all 误改 worktree"
+DIA_WT_REPOS_ROOT="$TD/empty-root" DIA_WT_DATA_ROOT="$TD/dr3" bash "$WT" adopt --all >/dev/null 2>&1
+[ $? = 2 ] && ok "adopt --all 空结果 exit 2" || bad "adopt --all 空结果未 exit 2"
+
 # ── gate：成功 / 失败（P1-3 精确匹配）────────────────────────────────────────
 bash "$WT" gate "$R5" x >/dev/null 2>&1 && ok "gate 成功" || bad "gate 失败"
 if bash "$WT" gate "$R5" xb >/dev/null 2>&1; then bad "gate 子串误匹配（x 命中 xb）"; else ok "gate 精确匹配 feature"; fi

@@ -1,6 +1,8 @@
 # dia Public Release Gate
 
-> 状态：**已公开（2026-11-05）**。门禁保留为「未来再次公开/发布前」的检查清单。
+> 状态：**已公开（2026-11-05），独立审核 blocked（2026-11-05）**。
+> main 树的 P1/P2 已修；**公开分支 `feat/msg-collab-grill` 仍含敏感文档**，清掉前不得再发版/对外宣传。
+> 门禁保留为「未来发布前」的检查清单。
 >
 > 2026-11-05 实际路径：重建历史（filter-branch 清洗内部标识）→ 删库重建（新仓库 ID）→ 转 public → 开 Pages。
 > 旧的 `dia-archive-private` 已删除；npm `@minonl/dia` 已发布（OIDC）。

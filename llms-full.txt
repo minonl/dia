@@ -1647,7 +1647,7 @@ TUI / CLI / Web / SDK  ← 都是客户端
   "knowledge": ["core/knowledge"],
   "data_root": "~/.yan-agent",
   "commands": [{ "name": "scene", "entry": "scripts/kb-domain.mjs", "env": { "YAN_DATA_ROOT": "~/.yan-agent" } }],
-  "kits": ["../shared/leyan-skills"]
+  "kits": ["../shared/example-skills"]
 }
 ```
 
@@ -1724,7 +1724,7 @@ flowchart TD
 ## 5. 边界（明确不做）
 
 1. **不执行安装脚本**：kit 里写 `install.sh` 也不跑（与 persona 同）。
-2. **不装第三方包**：`npx skills add` 出来的 leyan-skills 等**不由 kit 管**；kit 只声明 `requires.npx` 并在缺失时 `W_` 告警。
+2. **不装第三方包**：`npx skills add` 出来的 example-skills 等**不由 kit 管**；kit 只声明 `requires.npx` 并在缺失时 `W_` 告警。
 3. **不管卸载服务**：launchd/cron 任务归 `dia job`，kit 不创建任务。
 4. **不写默认 agent**：`default_agent` 只允许通过 `config` 显式声明（P2），且必须可回滚；kit 不猜。
 5. **不碰用户手改**：产物哈希不匹配一律 skip，不覆盖、不删除。
@@ -1810,7 +1810,7 @@ DIA_PERSONA=yan dia kb query "MR 合并"    # 会议/脚本里设一次
 | 抽取项 | 处理 |
 |---|---|
 | `YAN_DATA_ROOT` / `tasks/scopes` | 参数化为 `DIA_WT_DATA_ROOT`（persona 注入 `~/.yan-agent`） |
-| `~/repos/leyan` 默认 | `DIA_WT_REPOS_ROOT`，缺失时不猜、报错 |
+| `~/repos/example` 默认 | `DIA_WT_REPOS_ROOT`，缺失时不猜、报错 |
 | `YAN_SESSION_ID` | `DIA_SESSION` |
 | 直推 vs MR（`my_namespaces`/`direct`/`mr`） | **留 yan 域**，经 §6.3 委派（`dia wt route` → yan 扩展） |
 | `route_config_json` 里的 python3 heredoc | 换 Node JSON（`packages/job` 同款，dia 禁止 python） |
@@ -4306,13 +4306,13 @@ Source（GitHub / Feishu）
 | 11 | 超级本 LDAP 登录跳转修复 | domain | 否 | ✅ | 业务登录域 |
 | 12 | 平台感知 + 并行会话收尾 | framework | 是 | ✅ | 跨平台会话生命周期 |
 | 13 | DSH 配置页前端能力调研 | none | 是 | ❌ | 服务宿主配置页；边界可争议 |
-| 14 | 钉钉反馈分析：商品分组升级 | domain | 否 | ✅ | 工作域反馈分析 |
+| 14 | 反馈分析：示例分组升级 | domain | 否 | ✅ | 工作域反馈分析 |
 | 15 | example-repo 知识库批量导入接口优化 | domain | 否 | ✅ | 产品接口优化 |
 | 16 | yan-agent 更新与生效版本机制 | framework | 是 | ✅ | 自更新/版本 |
 | 17 | 企业知识库回复诊断页内置改造 | domain | 否 | ✅ | 产品页面改造 |
 | 18 | 服务生命周期治理（续） | framework | 是 | ✅ | 同 #2 能力 |
 | 19 | iTerm2 Markdown 与浏览器插件安装 | none | 否 | ❌ | 本机宿主环境安装 |
-| 20 | 企业知识库领域知识出现商品 | domain | 否 | ✅ | 业务过滤规则 |
+| 20 | 知识库领域：示例主题 | domain | 否 | ✅ | 业务过滤规则 |
 
 ### 计数
 
@@ -4917,7 +4917,7 @@ sandbox-exec -p '(deny file-write*)(allow file-write* (subpath "/tmp/dia-sbx")) 
 
 | 项 | 现状 |
 |---|---|
-| 存储 | `~/.env.leyan`（网关 key）、`~/.env.leyan-tokens`（脚本凭据），600 明文 |
+| 存储 | `~/.env.example`（网关 key）、`~/.env.example-tokens`（脚本凭据），600 明文 |
 | 入库 | Bitwarden（`bw` CLI） |
 | 使用 | `dia env list/check/run`：白名单键 → 子进程环境；不回显、`--redact`、密钥不进 argv |
 | 约束 | 明文文件**不是**机密性边界（同一 OS 用户下的 agent 可读），只是"防误入 repo/日志/备份" |
@@ -5009,7 +5009,9 @@ dia env bw get --item db --task t-1    # 走 broker，写审计行
 
 # dia Public Release Gate
 
-> 状态：**已公开（2026-11-05）**。门禁保留为「未来再次公开/发布前」的检查清单。
+> 状态：**已公开（2026-11-05），独立审核 blocked（2026-11-05）**。
+> main 树的 P1/P2 已修；**公开分支 `feat/msg-collab-grill` 仍含敏感文档**，清掉前不得再发版/对外宣传。
+> 门禁保留为「未来发布前」的检查清单。
 >
 > 2026-11-05 实际路径：重建历史（filter-branch 清洗内部标识）→ 删库重建（新仓库 ID）→ 转 public → 开 Pages。
 > 旧的 `dia-archive-private` 已删除；npm `@minonl/dia` 已发布（OIDC）。
@@ -5272,6 +5274,7 @@ git for-each-ref
 | D0.21 | worktree 抽取 `packages/wt` | **完成** | 7 处 python→node；`dia wt`；4 套测试原样迁移全绿 |
 | D0.23 | doctor 平台版本自检 | **完成** | `platform:opencode` / `platform:dsh` 报版本（缺宿主 = warn，不判红）；`tests/active-doctor.test.ts` |
 | D0.44 | 配置迁移走 LLM 任务 | **完成** | `docs/migrations/llm-migration.md`：升级只改声明；迁移=任务+判据+回滚；禁止代码里堆版本分支（安全敏感/原子场景例外） |
+| D0.57 | 独立安全审核 | **blocked** | 子会话独立审核：凭据干净；main 树 P1/P2 已修（experiments 移除、内部命名/业务名脱敏、deps 可移植）；**分支 feat/msg-collab-grill 待清理** |
 | D0.56 | `dia update` 按安装方式分流 | **完成** | npm 包 vs 脚本安装（`install.json` 记来源）；防止装到不在 PATH 的 npm prefix；`tests/update.test.ts` 4 例 |
 | D0.53 | 安装物/数据分离 | **完成** | `DIA_INSTALL_DIR`（install.sh 与 paths.installDir 一致，优先读）；`--migrate` 只搬数据子目录；doctor 打印 install+data、同根 warn |
 | D0.52 | launchd 安装脚本 | **完成** | `packaging/launchd/{install,uninstall}.sh`（默认 dry-run）；日志落 `~/.dia/logs` |

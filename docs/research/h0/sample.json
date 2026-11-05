@@ -23,12 +23,12 @@
     {"episode_id":"62d818b447ae3cc0d346b33fcde764f2487b28adbcdb4902f7a333584af4a4f9","task":"超级本 LDAP 登录跳转修复","primary":"domain","framework_change":false,"fits":true,"host_coupled":false,"why":"业务登录域问题。"},
     {"episode_id":"f82db27c013c0012725267f48c1c1e16f22ab7525b67e2bf36e10ed8853900ab","task":"平台感知 + 并行会话收尾","primary":"framework","framework_change":true,"fits":true,"host_coupled":false,"why":"跨平台会话生命周期属框架。"},
     {"episode_id":"2b37c73e83cb697b07b146010d4fe04d85fea6b25abbb2d664365648526c2366","task":"DSH 配置页前端能力调研","primary":"none","framework_change":true,"fits":false,"host_coupled":true,"why":"宿主配置页设计/调研，输出服务宿主插件，不属三层任一。"},
-    {"episode_id":"a92d84035c3185d62d6a66e3000034e99603adc801294b0c0de7bc3f33f21911","task":"钉钉反馈分析：商品分组升级","primary":"domain","framework_change":false,"fits":true,"host_coupled":false,"why":"工作域反馈分析；消息通道另有工具。"},
+    {"episode_id":"a92d84035c3185d62d6a66e3000034e99603adc801294b0c0de7bc3f33f21911","task":"反馈分析：示例分组升级","primary":"domain","framework_change":false,"fits":true,"host_coupled":false,"why":"工作域反馈分析；消息通道另有工具。"},
     {"episode_id":"62ff3e9920701b6512943847b0cd4f5a72c037af2e79c274982836ca303cfc3d","task":"example-repo 知识库批量导入接口优化","primary":"domain","framework_change":false,"fits":true,"host_coupled":false,"why":"产品接口优化，域内完成。"},
     {"episode_id":"7588f0ea35adae84defb920dfbb5b28f7cda5a4c54e49bdc30e317c7ea28aad8","task":"yan-agent 更新与生效版本机制","primary":"framework","framework_change":true,"fits":true,"host_coupled":false,"why":"自更新/生效版本是框架生命周期。"},
     {"episode_id":"ba7540301101e3cbd98e5b3fe60d2333936bfc488b32942fea52120f758df84b","task":"企业知识库回复诊断页内置改造","primary":"domain","framework_change":false,"fits":true,"host_coupled":false,"why":"产品页面改造，域内完成。"},
     {"episode_id":"f8d118e7c02dffb70cd72fa07a42a9bb0e2e54d740a6be3a26a03c6b6aef180b","task":"服务生命周期治理（续）","primary":"framework","framework_change":true,"fits":true,"host_coupled":false,"why":"同版本生命周期，框架能力。"},
     {"episode_id":"05dad476c47c83981937fcb08c3f9ca7c1072a4ccc2e1fb689f87c19249d4b14","task":"iTerm2 Markdown 与浏览器插件安装","primary":"none","framework_change":false,"fits":false,"host_coupled":true,"why":"本机宿主环境安装，不属框架/域/kit 的职责。"},
-    {"episode_id":"29a32a0f00ad1287adf2b361a0eb1853e53fbb3bafaaa02387ec38b584d62994","task":"企业知识库领域知识出现商品","primary":"domain","framework_change":false,"fits":true,"host_coupled":false,"why":"业务数据/过滤规则，域内修复。"}
+    {"episode_id":"29a32a0f00ad1287adf2b361a0eb1853e53fbb3bafaaa02387ec38b584d62994","task":"知识库领域：示例主题","primary":"domain","framework_change":false,"fits":true,"host_coupled":false,"why":"业务数据/过滤规则，域内修复。"}
   ]
 }

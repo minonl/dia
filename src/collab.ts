@@ -7,7 +7,7 @@ import {
   closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync,
 } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import * as paths from "./paths.ts";
 
 export type Kind = "question" | "handoff" | "notify" | "reply";
@@ -366,7 +366,11 @@ export function show(id: string): MessageV2 {
 export function bodyOf(m: MessageV2): string {
   if (m.body !== undefined) return m.body;
   if (m.body_ref) {
-    try { return readFileSync(join(root(), m.body_ref), "utf8"); } catch { return ""; }
+    // body_ref 来自消息文件（可能是迁移来的脏数据）：必须落在 bodies/ 内，防止路径穿越读任意文件。
+    const base = resolve(bodiesDir());
+    const path = resolve(root(), m.body_ref);
+    if (path !== base && !path.startsWith(base + sep)) return "";
+    try { return readFileSync(path, "utf8"); } catch { return ""; }
   }
   return "";
 }

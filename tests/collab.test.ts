@@ -116,6 +116,21 @@ describe("dia msg migrate：旧数据只读迁移", () => {
     expect(legacy[0].body_missing).toBeFalsy();
   });
 
+  test("body_ref 路径穿越被拦截", () => {
+    const dir = join(root, "collab", "inbox", "ses_b");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(root, "secret.txt"), "SECRET");
+    writeFileSync(join(dir, "m-evil.json"), JSON.stringify({
+      schema: 2, id: "m-evil", thread_id: "th-evil2", seq: 1,
+      from: { session_id: "ses_a" }, to: { session_id: "ses_b" },
+      kind: "notify", subject: "evil", body_ref: "../../secret.txt",
+      requires_reply: false, hops: 0, idempotency_key: "th-evil2#1",
+      created_at: "2026-11-05T00:00:00Z", state: "pending", transport: "file",
+    }));
+    const m = json(run(["show", "m-evil", "--json"], "ses_b").stdout);
+    expect(m.body).toBe("");
+  });
+
   test("迁移拒绝路径穿越 id，不写到 legacy 外", () => {
     const oldDir = join(root, "msg", "坏数据", "inbox");
     mkdirSync(oldDir, { recursive: true });

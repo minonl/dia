@@ -1,7 +1,7 @@
 # dia msg M0：送达与可读（设计 v0.1）
 
 > **一句话**：任意两个活会话互发消息，收件方无需用户手敲命令即可读到；正文持久、有 ack/reply/close。
-> 日期：2026-11-05 ｜ 状态：**待人工确认** ｜ 上游需求：`docs/research/msg-collaboration-grill.md`（v0.2）
+> 日期：2026-11-05 ｜ 状态：**已确认，实现中（2026-11-05）** ｜ 上游需求：`docs/research/msg-collaboration-grill.md`（v0.2）
 > 决策记录：2026-11-05 用户拍板「v1 只做 M0 送达与可读」；M1+ 以 M0 两周真实使用为前置。
 > 本文只覆盖 M0；不写依赖图、TUI/Web、多机、daemon、全 worktree 锁。
 
@@ -16,6 +16,11 @@
 | **成功判据** | §7 的 6 条可执行验收全部通过；两周内执行过 `dia in` 的会话 ≥30%，否则按回滚线撤回。 |
 
 **为什么只做 M0**：今天 4 条消息 12 小时无人读，收件会话还活着；缺口是“读的路径不存在”，不是“依赖图不存在”。
+
+**边界（2026-11-05 用户校正）**：协议、存储、CLI、宿主适配器（opencode/dsh/codex）都是 **dia 框架能力**；
+yan-agent 只保留「什么时候用」的 persona 行为规则，不承载插件代码，避免把框架能力做成 agent 内容。
+**默认开启**：`msg` 是 dia 默认能力包（`kits/dia-msg`），所有 dia agent 默认带上；
+新建 agent 不是聋哑的，用户可显式关闭（§5.0）。
 
 ---
 
@@ -152,16 +157,42 @@ dia msg migrate [--dry-run]         # 旧 ~/.dia/msg -> ~/.dia/collab/legacy
 
 ## 5. “不需要用户手敲命令”的实现
 
-### 5.1 保证路径：AGENTS.md 硬规则（必须）
+### 5.0 默认能力：`dia-msg` 是框架默认 kit
 
-在 yan persona 的 AGENTS.md / knowledge 增加两条：
+**一句话**：`msg` 不是某个 persona 自己加的规则，而是 dia 给每个 agent 默认带的能力包。
 
-1. **开工第一条**：`dia whoami` + `dia in`（有未读先处理；不能处理就 `dia ack` 并说明）。
-2. **收工前**：`dia in --unread`；若有未读且未声明忽略，显式写出“还有 N 条未读”再结束。
+- **资产在 dia 仓**：`kits/dia-msg/`（`dia.json` + `skills/dia-msg/SKILL.md`），装配逻辑 `src/default-msg.ts`。skill 写清「什么时候用、怎么用、边界」。
+- **默认安装**：`dia persona add` / `dia persona create` / `dia persona render` 默认 ensure 安装 `dia-msg` kit；
+  skill 分发到 opencode / codex / dsh 的 skill 目录（按宿主存在与否），新 agent 不需要在 `dia.json` 里手写引用。
+  - 安全阀：只有**默认数据根 `~/.dia`** 才自动装配，避免测试/CI 的临时 `DIA_ROOT` 把 skill 写进真实 HOME；
+    自定义数据根用 `dia collab enable` 强制装配（或 `DIA_MSG_AUTO=1`）。
+- **默认开关**：`capabilities.msg` 缺省 = `true`（旧 manifest 不加字段也视为开）。`dia collab disable`
+  写 `~/.dia/collab/config.json`（全局或 `--persona <id>`）并移除 kit；`dia collab enable` 重新装配。
+  `DIA_MSG=0` 可临时关闭自动行为（不删 skill）。
+- **关闭语义**：`disable` 移除 kit（agent 不再看到 skill）并停自动注册/未读提示；`dia whoami / in / out`
+  仍可手动使用。`status` 显示 `disabled` 及原因，不静默。
+  - 按 persona 的 `capabilities.msg=false` 只阻止该 persona 的自动装配/更新；**硬关闭**用全局 `dia collab disable`。
+- **覆盖**：yan-agent 等 persona 可以加更严格的规则（例如必须先 handoff 再收工），但不能把默认能力关掉；
+  关掉必须走用户显式的 disable。
 
-这不是“用户手敲”，是 agent 的默认动作；M0 的验收按此口径。
+### 5.1 保证路径：框架默认 skill + persona 可选强化
 
-### 5.2 优化路径：opencode 插件（0.5d spike，可选）
+- 默认 skill `dia-msg` 的 `description` 会出现在宿主的 skill 列表里；内容给出开工/收工协议：
+  1. **开工第一条**：`dia whoami` + `dia in`（有未读先处理；不能处理就 `dia ack` 并说明）。
+  2. **收工前**：`dia in --unread`；若有未读且未声明忽略，显式写出“还有 N 条未读”再结束。
+  3. **需要对方行动**：用 `dia out` 建义务，而不是只发通知。
+- yan-agent 的 AGENTS.md 可以额外写更严格的两条（例如必须 handoff），但**不是唯一来源**；
+  其他 dia agent 也默认具备同样能力。
+- 这不是“用户手敲”，是 agent 的默认动作；M0 的验收按此口径。
+
+### 5.2 优化路径：opencode 适配器（dia 框架能力，0.5d spike，可选）
+
+**边界先说清**：适配器属于 dia 框架，不属于 persona/agent 内容。
+
+- 源码在 **dia 仓**（建议 `packages/host-opencode/` 或 `src/adapters/opencode.ts`），随 dia 版本发布；
+- 由 dia 提供安装入口（如 `dia collab plugin install --host opencode`），落到 `~/.config/opencode/plugins/dia-collab.ts`；
+- **yan-agent 只保留 AGENTS.md 行为规则**，不承载插件代码、不做宿主适配；
+- 插件只调用 dia CLI/文件协议，**不直接写宿主 DB**；不能注入就降级到 §5.1 硬规则。
 
 现有 `~/.config/opencode/plugins/`（复数）已有 v2 插件样例（`session-diary.ts` 使用 `export default { setup(ctx) }` + `ctx.event.subscribe()`）。
 M0 spike 只验证两件事：
@@ -170,8 +201,6 @@ M0 spike 只验证两件事：
 2. 插件能否在会话开始/空闲时把 `dia in --json` 的未读摘要注入会话（`prompt`/`session_inbox`/client API 三者之一）。
    - **不直接写宿主 DB**；不调用未公开 API 做写入。
    - 不能注入 → 插件只做注册，读仍靠 §5.1 硬规则（不阻塞 M0）。
-
-插件文件放在 yan-agent 平台侧（`platform/opencode/files/plugin-yan-collab.ts`）+ 安装时 symlink 到 `~/.config/opencode/plugins/`；不放进 dia 仓。
 
 ---
 
@@ -196,6 +225,8 @@ M0 spike 只验证两件事：
 | V6 | close 生效 | `dia close --reason done` 后 `dia in --unread` 不再出现；30 天内 `--gc` 可清理 |
 | V7 | 旧数据不丢 | `dia msg migrate --dry-run` 列出 4 条；执行后 `dia in --legacy` 可读，正文完整 |
 | V8 | 使用率（两周） | 统计 `~/.dia/collab/sessions/*.json` 中 `last_seen` 且执行过 `in` 的会话 / 活跃会话 ≥30% |
+| V9 | 默认能力包 | `dia persona create x --dir /tmp/x` → `dia persona add /tmp/x` 后 `dia kit list` 含 `dia-msg`；宿主 skill 目录有 `dia-msg` |
+| V10 | 可关闭 | `dia collab disable` 后 `dia collab status` = disabled；`DIA_MSG=0 dia in` 仍可手动用 |
 
 > V1–V7 必须在 CI/本机 e2e 可重复；V8 是人工统计，不达标触发回滚线。
 
@@ -210,11 +241,12 @@ M0 spike 只验证两件事：
 | 3 | `packages/cli/src/index.ts` | `whoami/in/out/ack/reply/close/show/migrate` | help 与实际一致；`--json` 稳定 |
 | 4 | 测试 | 两个 fake session id 的 e2e；并发 send/状态更新 | CI 全绿 |
 | 5 | 迁移命令 | `dia msg migrate` | dry-run/幂等；不删旧数据 |
-| 6 | yan-agent 规则 | AGENTS.md + knowledge 两条硬规则 | 新会话 5 次里 ≥4 次自动执行 |
-| 7 | 插件 spike | 注册 + 未读注入（可选） | 能注册；注入结论写回本文 |
-| 8 | 文档 | `docs/msg-collab-m0.md` 使用说明 | 新人按文档 10 分钟跑通双会话 |
+| 6 | **dia 默认 kit** | `kits/dia-msg/` + `src/default-msg.ts`：persona add/create/render 默认 ensure 安装；`capabilities.msg` 缺省 true；`dia collab enable|disable|status` | V9/V10；旧 persona 不加字段也默认开 |
+| 7 | dia 宿主适配器 spike | **dia 仓** `packages/host-opencode/`（或 `src/adapters/opencode.ts`）+ `dia collab plugin install --host opencode`；注册 + 未读注入（可选） | 能注册；注入结论写回本文；不写宿主 DB |
+| 8 | yan-agent 可选强化 | 仅在 AGENTS.md/knowledge 追加更严格规则，不承载代码 | 规则与默认 kit 不冲突 |
+| 9 | 文档 | `docs/msg-collab-m0.md` 使用说明 | 新人按文档 10 分钟跑通双会话 |
 
-**发布顺序**：1→2→3→4→5 合并；6 在 yan-agent 直接 push main（R1.7）；7 独立 MR；8 同 3。
+**发布顺序**：1→2→3→4→5→6 在 dia MR 合并；7 独立 spike MR；8 在 yan-agent 直接 push main（R1.7，仅规则）；9 同 3。
 
 ---
 

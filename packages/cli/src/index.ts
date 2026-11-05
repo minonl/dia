@@ -7,6 +7,8 @@ import { countCalls } from "../../../src/runtime.ts";
 import { resumeCard } from "../../../src/resume.ts";
 import * as persona from "../../../src/persona.ts";
 import * as msg from "../../../src/msg.ts";
+import * as collab from "../../../src/collab.ts";
+import * as defaultMsg from "../../../src/default-msg.ts";
 import * as paths from "../../../src/paths.ts";
 import * as agents from "../../../src/agents.ts";
 import * as tmux from "../../../src/tmux.ts";
@@ -153,7 +155,7 @@ usage:
   dia run --session S [--tool T] [--agent A] [--waive --risk N] [--redline] -- <cmd> [args...]
   dia resume --session S [--json]
   dia persona add <id|--from SRC> [--ref REF] [--host opencode|dsh|codex] [--home DIR] [--dry-run] [--force] [--json]
-  dia persona create <id> --dir DIR [--host opencode|dsh|codex] [--dry-run] [--json]
+  dia persona create <id> --dir DIR [--host opencode|dsh|codex] [--no-msg] [--dry-run] [--json]
   dia persona render <id> [--host opencode|dsh|codex] [--home DIR] [--check] [--json]
   dia persona list|verify|remove|show <id>|use <id>[@ver]
   dia persona path [<id>[@<ver>]] [--json]   # 打印生效版本目录（服务/脚本取代码入口）
@@ -172,7 +174,15 @@ usage:
   dia wt create|form|list|status|check|route|scope|clean|prune-merged …
   dia cmd <name> [args…]              # 只查 persona 声明的命令（可绕开同名内置）
   dia <persona-cmd> [args…]           # 一级委派（内置优先）
-  dia msg send|show|inbox|ack|delivered|deliver [--wait]|reply|needs-info|status|stuck|thread|escalate|agents\n  dia agents list|register|unregister|discover\n  dia msg deliver <agent> <id> [--transport tmux|acp]\n  dia task add|list|status|done
+  dia collab status|enable|disable [--persona ID]   # dia-msg 默认能力开关（默认开）
+  dia whoami [--json] [--name NAME]   # 当前会话身份（session id）
+  dia in [--unread] [--all] [--legacy] [--json]   # 会话收件箱（正文内联）
+  dia out --to <session_id> --subject S (--body B|--body-file F) [--kind K] [--reply-to ID]
+  dia ack <id> | dia reply <id> --body B | dia close <id> --reason R | dia show <id>
+  dia msg send|show|inbox|ack|delivered|deliver [--wait]|reply|needs-info|status|stuck|thread|escalate|agents|migrate
+  dia agents list|register|unregister|discover
+  dia msg deliver <agent> <id> [--transport tmux|acp]
+  dia task add|list|status|done
   dia team run <id> --mock | --acp|--dsh --workspace DIR
   dia team gate|accept|reject|next
   dia team accept <id> [--note ...] [--pr N [--repo R] [--merge]]   # --pr：先验 CI，绿才接受/合并
@@ -546,6 +556,9 @@ function spawnDetachedDelivery(args: string[]): { pid?: number; log: string } {
 async function msgCli(argv: string[]): Promise<number> {
   const [sub, ...args] = argv;
   const asJson = has(args, "--json");
+  // v2 兼容入口：显式 --to / --session 时走会话级 collab；旧 agent 名路径保持原样。
+  if (sub === "send" && flag(args, "--to")) return collabCli(["out", ...args]);
+  if (sub === "inbox" && flag(args, "--session")) return collabCli(["in", ...args]);
   const refs: Record<string, string> = {};
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--ref" && args[i + 1]) { const [k, ...v] = args[i + 1].split("="); if (k && v.length) refs[k] = v.join("="); i++; }
@@ -676,14 +689,164 @@ async function msgCli(argv: string[]): Promise<number> {
       out(asJson ? JSON.stringify(rows) : rows.join("\n") || "(none)");
       return 0;
     }
+    if (sub === "migrate") {
+      const r = collab.migrateLegacy({ dryRun: has(args, "--dry-run") });
+      if (asJson) out(JSON.stringify(r, null, 1));
+      else out(`${has(args, "--dry-run") ? "dry-run" : "migrated"}: total=${r.total} migrated=${r.migrated} skipped=${r.skipped}`);
+      return 0;
+    }
   } catch (e: any) {
     const m = e?.message || String(e);
     err(m);
     if (m.startsWith("E_NOT_FOUND")) return 21;
-    if (m.startsWith("E_USAGE")) return 2;
+    if (m.startsWith("E_USAGE") || m.startsWith("E_SESSION") || m.startsWith("E_NO_SESSION") || m.startsWith("E_LEGACY") || m.startsWith("E_KIND")) return 2;
     return 31;
   }
   err("usage: dia msg send|inbox|ack|delivered|reply|thread|escalate|agents");
+  return 2;
+}
+
+async function collabCli(argv: string[]): Promise<number> {
+  const [sub, ...args] = argv;
+  const asJson = has(args, "--json");
+  const session = flag(args, "--session");
+  const refs: Record<string, string> = {};
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--ref" && args[i + 1]) {
+      const [k, ...v] = args[i + 1].split("=");
+      if (k && v.length) refs[k] = v.join("=");
+      i++;
+    }
+  }
+  const view = (m: collab.MessageV2) => ({ ...m, body: collab.bodyOf(m) });
+  const print = (m: collab.MessageV2) => {
+    out(`${m.id}\t[${m.state}]\t${m.subject}`);
+    out(`  from: ${m.from.display_name || m.from.session_id} (${m.from.session_id})`);
+    out(`  to:   ${m.to.display_name || m.to.session_id} (${m.to.session_id})`);
+    out(`  kind: ${m.kind}${m.requires_reply ? "  需回复" : ""}${m.deadline ? `  deadline=${m.deadline}` : ""}  thread=${m.thread_id}#${m.seq}`);
+    if (m.refs && Object.keys(m.refs).length) out(`  refs: ${Object.entries(m.refs).map(([k, v]) => `${k}=${v}`).join(" ")}`);
+    const body = collab.bodyOf(m);
+    if (body) {
+      const max = 4000;
+      const shown = body.length > max ? `${body.slice(0, max)}\n  …（正文 ${body.length} 字符，完整看 dia show ${m.id}）` : body;
+      out(shown.split("\n").map((l) => `  ${l}`).join("\n"));
+    }
+    if (m.body_missing) out("  ⚠️ 旧消息正文缺失（迁移时源文件已不存在）");
+    out(`  处理: dia ack ${m.id} | dia reply ${m.id} --body "..." | dia close ${m.id} --reason done`);
+    out("");
+  };
+  try {
+    if (sub === "status") {
+      const s = defaultMsg.status(flag(args, "--persona"));
+      if (asJson) out(JSON.stringify(s, null, 1));
+      else {
+        out(`enabled: ${s.enabled}${s.reason ? `  (${s.reason})` : ""}`);
+        out(`kit: ${s.kit_installed || "(not installed)"}  source=${s.kit_dir}`);
+        out(`config: ${s.config_file}`);
+        if (s.disabled_personas.length) out(`disabled personas: ${s.disabled_personas.join(", ")}`);
+      }
+      return 0;
+    }
+    if (sub === "enable" || sub === "disable") {
+      const personaId = flag(args, "--persona");
+      const c = defaultMsg.setEnabled(sub === "enable", personaId);
+      let removed: string[] = [];
+      if (sub === "disable") {
+        try { removed = kit.remove("dia-msg").removed; }
+        catch (e: any) {
+          if (!String(e?.message || e).startsWith("E_NOT_INSTALLED")) err(`warn: 移除 dia-msg kit 失败：${e?.message || e}`);
+        }
+      }
+      const kitInfo = sub === "enable" ? defaultMsg.ensure(personaId, { force: true }) : null;
+      out(asJson ? JSON.stringify({ ...c, removed, kit: kitInfo }, null, 1)
+        : `${sub}d: enabled=${c.enabled}${c.disabled_personas.length ? ` disabled_personas=${c.disabled_personas.join(",")}` : ""}` +
+          (removed.length ? `  removed=${removed.length}` : "") +
+          (kitInfo ? (kitInfo.ok ? `  kit=${kitInfo.kit}` : `  ⚠ ${kitInfo.reason}`) : ""));
+      return 0;
+    }
+    if (sub === "whoami") {
+      const rec = collab.whoami({ session, name: flag(args, "--name") });
+      out(asJson ? JSON.stringify(rec, null, 1) : `${rec.session_id}\t${rec.display_name}\t${rec.host}\t${rec.cwd}`);
+      return 0;
+    }
+    if (sub === "in") {
+      const sid = collab.resolveSessionId(session);
+      collab.whoami({ session: sid });
+      if (has(args, "--legacy")) {
+        const rows = collab.legacyInbox({ limit: Number(flag(args, "--limit") || 0) });
+        out(asJson ? JSON.stringify(rows.map(view), null, 1) : rows.map((m) => `${m.id}\t${m.state}\t${m.subject}`).join("\n") || "(empty)");
+        if (!asJson) rows.forEach(print);
+        return 0;
+      }
+      const opts = { unread: has(args, "--unread"), all: has(args, "--all"), limit: Number(flag(args, "--limit") || 0) };
+      const before = collab.inbox(sid, opts);
+      if (!has(args, "--no-mark")) for (const m of before) if (m.state === "pending") collab.markDelivered(sid, m.id);
+      const rows = has(args, "--no-mark") ? before : collab.inbox(sid, opts);
+      if (asJson) out(JSON.stringify(rows.map(view), null, 1));
+      else if (!rows.length) out("(empty)");
+      else rows.forEach(print);
+      return 0;
+    }
+    if (sub === "out") {
+      const to = flag(args, "--to");
+      if (!to) { err("usage: dia out --to <session_id> --subject S (--body B|--body-file F) [--kind K]"); return 2; }
+      const m = collab.send({
+        from: session,
+        to,
+        kind: (flag(args, "--kind") || "notify") as collab.Kind,
+        subject: flag(args, "--subject") || "",
+        body: flag(args, "--body"),
+        bodyFile: flag(args, "--body-file"),
+        refs: Object.keys(refs).length ? refs : undefined,
+        requiresReply: has(args, "--requires-reply") ? true : undefined,
+        deadline: flag(args, "--deadline"),
+        threadId: flag(args, "--thread"),
+        replyTo: flag(args, "--reply-to"),
+        idempotencyKey: flag(args, "--idempotency-key"),
+        hops: flag(args, "--hops") ? Number(flag(args, "--hops")) : undefined,
+      });
+      out(asJson ? JSON.stringify(m, null, 1) : `${m.id}\t${m.thread_id}#${m.seq}\t${m.from.session_id} → ${m.to.session_id}\t${m.kind}\t${m.subject}`);
+      return 0;
+    }
+    if (sub === "ack") {
+      const id = positional(args)[0];
+      if (!id) { err("usage: dia ack <id> [--session S]"); return 2; }
+      const m = collab.ack(collab.resolveSessionId(session), id);
+      out(asJson ? JSON.stringify(m) : `${m.id}\t${m.state}`);
+      return 0;
+    }
+    if (sub === "reply") {
+      const id = positional(args)[0];
+      const body = flag(args, "--body") ?? (flag(args, "--body-file") ? readFileSync(flag(args, "--body-file")!, "utf8") : undefined);
+      if (!id || body === undefined) { err("usage: dia reply <id> --body B|--body-file F [--session S]"); return 2; }
+      const r = collab.reply(collab.resolveSessionId(session), id, body, Object.keys(refs).length ? refs : undefined);
+      out(asJson ? JSON.stringify(r) : `${r.reply.id}\t${r.reply.thread_id}#${r.reply.seq}\t${r.reply.from.session_id} → ${r.reply.to.session_id}`);
+      return 0;
+    }
+    if (sub === "close") {
+      const id = positional(args)[0];
+      const reason = flag(args, "--reason");
+      if (!id || !reason) { err("usage: dia close <id> --reason done|dropped|duplicate|escalated|no-follow-on [--session S]"); return 2; }
+      const m = collab.close(collab.resolveSessionId(session), id, reason);
+      out(asJson ? JSON.stringify(m) : `${m.id}\t${m.state}\t${m.closure_reason}`);
+      return 0;
+    }
+    if (sub === "show") {
+      const id = positional(args)[0];
+      if (!id) { err("usage: dia show <id> [--json]"); return 2; }
+      const m = collab.show(id);
+      if (asJson) out(JSON.stringify(view(m), null, 1));
+      else print(m);
+      return 0;
+    }
+  } catch (e: any) {
+    const m = e?.message || String(e);
+    err(m);
+    if (m.startsWith("E_NOT_FOUND")) return 21;
+    if (m.startsWith("E_USAGE") || m.startsWith("E_SESSION") || m.startsWith("E_NO_SESSION") || m.startsWith("E_LEGACY") || m.startsWith("E_KIND")) return 2;
+    return 31;
+  }
+  err("usage: dia collab status|enable|disable [--persona ID] | dia whoami | dia in [--unread] [--legacy] | dia out --to S … | dia ack|reply|close|show <id>");
   return 2;
 }
 
@@ -757,7 +920,8 @@ async function personaCli(argv: string[]): Promise<number> {
     try {
       const r = persona.install(from, { ref: flag(args, "--ref"), host: flag(args, "--host"), home: flag(args, "--home"), dryRun: has(args, "--dry-run"), force: has(args, "--force") });
       out(asJson ? JSON.stringify(r) : `installed ${r.id}@${r.version} -> ${r.rendered.join(", ") || "(dry-run)"}` +
-        (r.overwrites?.length ? `\n  ⚠ 覆盖 ${r.overwrites.length} 个已存在产物（已备份）：${r.overwrites.join(", ")}` : ""));
+        (r.overwrites?.length ? `\n  ⚠ 覆盖 ${r.overwrites.length} 个已存在产物（已备份）：${r.overwrites.join(", ")}` : "") +
+        (r.msgKit && !r.msgKit.ok ? `\n  ⚠ dia-msg 未启用：${r.msgKit.reason}` : ""));
       return 0;
     } catch (e: any) {
       err(e?.message || String(e));
@@ -892,10 +1056,10 @@ async function personaCli(argv: string[]): Promise<number> {
   }
   if (sub === "create") {
     const id = positional(args)[0];
-    if (!id) { err("usage: dia persona create <id> --dir DIR [--host opencode|dsh|codex] [--dry-run] [--json]"); return 2; }
+    if (!id) { err("usage: dia persona create <id> --dir DIR [--host opencode|dsh|codex] [--no-msg] [--dry-run] [--json]"); return 2; }
     try {
       const host = flag(args, "--host");
-      const r = persona.create(id, { dir: flag(args, "--dir"), hosts: host ? [host] : undefined, dryRun: has(args, "--dry-run") });
+      const r = persona.create(id, { dir: flag(args, "--dir"), hosts: host ? [host] : undefined, dryRun: has(args, "--dry-run"), msg: !has(args, "--no-msg") });
       out(asJson ? JSON.stringify(r) : `${r.dryRun ? "[dry-run] " : ""}created ${r.id} -> ${r.dir}\n  ${r.files.join("\n  ")}`);
       return 0;
     } catch (e: any) {
@@ -914,7 +1078,8 @@ async function personaCli(argv: string[]): Promise<number> {
       const r = persona.render(id, { host: flag(args, "--host"), home: flag(args, "--home"), check: has(args, "--check") });
       if (asJson) out(JSON.stringify(r, null, 1));
       else if (r.check) out(r.drift.length ? `drift ${r.drift.length}:\n  ${r.drift.map((d: any) => `${d.action}: ${d.path}`).join("\n  ")}` : "ok（无 drift）");
-      else out(`rendered ${r.id}@${r.version}${r.drift.length ? `（修复 ${r.drift.length} 处，备份 ${r.backups.length}）` : "（无变化）"}`);
+      else out(`rendered ${r.id}@${r.version}${r.drift.length ? `（修复 ${r.drift.length} 处，备份 ${r.backups.length}）` : "（无变化）"}` +
+        (r.msgKit && !r.msgKit.ok ? `\n  ⚠ dia-msg 未启用：${r.msgKit.reason}` : ""));
       return r.check && r.drift.length ? 1 : 0;
     } catch (e: any) {
       const m = e?.message || String(e);
@@ -1292,6 +1457,8 @@ export async function main(rawArgv: string[]): Promise<number> {
   }
   if (cmd === "task") return taskCli(argv.slice(1));
   if (cmd === "msg") return msgCli(argv.slice(1));
+  if (cmd === "collab") return collabCli(argv.slice(1));
+  if (["whoami", "in", "out", "ack", "reply", "close", "show"].includes(cmd)) return collabCli(argv);
   if (cmd === "agents") return agentsCli(argv.slice(1));
   if (cmd === "team") return teamCli(argv.slice(1));
   if (cmd === "job") return runJob(argv.slice(1));

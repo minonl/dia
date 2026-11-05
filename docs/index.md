@@ -22,6 +22,7 @@ Agent 入口：[`llms.txt`](https://github.com/minonl/dia/blob/main/llms.txt)（
 | [模型行为调控（客户端侧）](model-behavior.md) | 边界（用户定）：只使用各平台提供的通用模型；不做本地构建/微调；不依赖多数模型不支持的推理与输入输出控制参数； |
 | [dia monorepo：框架模块的归属](monorepo.md) | 结论：dia-job 回 dia monorepo，作为 packages/job；kb 作为 packages/kb。 |
 | [dia msg M0：送达与可读（设计 v0.1）](msg-collab-m0-design.md) | 一句话：任意两个活会话互发消息，收件方无需用户手敲命令即可读到；正文持久、有 ack/reply/close。 |
+| [dia msg M0 使用说明（送达与可读）](msg-collab-m0.md) | 一句话：任意两个活着的 dia 会话可以互发消息；收件方开工就能看到未读，正文不依赖临时文件。 |
 | [dia / yan / dabo 现状总览](overview.md) | 2026-11-03 实测。本条是三方合起来的「现在长什么样」；docs/status.md 管 dia 的阶段与证据， |
 | [Patch：对已安装 persona / kit 的本地补丁](patching.md) | 参考 npm/patch-package，但只作用于本地安装副本，不改上游。 |
 | [Persona / Kit 安装：用 dia 从 git 地址装](persona-install.md) | 命名已定：persona = 可被选中的 agent 定义，kit = 知识/技能/工具内容，profile = 宿主运行环境（dsh）。 |

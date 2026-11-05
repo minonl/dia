@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "kind": "kit",
+  "id": "dia-msg",
+  "version": "0.1.0",
+  "root": ".",
+  "skills": [
+    {
+      "from": "skills/dia-msg",
+      "name": "dia-msg",
+      "mode": "link",
+      "to": "~/.config/opencode/skill/dia-msg"
+    },
+    {
+      "from": "skills/dia-msg",
+      "name": "dia-msg",
+      "mode": "link",
+      "to": "~/.agents/skills/dia-msg"
+    },
+    {
+      "from": "skills/dia-msg",
+      "name": "dia-msg",
+      "mode": "link",
+      "to": "~/.dsh/skills/dia-msg"
+    }
+  ],
+  "dirs": [
+    "~/.dia/collab"
+  ],
+  "knowledge": [
+    "."
+  ],
+  "requires": {
+    "dia": ">=0.0.2"
+  }
+}

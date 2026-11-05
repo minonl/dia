@@ -12,6 +12,7 @@
     "packages/wt",
     "packages/job",
     "docs",
+    "kits",
     "README.md"
   ],
   "engines": {

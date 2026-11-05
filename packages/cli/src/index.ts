@@ -17,11 +17,11 @@ import * as doctor from "../../../src/doctor.ts";
 import * as envx from "../../../src/env.ts";
 import * as bw from "../../../src/bw.ts";
 import * as deps from "../../../src/deps.ts";
-import { spawn, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { mkdirSync, openSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve as resolvePath, sep as pathSep } from "node:path";
 import * as task from "../../../src/task.ts";
@@ -32,6 +32,18 @@ import { runJob } from "../../../src/job.ts";
 
 function out(s: string) { process.stdout.write(s + "\n"); }
 function err(s: string) { process.stderr.write(s + "\n"); }
+
+/** 版本号以 package.json 为准；dev（src）与 npm/install（dist）两种层级都兼容。 */
+function cliVersion(): string {
+  const candidates = [
+    new URL("../../../package.json", import.meta.url),
+    new URL("../package.json", import.meta.url),
+  ];
+  for (const u of candidates) {
+    try { return String(JSON.parse(readFileSync(u, "utf8")).version || "0.0.0"); } catch { /* next */ }
+  }
+  return "0.0.0";
+}
 
 function flag(args: string[], name: string): string | undefined {
   const i = args.indexOf(name);
@@ -165,7 +177,8 @@ usage:
   dia team accept <id> [--note ...] [--pr N [--repo R] [--merge]]   # --pr：先验 CI，绿才接受/合并
   dia job <list|status|install|...>   # 调度适配器
   dia price list|--json
-  dia version`);
+  dia version
+  dia update [--check]                  # 查/装 npm 最新版`);
 }
 
 async function kb(argv: string[]): Promise<number> {
@@ -984,7 +997,35 @@ export async function main(rawArgv: string[]): Promise<number> {
   if (peq) { process.env.DIA_PERSONA = peq.slice("--persona=".length); argv.splice(argv.indexOf(peq), 1); }
   const [cmd] = argv;
   if (!cmd || cmd === "-h" || cmd === "--help") { help(); return 0; }
-  if (cmd === "version" || cmd === "--version") { out("dia 0.0.1"); return 0; }
+  if (cmd === "version" || cmd === "--version") { out(`dia ${cliVersion()}`); return 0; }
+  if (cmd === "update") {
+    const check = has(argv, "--check");
+    const cur = cliVersion();
+    let latest = "", next = "";
+    try {
+      const raw = execFileSync("npm", ["view", "@minonl/dia", "dist-tags", "--json"], { encoding: "utf8", timeout: 60_000, stdio: ["ignore", "pipe", "ignore"] });
+      const parsed = JSON.parse(raw || "{}");
+      // npm view --json 对 dist-tags 返回数组（[{"latest":...}]），对象形态也兼容
+      const tags = Array.isArray(parsed) ? (parsed[0] || {}) : parsed;
+      latest = String(tags.latest || ""); next = String(tags.next || "");
+    } catch (e: any) {
+      err(`E_UPDATE: 查不到 registry 版本（${String(e?.message || e).split("\n")[0]}）`);
+      return 1;
+    }
+    const cmp = (a: string, b: string) => {
+      const pa = a.split(/[.-]/).slice(0, 3).map(Number), pb = b.split(/[.-]/).slice(0, 3).map(Number);
+      for (let i = 0; i < 3; i++) if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) - (pb[i] || 0);
+      return 0;
+    };
+    const ahead = latest && cmp(cur, latest) > 0;
+    out(`当前 ${cur}｜latest ${latest || "-"}｜next ${next || "-"}${ahead ? "（当前领先 latest）" : ""}`);
+    if (check) return latest && !ahead && latest !== cur ? 1 : 0;
+    if (latest && (latest === cur || ahead)) { out(ahead ? "当前版本领先 latest（预发布）" : "已是最新"); return 0; }
+    const r = spawnSync("npm", ["i", "-g", "@minonl/dia@latest"], { stdio: "inherit" });
+    if (r.status !== 0) { err("E_UPDATE: npm 安装失败（可能需要 sudo 或调整 npm prefix）"); return r.status || 1; }
+    out(`已更新到 ${latest}（重新打开终端/会话生效）`);
+    return 0;
+  }
   if (cmd === "kb") {
     try { return await kb(argv.slice(1)); }
     catch (e: any) {

@@ -22,6 +22,7 @@ run() { if [ "$DRY" = 1 ]; then printf '[dry-run] %s\n' "$*"; else "$@"; fi; }
 run mkdir -p "$DIA_HOME/bin" "$DIA_HOME/dist" "$DIA_HOME/packages/job" "$DIA_HOME/packages/wt" "$DIA_HOME/registry" "$DIA_BIN_DIR"
 run cp "$SRC/bin/dia.js" "$DIA_HOME/bin/dia.js"
 run cp "$SRC/dist/cli.js" "$DIA_HOME/dist/cli.js"
+run cp "$SRC/package.json" "$DIA_HOME/package.json"
 run cp -R "$SRC/packages/job/bin" "$DIA_HOME/packages/job/"
 run cp -R "$SRC/packages/job/lib" "$DIA_HOME/packages/job/"
 run cp -R "$SRC/packages/wt/bin" "$DIA_HOME/packages/wt/"

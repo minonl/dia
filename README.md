@@ -53,6 +53,7 @@ Python 原型已完成使命（行为对齐后删除）；其基线数字保留�
 ```bash
 npm i -g @minonl/dia
 dia version && dia doctor
+dia update --check     # 查 npm 最新版；dia update 直接升级
 ```
 
 > 包里带 `dist` + `packages/{wt,job}`；persona 仍需单独 `dia persona add …`。

@@ -99,7 +99,7 @@
   "knowledge": ["core/knowledge"],
   "data_root": "~/.yan-agent",
   "commands": [{ "name": "scene", "entry": "scripts/kb-domain.mjs", "env": { "YAN_DATA_ROOT": "~/.yan-agent" } }],
-  "kits": ["../shared/leyan-skills"]
+  "kits": ["../shared/example-skills"]
 }
 ```
 
@@ -176,7 +176,7 @@ flowchart TD
 ## 5. 边界（明确不做）
 
 1. **不执行安装脚本**：kit 里写 `install.sh` 也不跑（与 persona 同）。
-2. **不装第三方包**：`npx skills add` 出来的 leyan-skills 等**不由 kit 管**；kit 只声明 `requires.npx` 并在缺失时 `W_` 告警。
+2. **不装第三方包**：`npx skills add` 出来的 example-skills 等**不由 kit 管**；kit 只声明 `requires.npx` 并在缺失时 `W_` 告警。
 3. **不管卸载服务**：launchd/cron 任务归 `dia job`，kit 不创建任务。
 4. **不写默认 agent**：`default_agent` 只允许通过 `config` 显式声明（P2），且必须可回滚；kit 不猜。
 5. **不碰用户手改**：产物哈希不匹配一律 skip，不覆盖、不删除。
@@ -262,7 +262,7 @@ DIA_PERSONA=yan dia kb query "MR 合并"    # 会议/脚本里设一次
 | 抽取项 | 处理 |
 |---|---|
 | `YAN_DATA_ROOT` / `tasks/scopes` | 参数化为 `DIA_WT_DATA_ROOT`（persona 注入 `~/.yan-agent`） |
-| `~/repos/leyan` 默认 | `DIA_WT_REPOS_ROOT`，缺失时不猜、报错 |
+| `~/repos/example` 默认 | `DIA_WT_REPOS_ROOT`，缺失时不猜、报错 |
 | `YAN_SESSION_ID` | `DIA_SESSION` |
 | 直推 vs MR（`my_namespaces`/`direct`/`mr`） | **留 yan 域**，经 §6.3 委派（`dia wt route` → yan 扩展） |
 | `route_config_json` 里的 python3 heredoc | 换 Node JSON（`packages/job` 同款，dia 禁止 python） |

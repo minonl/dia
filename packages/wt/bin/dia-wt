@@ -118,7 +118,7 @@ dia_wt_data_root() {
 
 # ── 授权推导的**输入**：产出 scope.json（设计 §4.5 D0–D6；消费方 = dsh 引擎 / P3 兜底插件）──
 #   为什么在这里产出：迭代入口天然知道"本次任务仓库是哪个"，而权限层不知道（这是越权写的根因之一）。
-#   ⚠️ 关键判定：**是否 git 仓库** —— 非 git 仓库（如 ~/repos/leyan 根）**不派生** worktree 同级目录，
+#   ⚠️ 关键判定：**是否 git 仓库** —— 非 git 仓库（如 ~/repos/example 根）**不派生** worktree 同级目录，
 #      否则会把兄弟目录（repos/local 等）误算进作用域（用户 2026-10-15 明确）。
 write_scope() {   # write_scope <repo-or-worktree-path> [feature] [session]
   local target="$1" feature="${2:-}" session="${3:-}"
@@ -436,7 +436,7 @@ cmd_list() {
 #   · 删前逐个打印「分支名 + 最后提交日期 + 标题」，可回溯。
 #
 # 用法：prune-merged [<repo>] [--all] [--apply] [--base <ref>] [--protect a,b] [--quiet]
-#   --all  扫已知仓根（数据根 repos/、$DIA_WT_REPOS_ROOT 默认 ~/repos/leyan）下的主 checkout
+#   --all  扫已知仓根（数据根 repos/、$DIA_WT_REPOS_ROOT 默认 ~/repos/example）下的主 checkout
 # 退出码：0 = 无待清理 / 已全部清理；1 = 仍有残留（dry-run 发现待清理时也是 1）
 # ═══════════════════════════════════════════════════════════════════════════
 cmd_prune_merged() {
@@ -607,7 +607,7 @@ prune_one() {
 #      判据不区分 → 一旦启用 GVS 全仓误报；判据不查 → 违规静默破坏。
 #
 # 用法：check [<repo>...] [--all] [--deep] [--quiet]
-#   --all    扫已知仓根（`$YAN_DATA_ROOT/repos`、`$DIA_WT_REPOS_ROOT`（默认 `~/repos/leyan`））下的主 checkout
+#   --all    扫已知仓根（`$YAN_DATA_ROOT/repos`、`$DIA_WT_REPOS_ROOT`（默认 `~/repos/example`））下的主 checkout
 #            （跳过 `*-worktree--*`：它们的 worktree 由主仓 `worktree list` 覆盖）+ 仓根杂散 node_modules 检测
 #   --deep   递归扫 node_modules 全树（默认只扫顶层；大仓全树需数秒）
 #   --quiet  只输出有问题的 checkout
@@ -960,7 +960,7 @@ cmd_clean() {
 # 配置读取（**数据根为准**，可与个人仓基线合并；三个名单键取**并集**：本地只能增、不能删）：
 #   $YAN_ROUTE_CONFIG                           显式指定（最高优先，一般不用）
 #   $YAN_DATA_ROOT/route.json                   本机主入口 —— **可以是软链**，指向个人仓里的版本化文件
-#   $PERSONAL_AGENT_DIR/config/yan-route.json   个人仓基线（跨设备可版本化，默认 ~/repos/leyan/personal-agent）
+#   $PERSONAL_AGENT_DIR/config/yan-route.json   个人仓基线（跨设备可版本化，默认 ~/repos/example/personal-agent）
 #   格式：{ "my_namespaces": ["example-user"], "direct": ["yan-agent"], "mr": [] }
 #   ⚠️ `my_namespaces` 缺失时**绝不瞎猜**（不拿 git author 的 email 前缀自动当命名空间）：
 #      只在输出里给「推测 + 如何确认」，由人核对（glab auth status）后写进配置。

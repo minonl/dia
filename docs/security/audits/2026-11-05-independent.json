@@ -1,0 +1,39 @@
+{
+ "verdict": "blocked",
+ "scope": "2026-11-05 independent audit (tree + history + package + metadata)",
+ "findings": [
+  {
+   "severity": "P1",
+   "area": "tree",
+   "evidence": "experiments/superagent-eval 含内部项目名/私有仓路径/真实 commit SHA/真实缺陷描述",
+   "fix": "已整目录移除"
+  },
+  {
+   "severity": "P1",
+   "area": "history",
+   "evidence": "公开分支 feat/msg-collab-grill 的 HEAD 含真实家目录与内部会话标题",
+   "fix": "未处理：需分支属主清理后删除分支并申请 GitHub GC"
+  },
+  {
+   "severity": "P2",
+   "area": "tree",
+   "evidence": "leyan-skills / ~/repos/leyan / .env.leyan 等内部命名",
+   "fix": "已替换为 example-*"
+  },
+  {
+   "severity": "P2",
+   "area": "tree",
+   "evidence": "h0 样本含真实业务任务名",
+   "fix": "已替换为示例名"
+  },
+  {
+   "severity": "P3",
+   "area": "package",
+   "evidence": "deps.jsonl 含本机绝对路径与 owner 用户名",
+   "fix": "已改为 command:* / maintainer"
+  }
+ ],
+ "history_clean": false,
+ "public_ready": false,
+ "note": "独立审核（子会话执行）结论：凭据维度干净；阻断项为内部标识与业务知识。main 树已修，分支未清，故仍 blocked。"
+}

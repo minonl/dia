@@ -1,5 +1,5 @@
 {
-  "verdict": "pass (self-audit)",
+  "verdict": "superseded",
   "scope": "working tree (pre-public redaction)",
   "findings": [
     {
@@ -40,5 +40,5 @@
   },
   "history_clean": true,
   "public_ready": true,
-  "note": "2026-11-05 更新：历史已 filter-branch 重建并删库重建；当前树扫描 0 命中；npm 已发。独立审核仍未执行（gate §1-8 要求），此项记为 known gap。"
+  "note": "已被 2026-11-05-independent.json 取代：独立审核 blocked（内部标识/业务知识），自签结论无效。"
 }

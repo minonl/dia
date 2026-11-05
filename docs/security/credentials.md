@@ -9,7 +9,7 @@
 
 | 项 | 现状 |
 |---|---|
-| 存储 | `~/.env.leyan`（网关 key）、`~/.env.leyan-tokens`（脚本凭据），600 明文 |
+| 存储 | `~/.env.example`（网关 key）、`~/.env.example-tokens`（脚本凭据），600 明文 |
 | 入库 | Bitwarden（`bw` CLI） |
 | 使用 | `dia env list/check/run`：白名单键 → 子进程环境；不回显、`--redact`、密钥不进 argv |
 | 约束 | 明文文件**不是**机密性边界（同一 OS 用户下的 agent 可读），只是"防误入 repo/日志/备份" |

@@ -35,6 +35,7 @@ Agent 入口：[`llms.txt`](https://github.com/minonl/dia/blob/main/llms.txt)（
 | [团队章程：谁来做 dia（开发团队）](team.md) | 2026-10-28 升级：开发团队执行模式改为全自动循环（计划→实现→验证→对抗→修复），人只在验收阶段介入； |
 | [版本与多会话（persona / kit）](versioning.md) | 问题：dia 要支持升级/本地迭代期间不同会话用不同版本 persona；kit 是否也要会话级版本？ |
 | [dia 长期定位：从"安装器"到 superagent / agent-team 工厂](vision.md) | 2026-11-03，方向性文档。它不是现状——现状看 overview.md 与 status.md； |
+| [worktree 纪律（`dia wt`）](worktree.md) | 目标：把「任何 git 改动走 worktree」从靠人记变成脚本可断言。 |
 
 ## 平台与宿主
 

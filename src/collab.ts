@@ -376,10 +376,12 @@ export function bodyOf(m: MessageV2): string {
 }
 
 function mutate(sessionId: string, id: string, fn: (m: MessageV2) => void): MessageV2 {
-  return withLock(`msg-${sessionId}-${id}`, () => {
-    const hit = findIn(sessionId, id);
+  const sid = normalizeSessionId(sessionId);
+  return withLock(`msg-${sid}-${id}`, () => {
+    const hit = findIn(sid, id);
     if (!hit) throw new Error(`E_NOT_FOUND: ${id}`);
     if (hit.msg.legacy) throw new Error(`E_LEGACY: ${id} 是迁移的旧消息，只读`);
+    if (hit.msg.to.session_id !== sid) throw new Error(`E_RECIPIENT: ${id} 不属于 ${sid}`);
     fn(hit.msg);
     writeAtomic(hit.path, JSON.stringify(hit.msg, null, 1) + "\n");
     return hit.msg;

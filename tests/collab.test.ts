@@ -86,9 +86,11 @@ describe("dia collab M0：会话身份与送达", () => {
     expect(again.state).toBe("closed");
   });
 
-  test("dia msg send 位置参数是 session id 时走 collab", () => {
-    const r = run(["msg", "send", "ses_b", "--from", "ses_a", "--subject", "位置参数", "--body", "ok", "--json"], "ses_a");
+  test("dia msg send 位置参数是 session id 时走 collab，且不采纳 --from 伪造", () => {
+    const r = run(["msg", "send", "ses_b", "--from", "ses_victim", "--subject", "位置参数", "--body", "ok", "--json"], "ses_a");
     expect(r.status).toBe(0);
+    const sent = json(r.stdout);
+    expect(sent.from.session_id).toBe("ses_a");
     const inbox = json(run(["in", "--all", "--json"], "ses_b").stdout);
     expect(inbox.some((x: any) => x.subject === "位置参数")).toBe(true);
   });

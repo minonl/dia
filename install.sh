@@ -41,10 +41,11 @@ if [ -d "$OLD_DATA/personas" ] && [ ! -d "$DATA_ROOT/personas" ]; then
 fi
 
 # 安装物：始终写 DIA_INSTALL_DIR，与数据根解耦
-run mkdir -p "$DIA_INSTALL_DIR/bin" "$DIA_INSTALL_DIR/dist" "$DIA_INSTALL_DIR/packages/job" "$DIA_INSTALL_DIR/packages/wt" "$DIA_INSTALL_DIR/registry" "$DIA_BIN_DIR"
+run mkdir -p "$DIA_INSTALL_DIR/bin" "$DIA_INSTALL_DIR/dist" "$DIA_INSTALL_DIR/packages/job" "$DIA_INSTALL_DIR/packages/wt" "$DIA_INSTALL_DIR/kits" "$DIA_INSTALL_DIR/registry" "$DIA_BIN_DIR"
 run cp "$SRC/bin/dia.js" "$DIA_INSTALL_DIR/bin/dia.js"
 run cp "$SRC/dist/cli.js" "$DIA_INSTALL_DIR/dist/cli.js"
 run cp "$SRC/package.json" "$DIA_INSTALL_DIR/package.json"
+run cp -R "$SRC/kits/dia-msg" "$DIA_INSTALL_DIR/kits/"
 run cp -R "$SRC/packages/job/bin" "$DIA_INSTALL_DIR/packages/job/"
 run cp -R "$SRC/packages/job/lib" "$DIA_INSTALL_DIR/packages/job/"
 run cp -R "$SRC/packages/wt/bin" "$DIA_INSTALL_DIR/packages/wt/"

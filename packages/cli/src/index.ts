@@ -564,8 +564,6 @@ async function msgCli(argv: string[]): Promise<number> {
     const to = toFlag || (looksSession(pos) ? pos : undefined);
     if (to) {
       const rest = toFlag ? [...args] : args.filter((a, i) => !(a === pos && i === args.indexOf(pos)));
-      const from = flag(args, "--from");
-      if (looksSession(from)) rest.push("--session", from!);
       return collabCli(["out", "--to", to, ...rest]);
     }
   }
@@ -710,7 +708,7 @@ async function msgCli(argv: string[]): Promise<number> {
     const m = e?.message || String(e);
     err(m);
     if (m.startsWith("E_NOT_FOUND")) return 21;
-    if (m.startsWith("E_STATE") || m.startsWith("E_HOPS")) return 22;
+    if (m.startsWith("E_STATE") || m.startsWith("E_HOPS") || m.startsWith("E_RECIPIENT")) return 22;
     if (m.startsWith("E_USAGE") || m.startsWith("E_SESSION") || m.startsWith("E_NO_SESSION") || m.startsWith("E_LEGACY") || m.startsWith("E_KIND")) return 2;
     return 31;
   }
@@ -858,7 +856,7 @@ async function collabCli(argv: string[]): Promise<number> {
     const m = e?.message || String(e);
     err(m);
     if (m.startsWith("E_NOT_FOUND")) return 21;
-    if (m.startsWith("E_STATE") || m.startsWith("E_HOPS")) return 22;
+    if (m.startsWith("E_STATE") || m.startsWith("E_HOPS") || m.startsWith("E_RECIPIENT")) return 22;
     if (m.startsWith("E_USAGE") || m.startsWith("E_SESSION") || m.startsWith("E_NO_SESSION") || m.startsWith("E_LEGACY") || m.startsWith("E_KIND")) return 2;
     return 31;
   }

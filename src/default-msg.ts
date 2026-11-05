@@ -91,7 +91,7 @@ function autoInstallAllowed(): boolean {
 /** 装配默认 kit；失败不阻断 persona 安装，返回 reason 供 CLI/doctor 显示。 */
 export function ensure(personaId?: string, opts: { force?: boolean } = {}): { ok: boolean; reason?: string; kit?: string } {
   const gate = isEnabled(personaId);
-  if (!gate.enabled) return { ok: false, reason: gate.reason };
+  if (!gate.enabled && !opts.force) return { ok: false, reason: gate.reason };
   if (!opts.force && !autoInstallAllowed()) return { ok: false, reason: "auto-install-skipped:non-default-root（dia collab enable 可强制安装）" };
   const source = builtinKitDir();
   if (!existsSync(join(source, "dia.json"))) return { ok: false, reason: `missing-kit:${source}` };

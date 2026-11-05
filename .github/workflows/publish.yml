@@ -64,6 +64,16 @@ jobs:
             "https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/@minonl%2fdia")
           echo "exchange status: $code"
           if [ "$code" != "200" ]; then echo "--- body ---"; cat /tmp/exchange.json; fi
+      - name: 包内容断言（deps/platforms 依赖 docs 回退）
+        run: |
+          npm pack --dry-run --json > /tmp/pack.json
+          node -e '
+            const files = require("/tmp/pack.json")[0].files.map((f) => f.path);
+            const need = ["docs/deps.jsonl", "docs/platforms/registry.json"];
+            const missing = need.filter((n) => !files.includes(n));
+            if (missing.length) { console.error("tarball missing:", missing.join(", ")); process.exit(1); }
+            console.log("tarball ok:", files.length, "files");
+          '
       - name: 版本 → dist-tag（预发布走 next，正式走 latest）
         id: tag
         run: |

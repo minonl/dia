@@ -939,7 +939,7 @@ cmd_clean() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
-# route —— 【开工前必查】这次改动该走 MR 还是直推 main？（R1.7）
+# route —— 【开工前必查】合并通道是哪一种？（R1.7：所有仓都走 MR，仅合并通道不同）
 #
 # 为什么需要（2026-10-12 复发教训）：R20 管「别污染 main checkout」（隔离）；R1.7 管「要不要评审」——
 #   **两件事独立**。agent 做对了 A（隔离），却错误推导出 B（要 MR）：在内部仓走 MR 全套打扰同事；
@@ -948,13 +948,13 @@ cmd_clean() {
 # 为什么改成**配置驱动**（2026-10-16 用户指正）：
 #   原先把仓名硬编码在本脚本里（`yan-agent|personal-agent` 内部仓、`example-repo|*-qa|…` 业务仓）⇒
 #   ① 「哪些仓是我的/业务仓」是**环境事实**，换个人就全错；② 它含「**我是谁**」成分 ——
-#      `fed/yan-agent` 对本人是自持（直推）、对同事是别人的仓（该 MR）⇒ **同一仓在不同人机器上结论不同**；
+#      仓归属因人而异（本人的自持仓 / 别人的仓）⇒ **同一仓在不同人机器上合并通道不同**；
 #   ③ 每加一个仓都要改共享配方库 ⇒ 漂移源。⇒ **规则留在本脚本，数据只落本地**。
 #
 # 判定顺序（**每步都记录来源**、输出可审计；先否决后放行）：
 #   ① 本地配置 `mr` 名单命中            → 走 MR（显式否决，优先级最高）
-#   ② 本地配置 `direct` 名单命中        → 直推
-#   ③ remote 命名空间 ∈ `my_namespaces` → 直推（"这是我的仓" = 可推导事实，不靠猜仓名）
+#   ② 本地配置 `direct` 名单命中        → 个人仓：MR + owner 自合
+#   ③ remote 命名空间 ∈ `my_namespaces` → 个人仓：MR + owner 自合（"这是我的仓" = 可推导事实）
 #   ④ 其余 / 信息不足                   → **走 MR**（安全侧兜底）
 #
 # 配置读取（**数据根为准**，可与个人仓基线合并；三个名单键取**并集**：本地只能增、不能删）：
@@ -966,7 +966,7 @@ cmd_clean() {
 #      只在输出里给「推测 + 如何确认」，由人核对（glab auth status）后写进配置。
 #
 # 用法：dia wt route <repo-path>
-# 退出码：0 = 直推；1 = 走 MR（含默认兜底）；2 = 信息不足（按 MR 处理，需补配置/remote）
+# 退出码：0 = MR + owner 自合（个人仓）；1 = MR + LGTM + bot（团队仓）；2 = 信息不足（按团队仓处理）
 # ═══════════════════════════════════════════════════════════════════════════
 
 # ── remote 命名空间：`<host>/<ns>/<repo>` 里的 `<ns>`（无 remote → 空）────────
@@ -1065,46 +1065,45 @@ case "$name" in *-worktree--*) name="${name%%-worktree--*}"; repo="$(dirname "$r
     verdict=mr; why="命名空间「${ns}」不在 my_namespaces（安全侧默认 MR）"
   fi
 
-  echo "── 仓库路由判定（R1.7 · 配置驱动，不再硬编码仓名）──"
+  echo "── 仓库路由判定（R1.7 · 配置驱动：所有仓走 MR，仅合并通道不同）──"
   echo "  仓库      : $name${ns:+（命名空间 ${ns}）}"
   printf '  判定来源  : %s\n' "$(printf '%s' "$cfg" | node -e 'let s="";process.stdin.on("data",d=>{s+=d}).on("end",()=>{const d=JSON.parse(s);const srcs=(d.sources&&d.sources.length)?d.sources:["（无配置文件）"];console.log(srcs.join("、")+(d.errors.length?"  ⚠️ "+d.errors.join("；"):""))})')"
 
   case "$verdict" in
-    direct)
+    direct|personal)
       cat <<EOS
-  结论    : ✅ **直推 main**（不建 MR）｜依据：$why
+  结论    : ✅ **MR + owner 自合**（个人仓）｜依据：$why
   正确姿势:
-      git worktree add <平级路径> -b <branch> origin/main
-      # ... 开发 + 自测 ...
-      git push origin HEAD:main            # 快进推 main，不建 MR
-  ⚠️ 「worktree 隔离」≠「要评审」——两者独立：
-     · worktree = 别污染 main checkout（R20）
-     · 免 MR    = 我自持的仓、自己主导，review 为辅（R1.7）
-  ⚠️ yan-agent main 拒绝 force push（pre-receive hook）→ 先 rebase 成快进
+      git worktree add <平级路径> -b feat/<feature> origin/main
+      # ... 开发 + 自测 + rebase（落后必须为 0）...
+      git push origin HEAD:feat/<feature>
+      glab mr create ... --source-branch feat/<feature> --target-branch main --yes
+      # pipeline 绿 → owner 直接合（无需 LGTM、不发 @bot mergeme）
+      glab mr merge <iid> --yes --remove-source-branch
+  提示    : 一律走 MR（2026-11-05 起没有「直推 main」）；owner 自合省的是 LGTM，不是留痕
 EOS
       exit 0 ;;
     mr)
       cat <<EOS
-  结论    : ✅ **走 MR**（+ LGTM + @bot mergeme）｜依据：$why
+  结论    : ✅ **MR + LGTM + @bot mergeme**（组织/团队仓）｜依据：$why
   正确姿势:
-      git worktree add <平级路径> -b <分支前缀>/<feat> origin/main
+      git worktree add <平级路径> -b feat/<feature> origin/main
       # ... 开发 + 自测 + rebase（落后必须为 0）...
-      glab mr create ... && glab mr update <iid> --squash-before-merge
-      # 等 LGTM → @bot mergeme
-  提示    : example-repo 的 docs/** 纯文档改动，用户说「直推」时可直接特权合并（R1.7 常态授权）
+      glab mr create ... --source-branch feat/<feature> --target-branch main --yes
+      # 等 LGTM → @bot mergeme（yan-mr wait 可一键盯完）
 EOS
       exit 1 ;;
     *)
       cat <<EOS
-  结论    : ⚠️ **信息不足，按 MR 处理**（安全侧）｜依据：$why
+  结论    : ⚠️ **信息不足，按「MR + LGTM + bot」处理**（安全侧）｜依据：$why
   补齐判定（任选）:
       1) 让仓有 origin remote ⇒ 命名空间可推导；
       2) 写配置（数据根为主入口，可与个人仓基线合并；名单取并集）：
          \$YAN_DATA_ROOT/route.json                    ← 本机；**可以是软链**（指向个人仓版本化文件）
          \$PERSONAL_AGENT_DIR/config/yan-route.json    ← 个人仓基线（跨设备）
          { "my_namespaces": ["<你的 gitlab 账号>"], "direct": ["<我自持的仓名>"], "mr": [] }
+         （`direct` 现表示「个人仓 → owner 自合」；路径已不再直推）
 EOS
-      # 未配置命名空间时给「推测 + 如何确认」，但**绝不自动采用**（不瞎猜"我是谁"）
       if [ -n "$ns" ] && [ -z "$_cfg_ns" ]; then
         local guess; guess="$(git -C "$repo" config --get user.email 2>/dev/null | sed 's/@.*//' || true)"
         printf '  💡 推测（**未采用**）：origin 命名空间 =「%s」；%s\n' "$ns" "${guess:+你的 git user.email 前缀 =「${guess}」}"
@@ -1522,7 +1521,7 @@ dia wt —— worktree 目录形式选型 + 创建（唯一实现）
   dia wt doctor [<repo>...] [--all] [--json] [--fix]
                                                # 巡检：配置/钩子/探针/主 checkout/worktree 卫生；--fix 重装守卫钩子
   dia wt gate   <repo> <feature>               # 提交 MR 前：check + doctor + 干净 + ahead>0
-  dia wt route  <repo-path>              # ★ 开工前必查：走 MR 还是直推（R1.7，配置驱动）
+  dia wt route  <repo-path>              # ★ 开工前必查：合并通道（owner 自合 / LGTM+bot；一律走 MR）
   dia wt scope  <repo|worktree> [--feature <slug>] [--session <id>]   # ★ 产出作用域声明（设计 §4.5）
   dia wt scope  --show                   # 看与当前目录匹配的作用域声明
   dia wt scope  --list                   # 列出全部作用域文件（按 worktree 分文件）

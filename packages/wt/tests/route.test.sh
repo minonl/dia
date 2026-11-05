@@ -3,7 +3,7 @@
 #
 # 覆盖（**为什么是这些**）：
 #   · 无配置时**绝不放行**：即便命名空间看着像我的，也只能走 MR（不瞎猜"我是谁"）
-#   · 命名空间推导：配置了 my_namespaces 后，我的仓自动直推
+#   · 命名空间推导：配置了 my_namespaces 后，我的仓 → MR + owner 自合（rc 0）
 #   · 显式名单：direct 放行 / mr **否决优先**
 #   · 个人仓基线 + 数据根本地**并集合并**；数据根配置**可以是软链**
 #   · 空列表**不误命中**（`grep -qx ""` 匹配空行是这类脚本的经典假阳性）
@@ -45,13 +45,13 @@ echo "== 2. 无配置 + 命名空间看着像我的 ⇒ **仍 MR**（不瞎猜�
 [ "$(run "$MINE")" = 1 ] && ok "退出码 1（未因命名空间相似而放行）" || { bad "应 1：不能瞎猜"; out; }
 see "不在 my_namespaces" && ok "说明未配置" || { bad "缺说明"; out; }
 
-echo "== 3. 配置 my_namespaces ⇒ 我的仓自动直推 =="
+echo "== 3. 配置 my_namespaces ⇒ 我的仓 = MR + owner 自合 =="
 setcfg "$CFG" '{ "my_namespaces": ["example-user"] }'
 [ "$(run "$MINE")" = 0 ] && ok "退出码 0" || { bad "应 0"; out; }
 see "∈ my_namespaces" && ok "判定来源 = 命名空间" || { bad "来源不对"; out; }
 [ "$(run "$TEAM")" = 1 ] && ok "非我命名空间仍 MR" || { bad "应 1"; out; }
 
-echo "== 4. direct 名单 ⇒ 直推（覆盖默认）=="
+echo "== 4. direct 名单 ⇒ owner 自合（覆盖默认）=="
 setcfg "$CFG" '{ "my_namespaces": ["example-user"], "direct": ["teamrepo"] }'
 [ "$(run "$TEAM")" = 0 ] && ok "退出码 0" || { bad "应 0"; out; }
 see "配置 direct 名单命中" && ok "判定来源 = 配置" || { bad "来源不对"; out; }
@@ -64,9 +64,9 @@ see "显式否决" && ok "给出否决理由" || { bad "缺理由"; out; }
 echo "== 6. 个人仓基线 + 数据根 ⇒ 并集合并（判定来源列出两个文件）=="
 setcfg "$CFG" '{ "direct": ["teamrepo"] }'
 setcfg "$BASE" '{ "my_namespaces": ["example-user"], "direct": ["myrepo"] }'
-[ "$(run "$TEAM")" = 0 ] && ok "本地新增生效（teamrepo 直推）" || { bad "本地配置未生效"; out; }
+[ "$(run "$TEAM")" = 0 ] && ok "本地新增生效（teamrepo = owner 自合）" || { bad "本地配置未生效"; out; }
 see "route.json" && ok "来源含数据根文件" || { bad "缺来源"; out; }
-[ "$(run "$MINE")" = 0 ] && ok "基线条目保留（myrepo 直推）" || { bad "基线未生效"; out; }
+[ "$(run "$MINE")" = 0 ] && ok "基线条目保留（myrepo = owner 自合）" || { bad "基线未生效"; out; }
 see "yan-route.json" && ok "来源含基线文件" || { bad "缺基线来源"; out; }
 [ "$(run "$NOREMOTE")" = 2 ] && ok "无 remote 的仓：信息不足（rc=2）" || { bad "应 2"; out; }
 
@@ -89,16 +89,16 @@ echo "== 10. \$DIA_WT_ROUTE_CONFIG 显式指定 ⇒ 最高优先（忽略其余�
 setcfg "$CFG" '{ "direct": ["myrepo"] }'
 EX="$TD/explicit.json"; setcfg "$EX" '{ "direct": ["teamrepo"] }'
 env DIA_WT_ROUTE_CONFIG="$EX" bash "$WT" route "$TEAM" >"$TD/out.txt" 2>&1; RC=$?
-[ "$RC" = 0 ] && ok "显式配置生效（teamrepo 直推）" || { bad "显式配置未生效（rc=${RC}）"; out; }
+[ "$RC" = 0 ] && ok "显式配置生效（teamrepo = owner 自合）" || { bad "显式配置未生效（rc=${RC}）"; out; }
 env DIA_WT_ROUTE_CONFIG="$EX" bash "$WT" route "$MINE" >"$TD/out.txt" 2>&1; RC=$?
-[ "$RC" = 1 ] && ok "其余配置被忽略（myrepo 未直推）" || { bad "应忽略数据根配置（rc=${RC}）"; out; }
+[ "$RC" = 1 ] && ok "其余配置被忽略（myrepo 走 LGTM+bot）" || { bad "应忽略数据根配置（rc=${RC}）"; out; }
 rm -f "$EX"
 
 echo "== 11. worktree 路径输入 ⇒ 归主仓判定 =="
 setcfg "$CFG" '{ "direct": ["teamrepo"] }'
 git -C "$TEAM" worktree add -q "$TD/teamrepo-worktree--t1" -b t1 >/dev/null 2>&1
 RC="$(run "$TD/teamrepo-worktree--t1")"
-[ "$RC" = 0 ] && ok "worktree 归主仓 → 直推" || { bad "worktree 判定错（rc=${RC}）"; out; }
+[ "$RC" = 0 ] && ok "worktree 归主仓 → owner 自合" || { bad "worktree 判定错（rc=${RC}）"; out; }
 see "teamrepo" && ok "报出主仓名" || { bad "未报主仓名"; out; }
 
 echo "== 12. 非 git 目录 ⇒ 信息不足（rc=2）=="

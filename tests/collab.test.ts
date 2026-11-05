@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeAll } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -71,6 +71,27 @@ describe("dia collab M0：会话身份与送达", () => {
     const inbox = json(run(["in", "--all", "--json"], "ses_b").stdout);
     expect(inbox.filter((x: any) => x.thread_id === "th-fixed").length).toBe(1);
   });
+
+  test("终态不可被 ack/reply 复活", () => {
+    const sent = json(run(["out", "--to", "ses_b", "--subject", "终态", "--body", "x", "--json"], "ses_a").stdout);
+    run(["in", "--no-mark"], "ses_b");
+    run(["close", sent.id, "--reason", "done"], "ses_b");
+    const ack = run(["ack", sent.id], "ses_b");
+    expect(ack.status).toBe(22);
+    expect(ack.stderr).toContain("E_STATE");
+    const rep = run(["reply", sent.id, "--body", "late"], "ses_b");
+    expect(rep.status).toBe(22);
+    expect(rep.stderr).toContain("E_STATE");
+    const again = json(run(["close", sent.id, "--reason", "done", "--json"], "ses_b").stdout);
+    expect(again.state).toBe("closed");
+  });
+
+  test("dia msg send 位置参数是 session id 时走 collab", () => {
+    const r = run(["msg", "send", "ses_b", "--from", "ses_a", "--subject", "位置参数", "--body", "ok", "--json"], "ses_a");
+    expect(r.status).toBe(0);
+    const inbox = json(run(["in", "--all", "--json"], "ses_b").stdout);
+    expect(inbox.some((x: any) => x.subject === "位置参数")).toBe(true);
+  });
 });
 
 describe("dia msg migrate：旧数据只读迁移", () => {
@@ -93,5 +114,18 @@ describe("dia msg migrate：旧数据只读迁移", () => {
     expect(legacy[0].subject).toBe("旧消息");
     expect(legacy[0].body).toBe("旧正文\n");
     expect(legacy[0].body_missing).toBeFalsy();
+  });
+
+  test("迁移拒绝路径穿越 id，不写到 legacy 外", () => {
+    const oldDir = join(root, "msg", "坏数据", "inbox");
+    mkdirSync(oldDir, { recursive: true });
+    writeFileSync(join(oldDir, "evil.json"), JSON.stringify({
+      id: "../../escape", thread_id: "th-evil", seq: 1, from: "a", to: "坏数据",
+      kind: "notify", subject: "evil", body: "x", requires_reply: false,
+      hops: 0, idempotency_key: "th-evil#1", created_at: "2026-11-05T00:00:00Z", state: "pending",
+    }));
+    const r = json(run(["msg", "migrate", "--json"], "ses_b").stdout);
+    expect(r.skipped).toBeGreaterThanOrEqual(1);
+    expect(existsSync(join(root, "escape.json"))).toBe(false);
   });
 });

@@ -13,7 +13,7 @@
 **今天的真实协作通道不是 `dia msg`，是手写 inbox 文件。**
 
 - `~/.dia/msg` 只有 4 条消息，全部 `pending`，0 条 ack/reply；两条“收件人”的名字是**会话标题**
-  （`session-1`、`dws-hub 实时链路修复（…）`），不是稳定地址（实测）。
+  （`session-1`、`session-3`），不是稳定地址（实测）。
 - `dia agents list` 为空、`~/.dia/agents` 不存在；没有任何会话在启动时注册自己（实测）。
 - 今天 15:00 后仍有 12 个会话在跑，全部共用 `~`，其中 ≥4 个会话在动 dia 仓（推断，按标题）。
 - 真正跨会话的约定发生在 `<agent-data-root>/inbox/to-agent-a.md`、`to-node-b.md` 这类手写 Markdown 里：
@@ -78,7 +78,7 @@
   其中“数据根迁移 → 安装脚本拆分”是**真实的前后依赖**：`to-node-b.md` 明确写了“我让路/别碰哪些文件”，
   但这是人手写约定，不是机器可检查的依赖（实测文件内容）。
 - `dia msg` 的 4 条消息正好对应这些协作：一条 handoff（service 名词提案）、一条进度同步、
-  一条时序问题（“我该等还是继续装 review 服务？”）、一条 dws-hub 迁移提醒——**全部停在 pending**（实测）。
+  一条时序问题（“我该等还是继续装 review 服务？”）、一条内部项目迁移提醒——**全部停在 pending**（实测）。
 
 ### 1.2 手写 inbox 已经承担了协作协议
 
@@ -97,7 +97,7 @@
 |---|---|---|
 | G1 | **无会话身份**：`from` 来自 `--from`/env，不从会话推导；注册表为空；收件人是会话标题 | `packages/cli/src/index.ts:556`；`dia agents list` → `(none)`；`~/.dia/agents` 不存在 |
 | G2 | **无可用投递**：tmux 未安装；ACP 只 `session/new`（新开 headless 会话，接不进正在跑的 TUI）；codex 无 ACP | `src/tmux.ts:37-71`；`src/msg-acp.ts:31`；`src/acp.ts:59` |
-| G3 | **正文不可靠**：`--body-file` 只存路径，`show` 只打印“(见文件) 路径”；4/4 条正文都在系统临时目录 | `src/msg.ts:122`；`packages/cli/src/index.ts:599`；4 条 `body_file` 均在 `/private/var/folders/.../T/opencode/` |
+| G3 | **正文不可靠**：`--body-file` 只存路径，`show` 只打印“(见文件) 路径”；4/4 条正文都在系统临时目录 | `src/msg.ts:122`；`packages/cli/src/index.ts:599`；4 条 `body_file` 均在 `系统临时目录` |
 | G4 | **无闭环**：`closed` 状态没有任何生产者，邮箱只增不减；没有 `close`/archive/GC | `src/msg.ts:18,143`；全仓无写入点 |
 | G5 | **并发不安全**：幂等键 `thread_id#seq` 由“现存最大 seq+1”算出且调用方不能指定；状态读-改-写无锁；排序用 `created_at` 字符串 | `src/msg.ts:106-111,160-167,195-198,79,206` |
 | G6 | **无义务模型**：`dia task` 无 owner/依赖/交接/关闭原因；`dia team` 四角色写死且一次性；`dia wt` 无租约/锁 | `src/task.ts:10-19`；`src/team.ts:19`；`packages/wt/bin/dia-wt`（grep lock/owner 无命中） |
@@ -106,7 +106,7 @@
 
 ### 1.4 采用率问题（用户点名的“小问题”）
 
-- yan persona / dia 文档里几乎没有 `dia msg` 的用法（`grep "dia msg" core/ knowledge/` 只在角色设计文档出现，实测）；
+- 某 persona / dia 文档里几乎没有 `dia msg` 的用法（`grep "dia msg" core/ knowledge/` 只在角色设计文档出现，实测）；
   agent 没有“开工先收件、收工发交接”的默认动作，自然用手写文件。
 - `dia team` 有能力（planner/builder/verifier/redteam + gate），但**没有被默认触发**；
   `docs/team.md` 自己也写“现在不是团队，是一个人 + 临时工”（实测）。

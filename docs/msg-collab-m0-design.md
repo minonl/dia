@@ -106,7 +106,7 @@ example-agent 只保留「什么时候用」的 persona 行为规则，不承载
   },
   "to": {
     "session_id": "ses_...",
-    "display_name": "dws-hub ...",
+    "display_name": "session-3",
     "host": "opencode"
   },
   "kind": "question|handoff|notify|reply",

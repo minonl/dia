@@ -274,7 +274,11 @@ function validateKind(raw?: string): Kind {
 
 function readBody(opts: SendOptions): { body?: string; body_ref?: string; body_bytes: number } {
   if (opts.body && opts.bodyFile) throw new Error("E_USAGE: --body 与 --body-file 只能给一个");
-  if (!opts.bodyFile) return { body: opts.body, body_bytes: Buffer.byteLength(opts.body || "") };
+  if (!opts.bodyFile) {
+    const bytes = Buffer.byteLength(opts.body || "");
+    if (bytes > MAX_BODY) throw new Error(`E_USAGE: body 超过 ${MAX_BODY} 字节，请拆分或引用文件`);
+    return { body: opts.body, body_bytes: bytes };
+  }
   if (!existsSync(opts.bodyFile)) throw new Error(`E_USAGE: body file 不存在: ${opts.bodyFile}`);
   const buf = readFileSync(opts.bodyFile);
   if (buf.byteLength > MAX_BODY) throw new Error(`E_USAGE: body 超过 ${MAX_BODY} 字节，请拆分或引用文件`);
@@ -386,6 +390,7 @@ export function markDelivered(sessionId: string, id: string): MessageV2 {
 
 export function ack(sessionId: string, id: string): MessageV2 {
   return mutate(sessionId, id, (m) => {
+    if (m.state === "replied" || m.state === "closed") throw new Error(`E_STATE: ${id} 已是 ${m.state}，不能再 ack`);
     if (m.state === "pending" || m.state === "delivered") m.state = "acked";
     m.acked_at = now();
   });
@@ -397,7 +402,9 @@ export function reply(sessionId: string, id: string, body: string, refs?: Record
   if (!hit) throw new Error(`E_NOT_FOUND: ${id}`);
   const o = hit.msg;
   if (o.legacy) throw new Error(`E_LEGACY: ${id} 是迁移的旧消息，无法回复`);
+  if (o.state === "replied" || o.state === "closed") throw new Error(`E_STATE: ${id} 已是 ${o.state}，不能重复回复`);
   if (o.hops >= 3) throw new Error("E_HOPS: 同一 thread 已往返 3 次，转人工");
+  const maxHops = Math.max(o.hops, ...threadMessages(o.thread_id).map((m) => m.hops));
   const r = send({
     from: idNorm,
     to: o.from.session_id,
@@ -408,7 +415,7 @@ export function reply(sessionId: string, id: string, body: string, refs?: Record
     requiresReply: false,
     threadId: o.thread_id,
     replyTo: o.id,
-    hops: o.hops + 1,
+    hops: maxHops + 1,
   });
   const original = mutate(idNorm, id, (m) => {
     m.state = "replied";
@@ -422,6 +429,10 @@ export function close(sessionId: string, id: string, reason: string): MessageV2 
   const why = reason as CloseReason;
   if (!CLOSE_REASONS.includes(why)) throw new Error(`E_USAGE: --reason 必须是 ${CLOSE_REASONS.join("|")}`);
   return mutate(sessionId, id, (m) => {
+    if (m.state === "closed") {
+      if (m.closure_reason === why) return;
+      throw new Error(`E_STATE: ${id} 已关闭（${m.closure_reason}），不能改成 ${why}`);
+    }
     m.state = "closed";
     m.closure_reason = why;
     m.closed_at = now();
@@ -443,7 +454,9 @@ export function migrateLegacy(opts: { dryRun?: boolean } = {}): { total: number;
       total++;
       const old = readJson<any>(join(dir, f));
       if (!old?.id) { skipped++; continue; }
-      const target = join(legacyRoot(), slug, `${old.id}.json`);
+      const legacyId = String(old.id);
+      if (!SESSION_RE.test(legacyId) || legacyId.includes("..")) { skipped++; continue; }
+      const target = join(legacyRoot(), slug, `${legacyId}.json`);
       if (existsSync(target)) { skipped++; continue; }
       let body = old.body as string | undefined;
       let bodyMissing = false;

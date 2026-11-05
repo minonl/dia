@@ -73,6 +73,17 @@ describe("dia-msg 默认能力包", () => {
     expect(json(run(["collab", "status", "--json"], { DIA_MSG: "0" }).stdout).enabled).toBe(false);
   });
 
+  test("--persona 只影响该 persona，不删共享 kit", () => {
+    const off = json(run(["collab", "disable", "--persona", "p1", "--json"]).stdout);
+    expect(off.enabled).toBe(true);
+    expect(off.disabled_personas).toContain("p1");
+    expect(json(run(["collab", "status", "--persona", "p1", "--json"]).stdout).enabled).toBe(false);
+    expect(json(run(["collab", "status", "--json"]).stdout).enabled).toBe(true);
+    expect(existsSync(join(home, ".config", "opencode", "skill", "dia-msg", "SKILL.md"))).toBe(true);
+    run(["collab", "enable", "--persona", "p1"]);
+    expect(json(run(["collab", "status", "--persona", "p1", "--json"]).stdout).enabled).toBe(true);
+  });
+
   test("默认 kit 的 skill 写清了开工/收工/边界", () => {
     const text = readFileSync(join(home, ".config", "opencode", "skill", "dia-msg", "SKILL.md"), "utf8");
     expect(text).toContain("dia in");

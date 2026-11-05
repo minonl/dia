@@ -24,9 +24,6 @@
       "to": "~/.dsh/skills/dia-msg"
     }
   ],
-  "dirs": [
-    "~/.dia/collab"
-  ],
   "knowledge": [
     "."
   ],

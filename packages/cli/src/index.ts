@@ -556,8 +556,19 @@ function spawnDetachedDelivery(args: string[]): { pid?: number; log: string } {
 async function msgCli(argv: string[]): Promise<number> {
   const [sub, ...args] = argv;
   const asJson = has(args, "--json");
-  // v2 兼容入口：显式 --to / --session 时走会话级 collab；旧 agent 名路径保持原样。
-  if (sub === "send" && flag(args, "--to")) return collabCli(["out", ...args]);
+  const looksSession = (s?: string) => !!s && /^ses_[A-Za-z0-9]+$/.test(s);
+  // v2 兼容入口：显式 --to / 位置参数是 session id 时走会话级 collab；旧 agent 名路径保持原样。
+  if (sub === "send") {
+    const toFlag = flag(args, "--to");
+    const pos = positional(args)[0];
+    const to = toFlag || (looksSession(pos) ? pos : undefined);
+    if (to) {
+      const rest = toFlag ? [...args] : args.filter((a, i) => !(a === pos && i === args.indexOf(pos)));
+      const from = flag(args, "--from");
+      if (looksSession(from)) rest.push("--session", from!);
+      return collabCli(["out", "--to", to, ...rest]);
+    }
+  }
   if (sub === "inbox" && flag(args, "--session")) return collabCli(["in", ...args]);
   const refs: Record<string, string> = {};
   for (let i = 0; i < args.length; i++) {
@@ -699,6 +710,7 @@ async function msgCli(argv: string[]): Promise<number> {
     const m = e?.message || String(e);
     err(m);
     if (m.startsWith("E_NOT_FOUND")) return 21;
+    if (m.startsWith("E_STATE") || m.startsWith("E_HOPS")) return 22;
     if (m.startsWith("E_USAGE") || m.startsWith("E_SESSION") || m.startsWith("E_NO_SESSION") || m.startsWith("E_LEGACY") || m.startsWith("E_KIND")) return 2;
     return 31;
   }
@@ -730,14 +742,18 @@ async function collabCli(argv: string[]): Promise<number> {
       const max = 4000;
       const shown = body.length > max ? `${body.slice(0, max)}\n  …（正文 ${body.length} 字符，完整看 dia show ${m.id}）` : body;
       out(shown.split("\n").map((l) => `  ${l}`).join("\n"));
+    } else if (m.body_ref) {
+      out("  ⚠️ 正文文件缺失（bodies/ 下找不到）");
     }
     if (m.body_missing) out("  ⚠️ 旧消息正文缺失（迁移时源文件已不存在）");
-    out(`  处理: dia ack ${m.id} | dia reply ${m.id} --body "..." | dia close ${m.id} --reason done`);
+    if (m.legacy) out("  （旧消息只读，不能 ack/reply/close）");
+    else out(`  处理: dia ack ${m.id} | dia reply ${m.id} --body "..." | dia close ${m.id} --reason done`);
     out("");
   };
   try {
+    const personaId = flag(args, "--persona") || process.env.DIA_PERSONA || undefined;
     if (sub === "status") {
-      const s = defaultMsg.status(flag(args, "--persona"));
+      const s = defaultMsg.status(personaId);
       if (asJson) out(JSON.stringify(s, null, 1));
       else {
         out(`enabled: ${s.enabled}${s.reason ? `  (${s.reason})` : ""}`);
@@ -748,10 +764,9 @@ async function collabCli(argv: string[]): Promise<number> {
       return 0;
     }
     if (sub === "enable" || sub === "disable") {
-      const personaId = flag(args, "--persona");
       const c = defaultMsg.setEnabled(sub === "enable", personaId);
       let removed: string[] = [];
-      if (sub === "disable") {
+      if (sub === "disable" && !personaId) {
         try { removed = kit.remove("dia-msg").removed; }
         catch (e: any) {
           if (!String(e?.message || e).startsWith("E_NOT_INSTALLED")) err(`warn: 移除 dia-msg kit 失败：${e?.message || e}`);
@@ -770,14 +785,14 @@ async function collabCli(argv: string[]): Promise<number> {
       return 0;
     }
     if (sub === "in") {
-      const sid = collab.resolveSessionId(session);
-      collab.whoami({ session: sid });
       if (has(args, "--legacy")) {
         const rows = collab.legacyInbox({ limit: Number(flag(args, "--limit") || 0) });
         out(asJson ? JSON.stringify(rows.map(view), null, 1) : rows.map((m) => `${m.id}\t${m.state}\t${m.subject}`).join("\n") || "(empty)");
         if (!asJson) rows.forEach(print);
         return 0;
       }
+      const sid = collab.resolveSessionId(session);
+      collab.whoami({ session: sid });
       const opts = { unread: has(args, "--unread"), all: has(args, "--all"), limit: Number(flag(args, "--limit") || 0) };
       const before = collab.inbox(sid, opts);
       if (!has(args, "--no-mark")) for (const m of before) if (m.state === "pending") collab.markDelivered(sid, m.id);
@@ -843,6 +858,7 @@ async function collabCli(argv: string[]): Promise<number> {
     const m = e?.message || String(e);
     err(m);
     if (m.startsWith("E_NOT_FOUND")) return 21;
+    if (m.startsWith("E_STATE") || m.startsWith("E_HOPS")) return 22;
     if (m.startsWith("E_USAGE") || m.startsWith("E_SESSION") || m.startsWith("E_NO_SESSION") || m.startsWith("E_LEGACY") || m.startsWith("E_KIND")) return 2;
     return 31;
   }

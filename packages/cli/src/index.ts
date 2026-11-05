@@ -172,7 +172,7 @@ usage:
   dia wt create|form|list|status|check|route|scope|clean|prune-merged …
   dia cmd <name> [args…]              # 只查 persona 声明的命令（可绕开同名内置）
   dia <persona-cmd> [args…]           # 一级委派（内置优先）
-  dia msg send|show|inbox|ack|delivered|deliver [--wait]|reply|thread|escalate|agents\n  dia agents list|register|unregister|discover\n  dia msg deliver <agent> <id> [--transport tmux|acp]\n  dia task add|list|status|done
+  dia msg send|show|inbox|ack|delivered|deliver [--wait]|reply|needs-info|status|stuck|thread|escalate|agents\n  dia agents list|register|unregister|discover\n  dia msg deliver <agent> <id> [--transport tmux|acp]\n  dia task add|list|status|done
   dia team run <id> --mock | --acp|--dsh --workspace DIR
   dia team gate|accept|reject|next
   dia team accept <id> [--note ...] [--pr N [--repo R] [--merge]]   # --pr：先验 CI，绿才接受/合并
@@ -517,6 +517,16 @@ async function agentsCli(argv: string[]): Promise<number> {
   return 2;
 }
 
+async function waitTerminal(id: string, timeoutMs: number): Promise<string> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const hit = msg.find(id);
+    if (hit && msg.isTerminal(hit.msg.state)) return hit.msg.state;
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  return "timeout";
+}
+
 function spawnDetachedDelivery(args: string[]): { pid?: number; log: string } {
   const root = msg.msgRoot();
   const agent = positional(args)[0] || "unknown";
@@ -560,6 +570,28 @@ async function msgCli(argv: string[]): Promise<number> {
       out(asJson ? JSON.stringify(m) : `${m.id}\t${m.thread_id}#${m.seq}\t${m.from} → ${m.to}\t${m.kind}\t${m.subject}`);
       return 0;
     }
+    if (sub === "needs-info") {
+      const [agent, id] = positional(args);
+      if (!agent || !id) { err("usage: dia msg needs-info <agent> <id> --reason \"...\""); return 2; }
+      const m = msg.needsInfo(agent, id, flag(args, "--reason") || "");
+      out(asJson ? JSON.stringify(m) : `${m.id}\t${m.state}`);
+      return 0;
+    }
+    if (sub === "status") {
+      const id = positional(args)[0];
+      if (!id) { err("usage: dia msg status <id> [--json]"); return 2; }
+      const hit = msg.find(id);
+      if (!hit) { err(`E_NOT_FOUND: ${id}`); return 21; }
+      const age = Math.round((Date.now() - new Date(hit.msg.created_at).getTime()) / 1000);
+      out(asJson ? JSON.stringify({ agent: hit.agent, ...hit.msg, age_s: age }, null, 1)
+        : `${hit.msg.id}\t${hit.msg.state}\t${hit.agent}\t${hit.msg.kind}\t${hit.msg.subject}\tage=${age}s${msg.isTerminal(hit.msg.state) ? "" : "  (处理中)"}`);
+      return 0;
+    }
+    if (sub === "stuck") {
+      const rows = msg.stuck(Number(flag(args, "--minutes") || 30));
+      out(asJson ? JSON.stringify(rows, null, 1) : rows.map((m) => `${m.id}\t${m.state}\t${m.to}\t${m.subject}`).join("\n") || "(none)");
+      return 0;
+    }
     if (sub === "show") {
       const [agent, id] = positional(args);
       if (!agent || !id) { err("usage: dia msg show <agent> <id>"); return 2; }
@@ -584,14 +616,19 @@ async function msgCli(argv: string[]): Promise<number> {
                    : `dispatched ${id} → ${agent}（${transport}，异步 ${child.pid}；日志 ${child.log}）`);
         return 0;
       }
+      let r: any;
       if (transport === "acp") {
-        const r = await msgAcp.deliverAcp(agent, id);
-        out(asJson ? JSON.stringify(r) : `delivered ${r.id} → ${r.agent} (acp)${r.reply ? `\nreply: ${r.reply.slice(0, 200)}` : ""}`);
-        return 0;
+        r = await msgAcp.deliverAcp(agent, id);
+        if (!asJson) out(`delivered ${r.id} → ${r.agent} (acp)${r.reply ? `\nreply: ${r.reply.slice(0, 200)}` : ""}`);
+      } else {
+        r = tmux.deliver(agent, id, { force: has(args, "--force") });
+        if (!asJson) out(`delivered ${r.id} → ${r.agent} (${r.pane})`);
       }
-      const r = tmux.deliver(agent, id, { force: has(args, "--force") });
-      out(asJson ? JSON.stringify(r) : `delivered ${r.id} → ${r.agent} (${r.pane})`);
-      return 0;
+      // --wait：等的是**终态**（replied/needs_info/closed/escalated），不是 ACP 回合结束
+      const finalState = await waitTerminal(id, Number(flag(args, "--timeout") || process.env.DIA_MSG_WAIT_MS || 600_000));
+      if (asJson) out(JSON.stringify({ ...r, state: finalState }));
+      else out(`state=${finalState}${finalState === "timeout" ? "（仍在处理，可 dia msg status 查看）" : ""}`);
+      return finalState === "timeout" ? 7 : 0;
     }
     if (sub === "inbox") {
       const agent = positional(args)[0];

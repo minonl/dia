@@ -15,7 +15,9 @@ const dataDir = () => paths.diaHome();
 export const msgRoot = () => paths.msgRoot();
 
 export type MsgKind = "question" | "handoff" | "notify" | "reply";
-export type MsgState = "pending" | "delivered" | "acked" | "replied" | "closed" | "escalated";
+export type MsgState = "pending" | "delivered" | "acked" | "replied" | "needs_info" | "closed" | "escalated";
+const TERMINAL: MsgState[] = ["replied", "needs_info", "closed", "escalated"];
+export const isTerminal = (s: MsgState) => TERMINAL.includes(s);
 const KINDS: MsgKind[] = ["question", "handoff", "notify", "reply"];
 
 export interface Message {
@@ -210,7 +212,7 @@ export function escalateOverdue(now = new Date()): Message[] {
   for (const { agent, messages } of allInboxes()) {
     for (const m of messages) {
       if (!m.deadline) continue;
-      if (["replied", "closed", "escalated"].includes(m.state)) continue;
+      if (["replied", "needs_info", "closed", "escalated"].includes(m.state)) continue;
       if (new Date(m.deadline).getTime() > now.getTime()) continue;
       const hit = findInbox(agent, m.id);
       if (!hit) continue;
@@ -221,6 +223,34 @@ export function escalateOverdue(now = new Date()): Message[] {
     }
   }
   return out;
+}
+
+/** 证据/信息不足：合法终态，调用方据此去补而不是重投 */
+export function needsInfo(agent: string, id: string, reason: string): Message {
+  const hit = findInbox(agent, id);
+  if (!hit) throw new Error(`E_NOT_FOUND: ${id}`);
+  hit.msg.state = "needs_info";
+  (hit.msg as any).needs_info_reason = reason;
+  (hit.msg as any).needs_info_at = new Date().toISOString();
+  atomicWrite(hit.path, JSON.stringify(hit.msg, null, 1) + "\n");
+  return hit.msg;
+}
+
+/** 跨收件箱按 id 查找（status 命令用） */
+export function find(id: string): { agent: string; msg: Message } | null {
+  for (const { agent, messages } of allInboxes()) {
+    const m = messages.find((x) => x.id === id);
+    if (m) return { agent, msg: m };
+  }
+  return null;
+}
+
+/** 卡住的消息：非终态且超过 minutes 分钟没动 */
+export function stuck(minutes = 30, now = new Date()): Message[] {
+  const cutoff = now.getTime() - minutes * 60_000;
+  return allInboxes()
+    .flatMap((e) => e.messages)
+    .filter((m) => !isTerminal(m.state) && new Date(m.created_at).getTime() < cutoff);
 }
 
 export function agents(): string[] {

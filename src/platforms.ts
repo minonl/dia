@@ -28,6 +28,7 @@ export function registryCandidates(): string[] {
   if (process.env.DIA_PLATFORMS_FILE) out.push(process.env.DIA_PLATFORMS_FILE);
   const install = paths.installDir();
   out.push(join(install, "registry", "platforms.json"));
+  out.push(join(install, "docs", "platforms", "registry.json"));  // npm 包内没有 registry/，回退 docs
   out.push(join(process.cwd(), "docs", "platforms", "registry.json"));
   return out;
 }

@@ -559,10 +559,12 @@ export function healthShell(svc: ServiceManifest, opts: { entryPath: string; dir
     `cd ${q(opts.dir)} || exit 1`,
     `__t=""`,
     `if command -v timeout >/dev/null 2>&1; then __t=timeout; elif command -v gtimeout >/dev/null 2>&1; then __t=gtimeout; fi`,
+    `__tf="$(mktemp 2>/dev/null || echo /tmp/dia-hc-$$)"`,
     `if [ -n "$__t" ]; then PATH="$DIA_JOB_CRON_PATH" "$__t" ${timeout} bash -c ${q(hc.cmd)}; else ` +
       `__hb="$(command -v bash)" || __hb=/bin/bash; ` +
-      `PATH="$DIA_JOB_CRON_PATH" "$__hb" -c ${q(`"$0" -c "$1" & __p=$!; ( sleep ${timeout}; kill -9 $__p ) >/dev/null 2>&1 & __w=$!; wait $__p; __rc=$?; kill $__w 2>/dev/null; exit $__rc`)} "$__hb" ${q(hc.cmd)}; fi`,
+      `PATH="$DIA_JOB_CRON_PATH" "$__hb" -c ${q(`"$0" -c "$1" & __p=$!; ( sleep ${timeout}; printf 1 > "$2"; kill -9 $__p 2>/dev/null ) >/dev/null 2>&1 & __w=$!; wait $__p; __rc=$?; kill $__w 2>/dev/null; [ -s "$2" ] && __rc=124; exit $__rc`)} "$__hb" ${q(hc.cmd)} "$__tf"; fi`,
     `__rc=$?`,
+    `rm -f "$__tf" 2>/dev/null`,
     `case " ${pass} " in *" $__rc "*) ;; *) echo "healthcheck exit=$__rc 不在 health 码域（0/20/21），判据不可用" >&2; __rc=1;; esac`,
     `DIA_SERVICE_HEALTH_FILE="$DIA_SERVICE_HEALTH_FILE" exec ${diaCmd()} service health --from-wrapper --exit "$__rc" ${opts.gen ? `--gen ${q(opts.gen)} ` : ""}${q(svc.id)} >/dev/null 2>&1 || true`,
   ].join("\n");
@@ -826,7 +828,15 @@ export function runHealth(
   const ms = now() - t0;
   const stdout = String(r.stdout ?? "");
   const stderr = String(r.stderr ?? "");
-  let judgement = judgeSpawnResult({ status: r.status, signal: r.signal, error: r.error, killed: r.error == null && r.status == null });
+  // 兜底超时（无 timeout(1)）：spawnSync 用 SIGKILL 杀子进程，必须翻译成 124 语义，
+  // 否则会被 judgeSpawnResult 当成 crash（macOS 无 gtimeout 的 CI 上就是这样假红）。
+  const timedOut =
+    !t &&
+    ((r.error && (r.error as NodeJS.ErrnoException).code === "ETIMEDOUT") ||
+      (r.signal === "SIGKILL" && ms >= timeoutSec * 1000 - 100));
+  let judgement = timedOut
+    ? judgeSpawnResult({ status: 124 })
+    : judgeSpawnResult({ status: r.status, signal: r.signal, error: r.error, killed: r.error == null && r.status == null });
 
   // 结构化输出（可选，§4.1）：`{` 开头却解析不了 → crash（不冒充 ok/fail）。
   // 兜底超时（无 timeout(1) 时 spawn 自身 timeout）SIGKILL 的子进程同样是「超时」，归 124 语义；

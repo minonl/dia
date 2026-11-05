@@ -1036,7 +1036,7 @@ cmd_route() {
   else
     name="$(basename "$repo")"
   fi
-  case "$name" in *-worktree--*) name="${name%%-worktree--*}"; repo="$(dirname "$repo")/$name" ;; esac
+case "$name" in *-worktree--*) name="${name%%-worktree--*}"; repo="$(dirname "$repo")/$name" ;; esac
 
   # ── 配置驱动判定（**不再硬编码仓名**；判定来源会被打印出来，可审计）──
   local cfg ns=""
@@ -1159,6 +1159,26 @@ is_main=0; [ "$gd" = "$common" ] && is_main=1
 branch="$(git symbolic-ref --short HEAD 2>/dev/null || true)"
 prot=" main master develop dev "
 probe="${DIA_WT_GUARD_PROBE:-0}"
+wt_guard_scan() {
+local ls="$1" rs="$2" range="" base="" hits=""
+[ "${DIA_WT_GUARD_SCAN:-1}" = "1" ] || return 0
+if [ -n "$rs" ] && [ "$rs" != "0000000000000000000000000000000000000000" ] && git cat-file -e "$rs" 2>/dev/null; then
+  range="$rs..$ls"
+else
+  base="$(git merge-base "$ls" "origin/HEAD" 2>/dev/null || git merge-base "$ls" main 2>/dev/null || true)"
+  if [ -n "$base" ]; then range="$base..$ls"; else range="$ls^..$ls"; fi
+fi
+hits="$(git diff -U0 "$range" -- . 2>/dev/null | grep -E '^\+' | grep -vE '^\+\+\+' \
+  | grep -vE '/(Users|home)/(you|user|example|runner|shared|me)(/|$)' \
+  | grep -nE '(/Users/[A-Za-z0-9._-]+|/home/[A-Za-z0-9._-]+|-----BEGIN [A-Z ]*PRIVATE KEY-----|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})' | head -5)"
+if [ -n "$hits" ]; then
+  echo "[dia-wt] 推送包含敏感内容（已阻断）：" >&2
+  printf '%s\n' "$hits" >&2
+  echo "[dia-wt] 确认误报可临时关闭：DIA_WT_GUARD_SCAN=0 git push ..." >&2
+  return 1
+fi
+}
+
 case "$name" in
   pre-commit)
     if [ "$probe" = 1 ]; then
@@ -1176,11 +1196,12 @@ case "$name" in
       echo "[dia-wt] 主 checkout 禁止直接 push；请走 worktree 分支 + MR" >&2
       exit 1
     fi
-    while read -r _lr _ls rr _rs; do
+    while read -r _lr ls rr rs; do
       case "${rr:-}" in
         refs/heads/main|refs/heads/master|refs/heads/develop|refs/heads/dev)
           echo "[dia-wt] 禁止直接 push ${rr#refs/heads/}；请走 MR" >&2; exit 1 ;;
       esac
+      wt_guard_scan "$ls" "$rs" || exit 1
     done ;;
   post-checkout)
     [ "$probe" = 1 ] && exit 0
@@ -1443,6 +1464,7 @@ dia wt —— worktree 目录形式选型 + 创建（唯一实现）
                                                # ★ 依赖体检（R20）：软链/逃逸/悬空；--all 扫全部仓
   dia wt adopt  <repo> [--apply|--check|--revert] [--template T] [--default-branch B] [--json]
                                                # 配置路径模板 + 守卫钩子（默认 dry-run）
+                                               # 守卫含推送前敏感扫描（DIA_WT_GUARD_SCAN=0 可临时关闭）
   dia wt doctor [<repo>...] [--all] [--json]    # 巡检：配置/钩子/探针/主 checkout/worktree 卫生
   dia wt gate   <repo> <feature>               # 提交 MR 前：check + doctor + 干净 + ahead>0
   dia wt route  <repo-path>              # ★ 开工前必查：走 MR 还是直推（R1.7，配置驱动）

@@ -35,6 +35,17 @@ echo b > "$R/b.txt"; git -C "$R" add b.txt
 if git -C "$R" commit -qm should-block 2>/dev/null; then bad "主 checkout main 提交未被拦截"; else ok "主 checkout main 提交被拦截"; fi
 git -C "$R" reset -q
 
+# ── 推送前敏感扫描（PII/凭据形态）──
+BR="$TD/remote.git"; git init -q --bare "$BR"
+git -C "$R" remote add origin "$BR" 2>/dev/null || true
+git -C "$R" push -q --no-verify -u origin main 2>/dev/null || true
+git -C "$R" worktree add -q "$TD/wt" -b feat/scan 2>/dev/null || true
+echo "/Users/alice/secret" > "$TD/wt/bad.txt"
+git -C "$TD/wt" add -A && git -C "$TD/wt" commit -qm bad --no-verify
+if git -C "$TD/wt" push -q origin feat/scan 2>/dev/null; then bad "敏感推送未被拦截"; else ok "敏感推送被拦截"; fi
+echo ok > "$TD/wt/bad.txt" && git -C "$TD/wt" add -A && git -C "$TD/wt" commit -qm fix --no-verify
+git -C "$TD/wt" push -q origin feat/scan 2>/dev/null && ok "干净推送放行" || bad "干净推送被拒"
+
 bash "$WT" adopt "$R" --revert >/dev/null 2>&1 || bad "revert 失败"
 [ -z "$(git -C "$R" config --get core.hooksPath || true)" ] && ok "revert 还原 hooksPath" || bad "revert 未还原"
 [ ! -d "$R/.git/dia" ] && ok "revert 删除 dia 目录" || bad "dia 目录残留"

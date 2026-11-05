@@ -786,7 +786,8 @@ async function personaCli(argv: string[]): Promise<number> {
     if (!spec) { err("usage: dia persona use <id>[@<version>] [--latest] [--reason R]"); return 2; }
     const [id, ver] = spec.split("@");
     try {
-      const r = active.use(id, ver || (has(args, "--latest") ? null : null), { reason: flag(args, "--reason") });
+      const resolved = ver ? persona.resolveVersion(id, ver) : null;
+      const r = active.use(id, resolved || (has(args, "--latest") ? null : null), { reason: flag(args, "--reason") });
       out(asJson ? JSON.stringify(r) : `${id}: ${r.previous ?? "(未设置)"} → ${r.current.version}（${r.current.commit ?? "?"}, by ${r.current.by}）`);
       return 0;
     } catch (e: any) {

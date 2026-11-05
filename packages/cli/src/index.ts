@@ -1070,9 +1070,21 @@ export async function main(rawArgv: string[]): Promise<number> {
       return 0;
     };
     const ahead = latest && cmp(cur, latest) > 0;
+    const install = paths.installDir();
+    const npmManaged = install.split(/[\\/]/).includes("node_modules") && install.includes("@minonl");
     out(`当前 ${cur}｜latest ${latest || "-"}｜next ${next || "-"}${ahead ? "（当前领先 latest）" : ""}`);
+    out(`安装目录 ${install}（${npmManaged ? "npm 全局包" : "脚本安装"}）`);
     if (check) return latest && !ahead && latest !== cur ? 1 : 0;
     if (latest && (latest === cur || ahead)) { out(ahead ? "当前版本领先 latest（预发布）" : "已是最新"); return 0; }
+    if (!npmManaged) {
+      // 脚本安装（install.sh）→ npm 装到全局 prefix 可能不在 PATH 上，别做无效升级
+      let source = "";
+      try { source = String(JSON.parse(readFileSync(join(install, "install.json"), "utf8")).source || ""); } catch {}
+      out(`这是脚本安装，不走 npm 升级。升级方式：`);
+      out(`  cd ${source || "<dia 仓库>"} && git pull && bun run build && bash install.sh`);
+      out(`（或改用 npm 全局安装：npm i -g @minonl/dia@latest）`);
+      return 0;
+    }
     const r = spawnSync("npm", ["i", "-g", "@minonl/dia@latest"], { stdio: "inherit" });
     if (r.status !== 0) { err("E_UPDATE: npm 安装失败（可能需要 sudo 或调整 npm prefix）"); return r.status || 1; }
     out(`已更新到 ${latest}（重新打开终端/会话生效）`);

@@ -21,7 +21,7 @@ import * as deps from "../../../src/deps.ts";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { mkdirSync, openSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve as resolvePath, sep as pathSep } from "node:path";
@@ -30,6 +30,7 @@ import * as team from "../../../src/team.ts";
 import { loadPrices } from "../../../src/pricing.ts";
 import { propose } from "../../../src/proposal.ts";
 import { runJob } from "../../../src/job.ts";
+import * as service from "../../../src/service.ts";
 
 function out(s: string) { process.stdout.write(s + "\n"); }
 function err(s: string) { process.stderr.write(s + "\n"); }
@@ -169,6 +170,10 @@ usage:
   dia persona default <id>|--unset|--show [--host opencode]
   dia kit add --from SRC [--ref REF] [--dry-run] [--json]
   dia kit list|verify <id>|remove <id>
+  dia service add (<--from SRC> | --dir DIR) [--ref REF] [--dry-run] [--json]
+  dia service list [--json] | show <id> [--json] | verify <id|--dir DIR> [--json]
+  dia service health <id> [--from-wrapper --exit N --gen G] [--json]   # 0 ok/30 degraded/1 fail/31 判据不可用/2 用法
+  dia service remove <id> [--json]
   dia wt create|form|list|status|check|route|scope|clean|prune-merged …
   dia cmd <name> [args…]              # 只查 persona 声明的命令（可绕开同名内置）
   dia <persona-cmd> [args…]           # 一级委派（内置优先）
@@ -997,6 +1002,107 @@ function wtCli(argv: string[]): number {
   return r.status ?? 1;
 }
 
+/** `dia service add|remove|list|show|verify|health`（设计见 docs/service-noun.md §5）。 */
+async function serviceCli(argv: string[]): Promise<number> {
+  const [sub, ...args] = argv;
+  const asJson = has(args, "--json");
+  const pos = positional(args);
+  try {
+    if (sub === "add") {
+      const from = flag(args, "--from") || pos[0];
+      const dir = flag(args, "--dir") || (from ? service.serviceDir((() => {
+        try { return service.readServiceManifest(from).id; } catch { return basename(from); }
+      })()) : undefined);
+      if (!dir) { err("usage: dia service add (<--from SRC> | --dir DIR) [--ref REF] [--dry-run] [--json]"); return 2; }
+      const r = service.add({ dir, from, ref: flag(args, "--ref"), dryRun: has(args, "--dry-run") });
+      if (asJson) out(JSON.stringify(r, null, 1));
+      else {
+        out(`${r.dryRun ? "would install" : "installed"} service ${r.id}@${r.version} -> ${r.dir}`);
+        out(`  gen: ${r.gen}`);
+        out(`  entry: ${r.entry.path}${r.entry.link ? ` （稳定入口 ${r.entry.link}）` : ""}`);
+        out(`  jobs: ${[r.jobs.service, r.jobs.health].filter(Boolean).join(", ")}（backend: ${r.backend}）`);
+        if (r.target_mismatch) out(`  ! lifecycle.target 不是本机：按归属声明应在别的机器上运行（dia 只提示）`);
+        if (r.backend === "systemd") out(`  · 常驻服务需 loginctl enable-linger ${process.env.USER || "$USER"}（否则注销后停止）`);
+      }
+      return 0;
+    }
+    if (sub === "remove") {
+      const id = pos[0];
+      if (!id) { err("usage: dia service remove <id>"); return 2; }
+      const r = service.remove({ id });
+      out(asJson ? JSON.stringify(r, null, 1) : `removed service ${id}` +
+        (r.removed.length ? `\n  ${r.removed.join("\n  ")}` : "") + (r.skipped.length ? `\n  skipped: ${r.skipped.join(", ")}` : ""));
+      return 0;
+    }
+    if (sub === "list" || sub === undefined) {
+      const rows = service.listServices();
+      if (asJson) { out(JSON.stringify(rows, null, 1)); return 0; }
+      if (!rows.length) { out("(no services)"); return 0; }
+      for (const r of rows) {
+        out(`${r.id}@${r.version ?? "-"}  health=${r.label}${r.problem ? `  ! ${r.problem}` : ""}`);
+        if (r.lifecycle) out(`  lifecycle: ${r.lifecycle.type}${r.lifecycle.interval ? ` ${r.lifecycle.interval}s` : ""}${r.target ? ` target=${r.target}${r.on_this_host ? "" : "（非本机）"}` : ""}`);
+      }
+      return 0;
+    }
+    if (sub === "show") {
+      const id = pos[0];
+      if (!id) { err("usage: dia service show <id>"); return 2; }
+      const r = service.showService(id);
+      if (!r) { err(`E_NOT_INSTALLED: service ${id}`); return 2; }
+      if (asJson) { out(JSON.stringify(r, null, 1)); return 0; }
+      out(`${r.id}@${r.version ?? "-"}  dir=${r.dir}`);
+      out(`  health: ${r.label}${r.last_error ? `  (last_error: ${r.last_error})` : ""}`);
+      out(`  gen: ${r.gen ?? "-"}  adopted: ${r.adopted}`);
+      if (r.lock) out(`  entry: ${r.lock.entry.path}${r.lock.entry.link ? ` （稳定入口 ${r.lock.entry.link}）` : ""}`);
+      out(`  jobs: ${[r.jobs.service, r.jobs.health].filter(Boolean).join(", ")}`);
+      if (r.last) out(`  last: ts=${r.last.ts} state=${r.last.state} candidate=${r.last.candidate}/${r.last.streak} source=${r.last.source}`);
+      if (r.problem) out(`  ! ${r.problem}`);
+      return 0;
+    }
+    if (sub === "verify") {
+      const id = pos[0];
+      const dir = flag(args, "--dir") || (id ? service.serviceDir(id) : undefined);
+      if (!dir) { err("usage: dia service verify <id|--dir DIR>"); return 2; }
+      const r = service.verify(dir);
+      out(asJson ? JSON.stringify(r, null, 1) : `${r.ok ? "ok" : "DRIFT"} ${r.id}（entry: ${r.entry.kind} ${r.entry.path}）` +
+        (r.drift.length ? `\n  ${r.drift.map((d) => `${d.code}: ${d.detail}`).join("\n  ")}` : ""));
+      return r.ok ? 0 : 1;
+    }
+    if (sub === "health") {
+      // --exit N 是 flag（不是位置参数）：目标 id 取剩余位置参数的第一个
+      const id = (() => {
+        const f = new Set(["--exit", "--gen", "--state-file", "--json"]);
+        for (let i = 0; i < args.length; i++) {
+          if (args[i].startsWith("--")) { if (!args[i].includes("=") && f.has(args[i])) i++; continue; }
+          return args[i];
+        }
+        return undefined;
+      })();
+      if (!id) { err("usage: dia service health <id>"); return 2; }
+      const fromWrapper = has(args, "--from-wrapper");
+      const ex = flag(args, "--exit");
+      const r = service.runServiceHealth(id, {
+        wrapperExit: fromWrapper ? Number(ex ?? "1") : undefined,
+        gen: flag(args, "--gen"),
+        stateFile: flag(args, "--state-file"),
+      });
+      if (asJson) out(JSON.stringify(r.json, null, 1));
+      else out(`${r.id}: ${r.json.verdict}（shown=${r.record.state}${r.judgement.timeout ? ", timeout" : ""}${r.judgement.detail ? ", " + r.judgement.detail : ""}）`);
+      return r.exit;
+    }
+  } catch (e: any) {
+    const m = e?.message || String(e);
+    err(m);
+    if (e?.code === "E_USAGE") return 2;
+    if (m.startsWith("E_UNSTABLE_ENTRY") || m.startsWith("E_MANIFEST") || m.startsWith("E_NO_MANIFEST")) return 32;
+    if (m.startsWith("E_BACKEND")) return 33;
+    if (m.startsWith("E_NOT_INSTALLED")) return 30;
+    return 31;
+  }
+  err("usage: dia service add|remove|list|show|verify|health");
+  return 2;
+}
+
 async function resumeCli(argv: string[]): Promise<number> {
   const session = flag(argv, "--session");
   if (!session) { err("missing --session"); return 2; }
@@ -1105,6 +1211,7 @@ export async function main(rawArgv: string[]): Promise<number> {
   if (cmd === "resume") return resumeCli(argv.slice(1));
   if (cmd === "persona") return personaCli(argv.slice(1));
   if (cmd === "kit") return kitCli(argv.slice(1));
+  if (cmd === "service") return serviceCli(argv.slice(1));
   if (cmd === "wt") return wtCli(argv.slice(1));
   if (cmd === "env") {
     const [sub, ...rest] = argv.slice(1);

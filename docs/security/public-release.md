@@ -1,7 +1,8 @@
 # dia Public Release Gate
 
-> 状态：**已公开（2026-11-05），独立审核 blocked（2026-11-05）**。
-> main 树的 P1/P2 已修；**公开分支 `feat/msg-collab-grill` 仍含敏感文档**，清掉前不得再发版/对外宣传。
+> 状态：**已公开（2026-11-05），独立审核整改完成（2026-11-05）**。
+> main 树与公开分支 HEAD 均已脱敏；pre-push 守卫已加敏感扫描。
+> **残留**：不可达旧 commit 对象需 GitHub Support GC（公开前已存在的缓存）。
 > 门禁保留为「未来发布前」的检查清单。
 >
 > 2026-11-05 实际路径：重建历史（filter-branch 清洗内部标识）→ 删库重建（新仓库 ID）→ 转 public → 开 Pages。

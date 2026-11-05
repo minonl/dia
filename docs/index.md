@@ -51,6 +51,7 @@ Agent 入口：[`llms.txt`](https://github.com/minonl/dia/blob/main/llms.txt)（
 
 | 文档 | 一句话 |
 |---|---|
+| [数据根迁移：~/.local/share/dia → ~/.dia（2026-11-05）](migrations/data-root-2026-11.md) | 背景：PR #11 把数据根统一为 ~/.dia（DIAROOT 可覆盖，DIADATADIR 兼容一个版本）。 |
 | [K0：kb 查询 golden（20 条）](migrations/kb-golden.md) | 2026-10-30。原始 query 只落在 yan 数据根，不提交到 dia 仓。 |
 | [配置迁移：用 LLM 任务，不写 migration 代码](migrations/llm-migration.md) | 2026-11-04。适用：dia / persona / kit 的声明式格式升级（dia.json、lock、registry.json、deps.jsonl 等）。 |
 | [Python 清理：Node/Bun 项目不收 Python](migrations/no-python.md) | 目标：dia 仓库不把 Python 作为运行时/工具链依赖。 |

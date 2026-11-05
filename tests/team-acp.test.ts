@@ -9,16 +9,22 @@ let home: string, data: string, cache: string, fakeBin: string, workspace: strin
 const cli = join(import.meta.dir, "..", "packages", "cli", "src", "index.ts");
 const fakeSrc = join(import.meta.dir, "fixtures", "fake-acp.mjs");
 
-const run = (args: string[], env: Record<string, string> = {}) => spawnSync("bun", [cli, ...args], {
-  encoding: "utf8",
-  env: {
-    ...process.env,
-    DIA_HOME: home, DIA_DATA_DIR: data, DIA_CACHE_DIR: cache,
-    PATH: `${fakeBin}:${process.env.PATH}`,
-    FAKE_LOG: fakeLog,
-    ...env,
-  },
-});
+// 剔除宿主 shell 可能导出的覆盖项（如开发者本机 DIA_DSH_MODEL），避免用例结果随环境漂移
+const AMBIENT_OVERRIDES = ["DIA_DSH_MODEL", "DIA_ACP_TIMEOUT"];
+const run = (args: string[], env: Record<string, string> = {}) => {
+  const base: Record<string, string | undefined> = { ...process.env };
+  for (const k of AMBIENT_OVERRIDES) delete base[k];
+  return spawnSync("bun", [cli, ...args], {
+    encoding: "utf8",
+    env: {
+      ...base,
+      DIA_HOME: home, DIA_DATA_DIR: data, DIA_CACHE_DIR: cache,
+      PATH: `${fakeBin}:${process.env.PATH}`,
+      FAKE_LOG: fakeLog,
+      ...env,
+    } as Record<string, string>,
+  });
+};
 
 let taskSeq = 0;
 function newTask(judge: string): string {

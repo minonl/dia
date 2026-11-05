@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { execFileSync } from "node:child_process";
 import * as kit from "./kit.ts";
+import * as defaultMsg from "./default-msg.ts";
 import * as config from "./config.ts";
 import * as active from "./active.ts";
 import { parseJsonc, setTopLevelKey } from "./jsonc.ts";
@@ -69,6 +70,8 @@ export interface Installed {
   hash: string;
   /** 被 --force 覆盖的已存在产物（覆盖前已备份），供 CLI 提示 */
   overwrites?: string[];
+  /** 默认 msg kit 的装配结果（不阻断 persona 安装；失败原因供 doctor/CLI 显示） */
+  msgKit?: { ok: boolean; reason?: string; kit?: string };
   /** 来源 commit（git 源 = rev-parse HEAD；本地目录 = --short HEAD 或 "local"；dry-run = "dry-run"）。
    *  CLI 展示与 persona check 走同一条信息，避免「undefined」。 */
   commit: string;
@@ -321,13 +324,16 @@ export function install(from: string, opts: { ref?: string; host?: string; home?
     kitRefs.push({ id: r.id, version: r.version });
   }
 
+  // 默认能力包（dia-msg）：不阻断 persona 安装；显式 capabilities.msg=false 或用户 disable 时跳过。
+  const msgKit = defaultMsg.ensureForPersona(m.id, m.capabilities);
+
   const hash = hashTree(target);
   const renderedHashes: Record<string, string> = {};
   for (const f of rendered) renderedHashes[f] = shaFile(f);
   writeFileSync(join(target, "dia.lock"), JSON.stringify({ id: m.id, version: m.version, slot, commit: src.commit, source: from, ref: opts.ref ?? null, hash, rendered, renderedHashes, renderedDirs, kits: kitRefs,
     content: { knowledge: m.knowledge ?? [], commands: m.commands ?? [], dataRoot: m.data_root ?? null, env: m.env ?? null, rendered: inline, config: appliedConfig },
   }, null, 1));
-  return { id: m.id, version: slot, dir: target, rendered, hash, commit: src.commit, overwrites };
+  return { id: m.id, version: slot, dir: target, rendered, hash, commit: src.commit, overwrites, msgKit };
 }
 
 export function list(): { id: string; versions: string[] }[] {
@@ -484,12 +490,12 @@ const ID_RE = /^[a-z0-9][a-z0-9-]*$/;
 
 export interface CreateResult { id: string; dir: string; files: string[]; dryRun: boolean }
 
-function skeleton(id: string, hosts: string[]): Record<string, string> {
+function skeleton(id: string, hosts: string[], msg = true): Record<string, string> {
   const manifest: any = {
     schema: 1, kind: "persona", id, name: id, version: "0.1.0",
     hosts,
     entry: {},
-    capabilities: { tools: ["bash", "git"], network: false, env: [] },
+    capabilities: { tools: ["bash", "git"], network: false, env: [], msg },
     requires: { dia: ">=0.0.1" },
   };
   const files: Record<string, string> = {};
@@ -580,14 +586,14 @@ mode: primary
 }
 
 /** 生成一个新 persona 的骨架（本地、不联网、不执行脚本）。 */
-export function create(id: string, opts: { dir?: string; hosts?: string[]; dryRun?: boolean } = {}): CreateResult {
+export function create(id: string, opts: { dir?: string; hosts?: string[]; dryRun?: boolean; msg?: boolean } = {}): CreateResult {
   if (!ID_RE.test(id)) throw new Error("E_MANIFEST: bad id（小写字母/数字/中划线）");
   if (!opts.dir) throw new Error("E_USAGE: --dir required");
   const dir = resolve(opts.dir);
   const hosts = opts.hosts?.length ? opts.hosts : ["opencode", "dsh"];
   for (const h of hosts) assertHost(h);
   if (existsSync(dir) && readdirSync(dir).length) throw new Error(`E_CONFLICT: ${dir} 非空`);
-  const files = skeleton(id, hosts);
+  const files = skeleton(id, hosts, opts.msg !== false);
   if (!opts.dryRun) {
     for (const [rel, body] of Object.entries(files)) {
       const p = join(dir, rel);
@@ -599,7 +605,7 @@ export function create(id: string, opts: { dir?: string; hosts?: string[]; dryRu
 }
 
 export interface RenderDrift { path: string; action: "missing" | "changed" }
-export interface RenderResult { id: string; version: string; check: boolean; drift: RenderDrift[]; backups: string[] }
+export interface RenderResult { id: string; version: string; check: boolean; drift: RenderDrift[]; backups: string[]; msgKit?: { ok: boolean; reason?: string; kit?: string } }
 
 // 宿主会在自己的 profile 目录里改写/生成这些文件（dsh 每次启动重写 cordis.yml，
 // `dsh plugin --profile <id> add <pkg>` 会改 package.json 与锁文件），它们不属于渲染产物：
@@ -685,6 +691,7 @@ export function render(id: string, opts: { host?: string; home?: string; check?:
   }
   if (opts.check) return { id, version, check: true, drift, backups: [] };
 
+  const msgKit = defaultMsg.ensureForPersona(id, m.capabilities);
   const backups: string[] = [];
   if (drift.length) {
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -732,7 +739,7 @@ export function render(id: string, opts: { host?: string; home?: string; check?:
   const renderedDirs = [...(lock.renderedDirs ?? []).filter((d: any) => d.path !== dshDest)];
   if (dshDest) renderedDirs.push({ path: dshDest, hash: hashTree(dshDest) });
   writeFileSync(lockPath, JSON.stringify({ ...lock, rendered, renderedHashes, renderedDirs }, null, 1));
-  return { id, version, check: false, drift, backups };
+  return { id, version, check: false, drift, backups, msgKit };
 }
 
 export interface RenderDriftReport {

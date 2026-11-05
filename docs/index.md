@@ -2,7 +2,7 @@
 
 > 本文件由 `scripts/docs-index.mjs` 生成，**不要手改**；改完文档跑 `bun run docs:index`。
 
-Agent 入口：[`llms.txt`](https://github.com/minonl/dia/blob/main/llms.txt)（按需全量：[`llms-full.txt`](https://github.com/minonl/dia/blob/main/llms-full.txt)）
+Agent 入口：[`llms.txt`](https://github.com/minonl/dia/blob/main/llms.txt)（全量 `llms-full.txt` 本地生成，**不入库**：`bun run docs:index`）
 
 ## 现状
 
@@ -21,6 +21,8 @@ Agent 入口：[`llms.txt`](https://github.com/minonl/dia/blob/main/llms.txt)（
 | [模型基准与 Sidecar 监控（A+B 一起）](model-baseline-sidecar.md) | A：首次使用先跑基准，用数据决定配置。 |
 | [模型行为调控（客户端侧）](model-behavior.md) | 边界（用户定）：只使用各平台提供的通用模型；不做本地构建/微调；不依赖多数模型不支持的推理与输入输出控制参数； |
 | [dia monorepo：框架模块的归属](monorepo.md) | 结论：dia-job 回 dia monorepo，作为 packages/job；kb 作为 packages/kb。 |
+| [dia msg M0：送达与可读（设计 v0.1）](msg-collab-m0-design.md) | 一句话：任意两个活会话互发消息，收件方无需用户手敲命令即可读到；正文持久、有 ack/reply/close。 |
+| [dia msg M0 使用说明（送达与可读）](msg-collab-m0.md) | 一句话：任意两个活着的 dia 会话可以互发消息；收件方开工就能看到未读，正文不依赖临时文件。 |
 | [dia / yan / dabo 现状总览](overview.md) | 2026-11-03 实测。本条是三方合起来的「现在长什么样」；docs/status.md 管 dia 的阶段与证据， |
 | [Patch：对已安装 persona / kit 的本地补丁](patching.md) | 参考 npm/patch-package，但只作用于本地安装副本，不改上游。 |
 | [Persona / Kit 安装：用 dia 从 git 地址装](persona-install.md) | 命名已定：persona = 可被选中的 agent 定义，kit = 知识/技能/工具内容，profile = 宿主运行环境（dsh）。 |
@@ -71,6 +73,7 @@ Agent 入口：[`llms.txt`](https://github.com/minonl/dia/blob/main/llms.txt)（
 | [主流 Agent 框架设计对照（2026-10）](research/frameworks-survey-2.md) | 对象 13 个：LangGraph、CrewAI、AutoGen/AG2、OpenAI Agents SDK、Google ADK、AWS Strands、Semantic Kernel/MAF、LlamaIndex、Mastra、PydanticAI、smolagents、Claude Agent SDK、Codex SDK。 |
 | [H0 报告：三层架构覆盖分类实验](research/h0/report.md) | 判据来自 dabo-agent/docs/hypotheses.md H0： |
 | [模型边界控制与调优：模式与修正（2026-10）](research/model-boundary-patterns.md) | 范围：客户端侧（适配/中间件/路由/护栏/评测/监控），不做训练与 provider 私有参数。 |
+| [dia msg 2.0：多会话协作的需求 grill](research/msg-collaboration-grill.md) | 一句话：把会话变成一等协作对象——可寻址、可投递、有义务、有依赖、可观测；v1 只做 M0 送达与可读。 |
 | [opencode v2 会话分区调查（Project / Location / Workspace）](research/opencode-session-scoping.md) | 问题：opencode ./ 只看到当前目录的会话，是否是专门设计？和 workspace 有什么关系？ |
 | [复用评审（REUSE REVIEW）— 2026-10-28](review/reuse-review.md) | 触发：用户指出"思考过程有很多拿来主义，没有验证就决定复用"。 |
 | [设计评审 — service 名词与 healthcheck 契约（2026-11-05）](review/service-noun-review-2026-11-05.md) | 评审对象：docs/service-noun.md（提案，commit 3942536）。 |

@@ -3,6 +3,14 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+/** 新布局：版本槽位 = <semver>+g<sha>（同 semver 不同 commit 并存） */
+function slotDir(root: string, id: string, prefix = "0.1.0"): string {
+  const dir = join(root, "personas", id);
+  const name = readdirSync(dir).find((n) => n.startsWith(prefix))!;
+  return join(dir, name);
+}
+
+
 let persona: any;
 let data: string, agents: string, profiles: string, cache: string, work: string;
 
@@ -137,7 +145,7 @@ describe("renderDrift（doctor 用的只读查询）", () => {
   test("产物被手改 / 删除 → changed / missing，且不写盘、不改 dia.lock", () => {
     setup();
     const agent = join(agents, "rdbot.md");
-    const lockPath = join(data, "personas", "rdbot", "0.1.0", "dia.lock");
+    const lockPath = join(slotDir(data, "rdbot"), "dia.lock");
     const lockBefore = readFileSync(lockPath, "utf8");
 
     writeFileSync(agent, "user edited\n");
@@ -210,7 +218,7 @@ describe("render 安全边界", () => {
     const src = join(work, "evil");
     persona.create("evil", { dir: src });
     persona.install(src);
-    const lockDir = join(data, "personas", "evil", "0.1.0");
+    const lockDir = slotDir(data, "evil");
     const m = JSON.parse(readFileSync(join(lockDir, "dia.json"), "utf8"));
     m.entry.opencode = "../../outside.md";
     writeFileSync(join(lockDir, "dia.json"), JSON.stringify(m));

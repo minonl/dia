@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, cpSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -132,6 +132,12 @@ function resolveSource(from: string, ref?: string): { dir: string; commit: strin
   return { dir, commit };
 }
 
+/** 版本槽位：semver + git 短 sha（内容寻址）；无 semver 时只留 sha。同 semver 不同 commit 不覆盖。 */
+function slotOf(version: string | undefined, commit: string): string {
+  const g = commit && commit !== "local" ? `g${commit.slice(0, 12)}` : "local";
+  return version ? `${version}+${g}` : g;
+}
+
 function hashTree(root: string): string {
   const h = createHash("sha256");
   for (const f of walkFiles(root)) {
@@ -144,7 +150,8 @@ export function install(from: string, opts: { ref?: string; host?: string; home?
   const src = resolveSource(from, opts.ref);
   const m = readManifest(src.dir);
   if (m.kind !== "persona") throw new Error("E_MANIFEST: not a persona");
-  const target = resolve(dataDir(), "personas", m.id, m.version);
+  const slot = slotOf(m.version, src.commit);
+  const target = resolve(dataDir(), "personas", m.id, slot);
   if (!target.startsWith(resolve(dataDir(), "personas") + sep)) throw new Error("E_MANIFEST: version escapes install dir");
   const hosts = opts.host ? [opts.host] : (m.hosts ?? ["opencode"]);
   for (const h of hosts) assertHost(h);
@@ -194,12 +201,46 @@ export function install(from: string, opts: { ref?: string; host?: string; home?
   if (opts.dryRun) {
     if (hosts.includes("opencode")) rendered.push(join(opencodeAgents(), `${m.id}.md`));
     if (hosts.includes("codex")) rendered.push(join(codexHome!, ".codex", "AGENTS.md"));
-    return { id: m.id, version: m.version, dir: target, rendered, hash: "dry-run", commit: src.commit, overwrites };
+    return { id: m.id, version: slot, dir: target, rendered, hash: "dry-run", commit: src.commit, overwrites };
   }
 
-  rmSync(target, { recursive: true, force: true });
-  mkdirSync(target, { recursive: true });
-  cpSync(src.dir, target, { recursive: true, dereference: true, filter: (p: string) => !p.split(sep).includes(".git") && !p.split(sep).includes("node_modules") });
+  // 原子安装：staging → 写 lock → rename；同槽位不同内容判冲突，绝不原地覆盖
+  const idDir = resolve(dataDir(), "personas", m.id);
+  mkdirSync(idDir, { recursive: true });
+  const lockPath = join(idDir, ".lock");
+  let lockFd: number | null = null;
+  try {
+    try { lockFd = openSync(lockPath, "wx"); }
+    catch {
+      const st = statSync(lockPath);
+      if (Date.now() - st.mtimeMs > 10 * 60_000) { rmSync(lockPath, { force: true }); lockFd = openSync(lockPath, "wx"); }
+      else throw new Error("E_LOCKED: 另一个安装正在进行（10 分钟后视为陈旧）");
+    }
+    writeFileSync(lockPath, String(process.pid));
+    const staging = join(idDir, `.staging-${process.pid}-${Date.now().toString(36)}`);
+    rmSync(staging, { recursive: true, force: true });
+    mkdirSync(staging, { recursive: true });
+    cpSync(src.dir, staging, { recursive: true, dereference: true, filter: (p: string) => !p.split(sep).includes(".git") && !p.split(sep).includes("node_modules") });
+    const stagingHash = hashTree(staging);
+    let reuseTarget = false;
+    if (existsSync(target)) {
+      const existing = (() => { try { return JSON.parse(readFileSync(join(target, "dia.lock"), "utf8")); } catch { return null; } })();
+      if (existing && existing.hash === stagingHash) {
+        // 幂等：同槽位同内容 → 不重装版本，但仍要跑一遍宿主渲染（--force 时恢复被手改的产物）
+        rmSync(staging, { recursive: true, force: true });
+        reuseTarget = true;
+      } else if (!opts.force) {
+        rmSync(staging, { recursive: true, force: true });
+        throw new Error(`E_VERSION_COLLISION: ${m.id}@${slot} 已存在且内容不同（换 commit/ref 会得到新槽位）`);
+      } else {
+        rmSync(target, { recursive: true, force: true });
+      }
+    }
+    if (!reuseTarget) renameSync(staging, target);
+  } finally {
+    if (lockFd !== null) { try { closeSync(lockFd); } catch {} }
+    try { rmSync(lockPath, { force: true }); } catch {}
+  }
 
   if (hosts.includes("opencode")) {
     mkdirSync(opencodeAgents(), { recursive: true });
@@ -276,10 +317,10 @@ export function install(from: string, opts: { ref?: string; host?: string; home?
   const hash = hashTree(target);
   const renderedHashes: Record<string, string> = {};
   for (const f of rendered) renderedHashes[f] = shaFile(f);
-  writeFileSync(join(target, "dia.lock"), JSON.stringify({ id: m.id, version: m.version, commit: src.commit, source: from, ref: opts.ref ?? null, hash, rendered, renderedHashes, renderedDirs, kits: kitRefs,
+  writeFileSync(join(target, "dia.lock"), JSON.stringify({ id: m.id, version: m.version, slot, commit: src.commit, source: from, ref: opts.ref ?? null, hash, rendered, renderedHashes, renderedDirs, kits: kitRefs,
     content: { knowledge: m.knowledge ?? [], commands: m.commands ?? [], dataRoot: m.data_root ?? null, env: m.env ?? null, rendered: inline, config: appliedConfig },
   }, null, 1));
-  return { id: m.id, version: m.version, dir: target, rendered, hash, commit: src.commit, overwrites };
+  return { id: m.id, version: slot, dir: target, rendered, hash, commit: src.commit, overwrites };
 }
 
 export function list(): { id: string; versions: string[] }[] {
@@ -287,7 +328,33 @@ export function list(): { id: string; versions: string[] }[] {
   if (!existsSync(root)) return [];
   return readdirSync(root, { withFileTypes: true })
     .filter((e) => e.isDirectory())
-    .map((e) => ({ id: e.name, versions: readdirSync(join(root, e.name)).filter((v) => statSync(join(root, e.name, v)).isDirectory()) }));
+    .map((e) => ({ id: e.name, versions: versionDirs(join(root, e.name)) }));
+}
+
+/** 版本目录：新布局 versions/<vid>；旧平铺布局兜底；跳过软链与保留名 */
+export function versionDirs(idDir: string): string[] {
+  const verRoot = join(idDir, "versions");
+  const scan = (root: string, keep: (n: string) => boolean) =>
+    existsSync(root)
+      ? readdirSync(root).filter((n) => {
+          if (!keep(n)) return false;
+          try { return lstatSync(join(root, n)).isDirectory(); } catch { return false; }
+        }).sort()
+      : [];
+  if (existsSync(verRoot)) return scan(verRoot, () => true);
+  const keep = (n: string) => !["current", "latest", "data", "repo", "repo.git", "worktrees", "versions"].includes(n) && !n.startsWith(".staging-") && n !== ".lock";
+  return scan(idDir, keep);
+}
+
+/** 选择器解析：精确 → 唯一前缀（0.1.0 → 0.1.0+g<sha>）；多义报错，不猜 */
+export function resolveVersion(id: string, sel: string): string {
+  const dir = join(dataDir(), "personas", id);
+  const all = versionDirs(dir);
+  if (all.includes(sel)) return sel;
+  const hits = all.filter((v) => v === sel || v.startsWith(sel + "+") || v.startsWith(sel + "-"));
+  if (hits.length === 1) return hits[0];
+  if (hits.length > 1) throw new Error(`E_VERSION_AMBIGUOUS: ${id}@${sel} 命中 ${hits.join(", ")}`);
+  throw new Error(`E_VERSION: ${id}@${sel} 未安装`);
 }
 
 /**
@@ -298,7 +365,9 @@ export function list(): { id: string; versions: string[] }[] {
 export function dirOf(id: string, version?: string): { dir: string; version: string } | null {
   const v = version || active.effective(id)?.version;
   if (!v) return null;
-  const dir = join(dataDir(), "personas", id, v);
+  const flat = join(dataDir(), "personas", id, v);
+  const nested = join(dataDir(), "personas", id, "versions", v);
+  const dir = existsSync(nested) ? nested : flat;
   return existsSync(dir) ? { dir, version: v } : null;
 }
 
@@ -318,11 +387,49 @@ function readMarker(dir: string): { id?: string; version?: string } | null {
   try { return JSON.parse(readFileSync(p, "utf8")); } catch { return null; }
 }
 
+/** semver 比较（忽略 build metadata；prerelease < release） */
+function cmpSemver(a: string, b: string): number {
+  const parse = (v: string) => {
+    const [core, pre] = v.split("+")[0].split("-", 2);
+    return { nums: core.split(".").map(Number), pre: pre ?? null };
+  };
+  const A = parse(a), B = parse(b);
+  for (let i = 0; i < 3; i++) {
+    const x = A.nums[i] || 0, y = B.nums[i] || 0;
+    if (x !== y) return x - y;
+  }
+  if (A.pre && !B.pre) return -1;
+  if (!A.pre && B.pre) return 1;
+  if (A.pre && B.pre) return A.pre.localeCompare(B.pre);
+  return 0;
+}
+
+/** GC：保留 active + 最近 N 个（semver 排序），其余删除；dryRun 只报不删 */
+export function gc(id: string, opts: { keep?: number; dryRun?: boolean; force?: boolean } = {}): { kept: string[]; removed: string[]; skipped: string[] } {
+  const idDir = join(dataDir(), "personas", id);
+  if (!existsSync(idDir)) throw new Error("E_NOT_INSTALLED");
+  const all = versionDirs(idDir);
+  const activeVer = active.effective(id)?.version;
+  const keep = Math.max(1, opts.keep ?? 3);
+  const sorted = [...all].sort((a, b) => cmpSemver(b, a));
+  const keepSet = new Set<string>(sorted.slice(0, keep));
+  if (activeVer) keepSet.add(activeVer);
+  const kept: string[] = [], removed: string[] = [], skipped: string[] = [];
+  for (const v of all) {
+    if (keepSet.has(v)) { kept.push(v); continue; }
+    if (opts.dryRun) { removed.push(v); continue; }
+    rmSync(join(idDir, v), { recursive: true, force: true });
+    removed.push(v);
+  }
+  return { kept, removed, skipped };
+}
+
 export function verify(id: string, version?: string): VerifyResult {
   const idDir = join(dataDir(), "personas", id);
   if (!existsSync(idDir)) throw new Error("E_NOT_INSTALLED");
-  const v = version || readdirSync(idDir).sort().pop()!;
-  const dir = join(idDir, v);
+  const v = version || active.effective(id)?.version || versionDirs(idDir).sort((a, b) => cmpSemver(b, a))[0];
+  if (!v) throw new Error("E_NOT_INSTALLED");
+  const dir = existsSync(join(idDir, "versions", v)) ? join(idDir, "versions", v) : join(idDir, v);
   const lock = JSON.parse(readFileSync(join(dir, "dia.lock"), "utf8"));
   // lock 自身不参与内容哈希
   const files = walkFiles(dir).filter((f) => basename(f) !== "dia.lock");
@@ -686,8 +793,8 @@ export function remove(id: string): { removed: string[]; skipped: string[] } {
   const removed: string[] = [];
   const skipped: string[] = [];
   const allowed = resolve(opencodeAgents(), `${id}.md`);
-  for (const v of readdirSync(idDir)) {
-    const dir = join(idDir, v);
+  for (const v of versionDirs(idDir)) {
+    const dir = existsSync(join(idDir, "versions", v)) ? join(idDir, "versions", v) : join(idDir, v);
     const lockFile = join(dir, "dia.lock");
     if (existsSync(lockFile)) {
       const lock = JSON.parse(readFileSync(lockFile, "utf8"));

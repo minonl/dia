@@ -90,6 +90,7 @@
 | D0.21 | worktree 抽取 `packages/wt` | **完成** | 7 处 python→node；`dia wt`；4 套测试原样迁移全绿 |
 | D0.23 | doctor 平台版本自检 | **完成** | `platform:opencode` / `platform:dsh` 报版本（缺宿主 = warn，不判红）；`tests/active-doctor.test.ts` |
 | D0.44 | 配置迁移走 LLM 任务 | **完成** | `docs/migrations/llm-migration.md`：升级只改声明；迁移=任务+判据+回滚；禁止代码里堆版本分支（安全敏感/原子场景例外） |
+| D0.61 | kit 空内容拒绝 + doctor 只查引用 kit | **完成** | `kit add` 拒绝空清单/空树（E_MANIFEST/E_KIT_EMPTY）；doctor 按 persona lock 的 kits 校验，孤儿不再拖红 |
 | D0.60 | persona --force 覆盖内联内容 / update --force | **完成** | `kit.renderContent` 支持 force（写盘前备份到 `backups/force-*`）；`persona update --force`；版本冲突错误给可执行提示；`tests/kit.test.ts` |
 | D0.59 | 包内容守卫 | **完成** | 单测覆盖 docs 回退；publish workflow 发布前断言 tarball 含 docs/deps.jsonl + docs/platforms/registry.json（防「发完才发现缺文件」） |
 | D0.58 | 推送前敏感扫描 | **完成** | `dia wt adopt` 的 pre-push 扫描新增行：真实家目录/私钥/token 形态；`DIA_WT_GUARD_SCAN=0` 逃生；`adopt.test.sh` 34 pass |

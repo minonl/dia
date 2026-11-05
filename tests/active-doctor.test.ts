@@ -125,6 +125,20 @@ describe("dia doctor", () => {
     expect(r.status).toBe(2);
   });
 
+  test("未引用的孤儿 kit 不拖红 doctor", () => {
+    // 上个用例故意改坏了 AGENTS.md，先恢复，避免被它带成 fail
+    writeFileSync(join(home, ".config/opencode/AGENTS.md"), ["---", "description: yan", "mode: primary", "---", "You are yan.", ""].join("\n"));
+    const orphan = join(data, "kits", "orphan", "0.1.0");
+    mkdirSync(orphan, { recursive: true });
+    writeFileSync(join(orphan, "kit.lock"), JSON.stringify({ id: "orphan", version: "0.1.0", hash: "x", rendered: [
+      { path: join(home, ".agents/skills/orphan"), type: "link", value: "skills/orphan" },
+    ] }));
+    const r = run(["doctor", "--persona", "yan", "--json"]);
+    const d = JSON.parse(r.stdout);
+    expect(d.checks.some((c: any) => String(c.name).includes("orphan"))).toBe(false);
+    expect(d.verdict).not.toBe("fail");
+  });
+
   test("多 persona 且不指定 → 逐个自检，不再整体 E_SCOPE fail", () => {
     // 上一条故意改坏了 AGENTS.md，先恢复，免得本用例被它带成 fail
     writeFileSync(join(home, ".config/opencode/AGENTS.md"), ["---", "description: yan", "mode: primary", "---", "You are yan.", ""].join("\n"));

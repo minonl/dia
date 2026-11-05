@@ -1144,7 +1144,7 @@ wt_default_branch() {
 }
 
 wt_write_hook() {
-  local hooksdir="$1" name="$2" extra="${3:-}"
+  local hooksdir="$1" name="$2" extra="${3:-}" chain="${4:-}"
   cat > "$hooksdir/$name" <<'HOOK'
 #!/usr/bin/env bash
 # dia-wt guard（managed by `dia wt adopt`；勿手改）
@@ -1188,10 +1188,27 @@ case "$name" in
       echo "[dia-wt] 提示：主 checkout 当前在 $branch（建议回到默认分支）" >&2
     fi ;;
 esac
+# 钩子链：原 hooksPath（husky / .githooks / simple-git-hooks）优先，其次仓库默认 hooks 目录
+chain="${DIA_WT_CHAIN_DIR:-}"
+case "$chain" in
+  "") ;;
+  /*) ;;
+  *) chain="$top/$chain" ;;
+esac
+if [ -n "$chain" ] && [ -x "$chain/$name" ] && [ "$chain/$name" != "$0" ]; then exec "$chain/$name" "$@"; fi
 orig="$common/hooks/$name"
 if [ -x "$orig" ] && [ "$orig" != "$0" ]; then exec "$orig" "$@"; fi
 exit 0
 HOOK
+  if [ -n "$chain" ]; then
+    python3 - "$hooksdir/$name" "$chain" <<'PYCHAIN'
+import sys
+p, chain = sys.argv[1], sys.argv[2]
+s = open(p).read()
+s = s.replace('chain="${DIA_WT_CHAIN_DIR:-}"', 'chain="${DIA_WT_CHAIN_DIR:-%s}"' % chain.replace('\\', '\\\\').replace('"', '\\"'))
+open(p, "w").write(s)
+PYCHAIN
+  fi
   if [ -n "$extra" ]; then
     python3 - "$hooksdir/$name" "$extra" <<'PYGT'
 import sys, re
@@ -1291,20 +1308,23 @@ cmd_adopt() {
   local savedPrev=""
   [ -f "$cfg" ] && savedPrev="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("hooksPrevious") or "")' "$cfg" 2>/dev/null || true)"
   [ "$prev" = "$hooksdir" ] && prev="$savedPrev"
+  # 钩子链目标：首次 adopt 前的 hooksPath（husky/.githooks/…）；没有则用仓库默认 hooks 目录
+  local chain="$prev"
+  [ -n "$chain" ] || chain="$common/hooks"
   [ -f "$cfg" ] && cp "$cfg" "$cfgdir/config.json.bak.$(date +%s)"
-  python3 - "$cfg" "$repo" "$def" "$template" "$hooksdir" "$prev" <<'PY'
+  python3 - "$cfg" "$repo" "$def" "$template" "$hooksdir" "$prev" "$chain" <<'PY'
 import json, sys, datetime
-cfg, repo, br, tmpl, hooks, prev = sys.argv[1:7]
+cfg, repo, br, tmpl, hooks, prev, chain = sys.argv[1:8]
 data = {
   "schema": 1, "repo": repo, "defaultBranch": br, "template": tmpl,
-  "hooksPath": hooks, "hooksPrevious": prev or None,
+  "hooksPath": hooks, "hooksPrevious": prev or None, "hooksChain": chain,
   "adoptedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
 }
 json.dump(data, open(cfg, "w"), ensure_ascii=False, indent=1)
 PY
-  wt_write_hook "$hooksdir" pre-commit "$def"
-  wt_write_hook "$hooksdir" pre-push "$def"
-  wt_write_hook "$hooksdir" post-checkout "$def"
+  wt_write_hook "$hooksdir" pre-commit "$def" "$chain"
+  wt_write_hook "$hooksdir" pre-push "$def" "$chain"
+  wt_write_hook "$hooksdir" post-checkout "$def" "$chain"
   git -C "$repo" config --local core.hooksPath "$hooksdir"
   echo "adopted：$repo（hooksPath=$hooksdir）"
 }

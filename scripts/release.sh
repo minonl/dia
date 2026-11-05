@@ -18,14 +18,23 @@ const [a,b,c]=require("./package.json").version.split(".").map(Number);
 const b2=process.argv[1];
 const out=b2==="patch"?[a,b,c+1]:b2==="minor"?[a,b+1,0]:b2==="major"?[a+1,0,0]:b2.split(".").map(Number);
 console.log(out.join("."));' "$BUMP")"
+REPO="${REPO:-minonl/dia}"
 echo "bump: $OLD -> $NEW"
 if [ "$DRY" = 1 ]; then echo "dry-run: 将改 package.json、提交、打 tag v$NEW、推 origin、gh release create"; exit 0; fi
 
 node -e 'const fs=require("fs");const p=require("./package.json");p.version=process.argv[1];fs.writeFileSync("package.json",JSON.stringify(p,null,2)+"\n")' "$NEW"
+# main 已开 branch protection（enforce_admins）：版本提交走 PR，不直推
+BR="chore/release-v$NEW"
+git checkout -q -b "$BR"
 git add package.json && git commit -q -m "chore(release): v$NEW"
+git push -q -u origin "$BR"
+gh pr create --repo "$REPO" --head "$BR" --base main --title "chore(release): v$NEW" --body "版本号 v$NEW；合后打 tag 并触发 publish。" >/dev/null
+gh pr checks --repo "$REPO" --watch --interval 10 >/dev/null
+gh pr merge --repo "$REPO" --squash --delete-branch >/dev/null
+git checkout -q main && git pull --ff-only -q
 git tag -a "v$NEW" -m "v$NEW"
-git push origin main "v$NEW"
-gh release create "v$NEW" --repo "${REPO:-minonl/dia}" --generate-notes --title "v$NEW"
+git push origin "v$NEW"
+gh release create "v$NEW" --repo "$REPO" --generate-notes --title "v$NEW"
 echo "released v$NEW"
 # npm 发布由 .github/workflows/publish.yml 在 release published 时用 OIDC 完成（仓库不放 token）
 echo "npm publish: 由 publish.yml 触发（需先在 npmjs 配好 Trusted Publisher）"

@@ -68,7 +68,10 @@ jobs:
         run: |
           npm pack --dry-run --json > /tmp/pack.json
           node -e '
-            const files = require("/tmp/pack.json")[0].files.map((f) => f.path);
+            const j = require("/tmp/pack.json");
+            // npm 12 返回 { "<name>": { files: [...] } }；旧版返回 [{ files: [...] }]。
+            const pkg = Array.isArray(j) ? j[0] : j[Object.keys(j)[0]];
+            const files = (pkg && pkg.files ? pkg.files : []).map((f) => f.path);
             const need = ["docs/deps.jsonl", "docs/platforms/registry.json"];
             const missing = need.filter((n) => !files.includes(n));
             if (missing.length) { console.error("tarball missing:", missing.join(", ")); process.exit(1); }

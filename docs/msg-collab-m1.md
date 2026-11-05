@@ -34,3 +34,33 @@ dia unclaim install.sh     # 释放自己的
 - 这是 **advisory**：不保证别人真的让路，也不自动改代码/合并；
 - 不做全 worktree 锁；文件系统写操作仍以人工/MR 协调为准；
 - M1a 不含 `dia in` 提示、pre-commit/MR 强制点（留到后续）。
+
+---
+
+# dia task 依赖 / dia graph（M1b）
+
+## 任务声明
+
+```bash
+dia task add "实现 X" --owner ses_... --depends t-a,t-b --touches src/x.ts,docs/x.md --judge "bun test"
+dia task link t-xxx --depends t-new --touches src/y.ts
+dia task link t-xxx --remove-depends t-old
+dia task done t-xxx --evidence "bun test 通过" --reason done
+```
+
+- `owner` / `deps` / `touches` 都是可选；旧 task 没有这些字段时自动为 `[]`。
+- `done` 仍强制 judge + evidence；`--reason` 只记录 closure_reason，不新增终态。
+- `pending`/`blocked` 用 `task status <id> blocked --blocked-reason ...`。
+
+## 依赖图
+
+```bash
+dia graph --json
+dia graph                 # 人类可读：task → deps + claims
+dia graph --json --task t-xxx
+```
+
+- 只输出 **declared** 边：`depends_on` / `touches` / `claims`；
+- `blocked_by` 只在 task 节点里做派生提示，不是边；
+- 任务依赖成环：`cycles` 非空，退出码 **3**（参数错仍是 2）；
+- `--task` 只输出该任务的直接依赖/touches/claim 邻居，不做全图闭包。

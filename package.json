@@ -29,7 +29,8 @@
     "bench:kb": "bun experiments/kb-bench.ts",
     "golden:kb": "bun experiments/kb-golden.ts",
     "docs:index": "node scripts/docs-index.mjs",
-    "docs:check": "node scripts/docs-index.mjs --check"
+    "docs:check": "node scripts/docs-index.mjs --check",
+    "docs:links": "node scripts/docs-link-check.mjs"
   },
   "license": "MIT",
   "packageManager": "pnpm@12.5.1",

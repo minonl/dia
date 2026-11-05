@@ -81,7 +81,8 @@ function build() {
   }
   const order = [...CATEGORY_ORDER.filter((c) => groups.has(c)), ...[...groups.keys()].filter((c) => !CATEGORY_ORDER.includes(c))];
   let md = "# dia 文档菜单\n\n> 本文件由 `scripts/docs-index.mjs` 生成，**不要手改**；改完文档跑 `bun run docs:index`。\n\n";
-  md += "Agent 入口：[`llms.txt`](../llms.txt)（按需全量：[`llms-full.txt`](../llms-full.txt)）\n\n";
+  const repoBase = `https://github.com/${REPO}/blob/${BRANCH}`;
+  md += `Agent 入口：[\`llms.txt\`](${repoBase}/llms.txt)（按需全量：[\`llms-full.txt\`](${repoBase}/llms-full.txt)）\n\n`;
   for (const c of order) {
     md += `## ${c}\n\n| 文档 | 一句话 |\n|---|---|\n`;
     for (const e of groups.get(c).sort((a, b) => a.rel.localeCompare(b.rel))) {

@@ -61,6 +61,9 @@ dia version && dia doctor
 > 打 release 即触发 `.github/workflows/publish.yml`。npmjs 侧需配 Trusted Publisher：
 > repo `minonl/dia`、workflow `publish.yml`。
 > **私有仓也能发**；只是 npm 不为私有仓生成 **provenance**（官方限制），workflow 会自动降级。
+>
+> **首次发布必须手动一次**：npm 的 Trusted Publishing 只能绑定**已存在**的包，
+> 新包用 OIDC 首发必然 `404`。先 `npm publish --access public` 建包，之后的版本走 OIDC。
 
 ### 从仓库（开发/本地）
 

@@ -45,6 +45,7 @@ Agent 入口：[`llms.txt`](https://github.com/minonl/dia/blob/main/llms.txt)（
 |---|---|
 | [凭据管理（现状 + 调研待办）](security/credentials.md) | 2026-11-03。待调研，不是方案定稿。触发：bw CLI 已用于入库，但"按账号分组"决定放行粒度， |
 | [dia Public Release Gate](security/public-release.md) | 状态：BLOCKED until audit（2026-10-30） |
+| [团队快照隔离评估（2026-11-05）](security/snapshot-isolation.md) | 现状：verifier / redteam 跑在系统临时目录的副本里；runs/<id> 0700；gates 现场重跑判据。 |
 
 ## 迁移
 

@@ -34,6 +34,7 @@ export function candidates(): string[] {
   if (process.env.DIA_DEPS_FILE) out.push(process.env.DIA_DEPS_FILE);
   const install = paths.installDir();
   out.push(join(install, "registry", "deps.jsonl"));
+  out.push(join(install, "docs", "deps.jsonl"));  // npm 包内没有 registry/，回退 docs
   out.push(join(process.cwd(), "docs", "deps.jsonl"));
   return out;
 }

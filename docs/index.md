@@ -2,7 +2,7 @@
 
 > 本文件由 `scripts/docs-index.mjs` 生成，**不要手改**；改完文档跑 `bun run docs:index`。
 
-Agent 入口：[`llms.txt`](https://github.com/minonl/dia/blob/main/llms.txt)（按需全量：[`llms-full.txt`](https://github.com/minonl/dia/blob/main/llms-full.txt)）
+Agent 入口：[`llms.txt`](https://github.com/minonl/dia/blob/main/llms.txt)（全量 `llms-full.txt` 本地生成，**不入库**：`bun run docs:index`）
 
 ## 现状
 

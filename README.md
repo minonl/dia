@@ -8,7 +8,7 @@
 ## 文档入口（人 / agent）
 
 - 人：菜单 [`docs/index.md`](docs/index.md)（由脚本生成，开 GitHub Pages 可直接当站点）
-- agent：[`llms.txt`](llms.txt)（摘要 + 链接）、[`llms-full.txt`](llms-full.txt)（全量拼接）
+- agent：[`llms.txt`](llms.txt)（摘要 + 链接）；全量 `llms-full.txt` 本地运行 `bun run docs:index` 生成（不入库）
 - 生成/校验：`bun run docs:index` / `bun run docs:check`（CI 会跑 check，避免漂移）
 
 > 定位：dabo-agent（个人域）与 yan-agent（工作域）共用的底层能力。

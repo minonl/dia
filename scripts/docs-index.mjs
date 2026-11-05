@@ -4,7 +4,7 @@
 // 产出（都在仓库根，除 docs/index.md）：
 //   docs/index.md   人读菜单（GitHub Pages 不可用时也能当导航；开 Pages 后直接可用）
 //   llms.txt        agent 入口（llms.txt 约定：标题 + 一句话 + 链接）
-//   llms-full.txt   全量拼接（agent 一次性读取；体积大，按需）
+//   llms-full.txt   全量拼接（agent 一次性读取；体积大，**不入库**，本地生成）
 //
 // 用法：
 //   node scripts/docs-index.mjs          # 生成
@@ -82,7 +82,7 @@ function build() {
   const order = [...CATEGORY_ORDER.filter((c) => groups.has(c)), ...[...groups.keys()].filter((c) => !CATEGORY_ORDER.includes(c))];
   let md = "# dia 文档菜单\n\n> 本文件由 `scripts/docs-index.mjs` 生成，**不要手改**；改完文档跑 `bun run docs:index`。\n\n";
   const repoBase = `https://github.com/${REPO}/blob/${BRANCH}`;
-  md += `Agent 入口：[\`llms.txt\`](${repoBase}/llms.txt)（按需全量：[\`llms-full.txt\`](${repoBase}/llms-full.txt)）\n\n`;
+  md += `Agent 入口：[\`llms.txt\`](${repoBase}/llms.txt)（全量 \`llms-full.txt\` 本地生成，**不入库**：\`bun run docs:index\`）\n\n`;
   for (const c of order) {
     md += `## ${c}\n\n| 文档 | 一句话 |\n|---|---|\n`;
     for (const e of groups.get(c).sort((a, b) => a.rel.localeCompare(b.rel))) {
@@ -95,7 +95,7 @@ function build() {
   const base = `https://github.com/${REPO}/blob/${BRANCH}/docs/`;
   let llms = `# dia\n\n> dia（嗲）：superagent / agent-team 的生成与维护工具；控制面是确定性 CLI，agent 面在独立 persona（dia-evoler）。\n\n`;
   llms += `## 说明\n\n- 文档单一来源：仓库 \`docs/**.md\`；本文件由 \`scripts/docs-index.mjs\` 生成。\n`;
-  llms += `- 全量内容（无摘要）：\`https://github.com/${REPO}/blob/${BRANCH}/llms-full.txt\`\n\n## Docs\n\n`;
+  llms += `- 全量内容（无摘要）：本地运行 \`bun run docs:index\` 生成 \`llms-full.txt\`（**不入库**，避免生成物重复与泄漏面）\n\n## Docs\n\n`;
   for (const c of order) {
     llms += `### ${c}\n\n`;
     for (const e of groups.get(c).sort((a, b) => a.rel.localeCompare(b.rel))) {
@@ -119,8 +119,11 @@ function build() {
 
 const outputs = build();
 const check = process.argv.includes("--check");
+// llms-full.txt 是本地生成物（不入库）：--check 只校验入库的 docs/index.md 与 llms.txt。
+const CHECKED = new Set(["docs/index.md", "llms.txt"]);
 let drift = 0;
 for (const [rel, content] of Object.entries(outputs)) {
+  if (check && !CHECKED.has(rel)) continue;
   const p = join(ROOT, rel);
   const old = existsSync(p) ? readFileSync(p, "utf8") : "";
   if (old === content) continue;

@@ -16,7 +16,7 @@
   （`session-1`、`dws-hub 实时链路修复（…）`），不是稳定地址（实测）。
 - `dia agents list` 为空、`~/.dia/agents` 不存在；没有任何会话在启动时注册自己（实测）。
 - 今天 15:00 后仍有 12 个会话在跑，全部共用 `~`，其中 ≥4 个会话在动 dia 仓（推断，按标题）。
-- 真正跨会话的约定发生在 `~/.yan-agent/inbox/to-yan.md`、`to-levm.md` 这类手写 Markdown 里：
+- 真正跨会话的约定发生在 `<agent-data-root>/inbox/to-agent-a.md`、`to-node-b.md` 这类手写 Markdown 里：
   谁改哪个路径、谁让路、`STATUS: done` 信号——**这些字段 `dia msg` 都没有强制表达**（实测）。
 
 因此需求不是“给 msg 加 from/to 字段”（信封里其实已有 from/to），而是：
@@ -49,7 +49,7 @@
 6. **要有回滚判据**：两周内执行过 `dia in` 的会话 <30% ⇒ 回滚到「手写 inbox + 硬规则」，不硬撑。
 7. **框架能力 vs agent 内容**（2026-11-05 用户校正）：协议/存储/CLI/宿主适配器归 **dia 框架**；
    `msg` 作为 **dia 默认 kit** 随每个 agent 安装（何时/怎么用也在 kit 里），默认开启、可显式关闭；
-   yan-agent 只做额外强化，不承载插件/适配器代码。
+   example-agent 只做额外强化，不承载插件/适配器代码。
 
 ---
 
@@ -75,14 +75,14 @@
 
 - 15:00 后 **12 个会话共用 `~`**；全天该目录 33 个会话（13 个顶层）（实测）。
 - 同一时刻至少 4 个会话在动 dia 仓（推断，按标题）：数据根/安装拆分、persona 目录、`dia wt adopt`、本需求。
-  其中“数据根迁移 → 安装脚本拆分”是**真实的前后依赖**：`to-levm.md` 明确写了“我让路/别碰哪些文件”，
+  其中“数据根迁移 → 安装脚本拆分”是**真实的前后依赖**：`to-node-b.md` 明确写了“我让路/别碰哪些文件”，
   但这是人手写约定，不是机器可检查的依赖（实测文件内容）。
 - `dia msg` 的 4 条消息正好对应这些协作：一条 handoff（service 名词提案）、一条进度同步、
   一条时序问题（“我该等还是继续装 review 服务？”）、一条 dws-hub 迁移提醒——**全部停在 pending**（实测）。
 
 ### 1.2 手写 inbox 已经承担了协作协议
 
-`~/.yan-agent/inbox/to-levm.md` / `to-yan.md` 里有这些字段（实测）：
+`<agent-data-root>/inbox/to-node-b.md` / `to-agent-a.md` 里有这些字段（实测）：
 
 - `STATUS: done @ 2026-11-05T16:00+08:00`
 - “我当前进度 / 会碰的文件 / **不会碰**：… / 冲突面提醒：如果你也要改 install.sh 请先在这里写一行，我让路”
@@ -231,14 +231,14 @@
 | **D3** | Web（可选） | 只读 + SSE/轮询；跨节点只读汇总；移动端可看 attention | 不开本地端口也能通过 SSH 隧道看 |
 | **D4** | 事实与推断分离 | 图不得把推断边显示成事实；点击节点能追到证据（文件/命令/消息） | 推断边有标记；证据可回源 |
 
-### E. 多机（本机 + levm）
+### E. 多机（本机 + node-b）
 
 | ID | 需求 | 最低可接受行为 | 判据 |
 |---|---|---|---|
-| **E1** | 跨节点寻址 | `session@node` / `role@project@node`；节点注册、心跳、能力 | 本机可向 levm 发消息并收到 ack |
+| **E1** | 跨节点寻址 | `session@node` / `role@project@node`；节点注册、心跳、能力 | 本机可向 node-b 发消息并收到 ack |
 | **E2** | 离线队列 | 目标离线时消息落 outbox，上线后补投；幂等去重 | 断网 50 条，恢复后不重不漏 |
 | **E3** | 状态合并 | 单写者事件日志 + Lamport/节点 id 排序；work item 只在 owner 节点可写；handoff 用确定性 id | 分区两侧各自推进后合并，无覆盖、无重复 |
-| **E4** | 传输 | 默认 SSH store-and-forward（复用现有免密/隧道）；可选 hub  federation；不依赖共享文件系统 | 无公网、GitHub 不通的 levm 也能工作 |
+| **E4** | 传输 | 默认 SSH store-and-forward（复用现有免密/隧道）；可选 hub  federation；不依赖共享文件系统 | 无公网、GitHub 不通的 node-b 也能工作 |
 | **E5** | 安全 | 消息正文=数据不是指令；节点间认证；敏感字段不入图/日志/URL；env 红线不破 | 注入测试不执行消息内指令；图里无凭据 |
 
 ### F. 兼容与迁移
@@ -390,7 +390,7 @@ nx 的图是“项目/文件依赖 + 受影响范围”；dia 的图是“会话
 | **M2 义务扩展** | 扩 `dia task`：owner/deps/touches/closure_reason；handoff 原子化；`todo`↔`task` 映射 | 任意任务可回答“谁负责/卡在哪/谁验收”；交接后无悬空；非法完成被拒 | M1 |
 | **M3 图与 TUI** | `dia graph --json` + TUI 四视图 + attention | 固定 fixture（12 会话/30 边/5 阻塞）首屏零滚动含全部阻塞；推断边分色；脚本断言 | M2 |
 | **M4 宿主适配** | 先验证 opencode `session_inbox/steer`；dsh ACP；codex；tmux 兜底；降级矩阵 | 每个宿主一条端到端；不可注入标 `unaddressable`；无 tmux 也能用 | M0 |
-| **M5 hub 与多机（可选）** | socket 激活 hub、SSH store-and-forward、Lamport 事件、离线队列 | 本机↔levm 互发；`DIA_TRANSPORT=drop` 注入断网 50 条，恢复后 60s 内 id 集合相等且恰好一次；分区合并无覆盖 | M4 + 真实跨机需求 |
+| **M5 hub 与多机（可选）** | socket 激活 hub、SSH store-and-forward、Lamport 事件、离线队列 | 本机↔node-b 互发；`DIA_TRANSPORT=drop` 注入断网 50 条，恢复后 60s 内 id 集合相等且恰好一次；分区合并无覆盖 | M4 + 真实跨机需求 |
 | **M6 Web（可选）** | 只读 SSE 页面 + 跨节点汇总 | 手机/另一台机器可看 attention；无凭据泄露 | M3 |
 
 **回滚判据**：M0 上线两周后，执行过 `dia in` 的会话 <30% ⇒ 判定“没人用”，回滚到「手写 inbox + 硬规则」，
@@ -425,7 +425,7 @@ nx 的图是“项目/文件依赖 + 受影响范围”；dia 的图是“会话
 4. **Q4 daemon**：不引入 / socket 激活 / 常驻？
    - 推荐：**v1 不引入**；先验证 opencode `session_inbox/steer`，不行再考虑 socket 激活。
 5. **Q5 多机传输**：SSH store-and-forward / hub 联邦 / 共享目录？
-   - 推荐：**SSH 优先**（levm 无 GitHub 出口）；共享目录否决；等真实跨机 handoff 再做。
+   - 推荐：**SSH 优先**（node-b 无 GitHub 出口）；共享目录否决；等真实跨机 handoff 再做。
 6. **Q6 协调权限**：协调者只能建议，还是可自动排序/催办/升级？
    - 推荐：**低风险自动（催办/排序建议/升级），高风险留人（改代码/合并/发布）**。
 7. **Q7 数据归属**：扩展现有 `dia task`，还是新建 collab store？
@@ -442,7 +442,7 @@ nx 的图是“项目/文件依赖 + 受影响范围”；dia 的图是“会话
 - opencode 能否在“回合开始”注入任意文本：**已实测 `session_inbox` 表存在 `delivery=steer`（本机 DB schema）**，
   但“外部写入是否被消费、是否需要重启/唤醒”未验证；这是 M0 的关键实验。
 - codex 当前是否有 ACP/headless 注入能力（本机未安装，未验证）。
-- levm 与本机 SSH 连通性、端口/隧道策略（需实测，不能假设）。
+- node-b 与本机 SSH 连通性、端口/隧道策略（需实测，不能假设）。
 - `dia wt scope` 的 `session` 字段目前为 null；把它接上会话 id 的成本（代码已存在雏形）。
 - 现有 4 条消息的 agent 目录名 → session id 的映射规则（中文标题、空格、重名）；是否需要人工映射表。
 

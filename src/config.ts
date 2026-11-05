@@ -12,9 +12,10 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import * as paths from "./paths.ts";
 
 const home = () => process.env.DIA_HOME || homedir();
-const dataDir = () => process.env.DIA_DATA_DIR || join(home(), ".local", "share", "dia");
+const dataDir = () => paths.diaHome();
 const expand = (p: string) => (p === "~" ? home() : p.startsWith("~/") ? join(home(), p.slice(2)) : p);
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 

@@ -2,8 +2,9 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync, statSync
 import { countCalls, lastCall } from "./runtime.ts";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import * as paths from "./paths.ts";
 
-const STATE = process.env.DIA_STATE_DIR || join(homedir(), ".local", "state", "dia");
+const STATE = paths.stateDir();
 const FILE = join(STATE, "freeze.json");
 
 export interface FreezeState {

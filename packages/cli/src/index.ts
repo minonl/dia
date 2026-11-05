@@ -7,6 +7,7 @@ import { countCalls } from "../../../src/runtime.ts";
 import { resumeCard } from "../../../src/resume.ts";
 import * as persona from "../../../src/persona.ts";
 import * as msg from "../../../src/msg.ts";
+import * as paths from "../../../src/paths.ts";
 import * as agents from "../../../src/agents.ts";
 import * as tmux from "../../../src/tmux.ts";
 import * as msgAcp from "../../../src/msg-acp.ts";
@@ -157,7 +158,7 @@ usage:
   dia persona list|verify|remove|show <id>|use <id>[@ver]
   dia persona path [<id>[@<ver>]] [--json]   # 打印生效版本目录（服务/脚本取代码入口）
   dia persona check <id>|update <id> [--ref REF]
-  dia doctor [--persona ID] [--json]
+  dia doctor [--persona ID] [--paths] [--json]
   dia deps list [--json] [--file PATH]        # 派生视图：登记 + 实测
   dia deps record --id ID --kind K --version V [--resolved R] [--role required|optional] [--result pass|fail|unknown] [--evidence P]
   dia env list|check [KEY…] | env [--dry-run] [--redact] <cmd…>
@@ -517,7 +518,7 @@ async function agentsCli(argv: string[]): Promise<number> {
 }
 
 function spawnDetachedDelivery(args: string[]): { pid?: number; log: string } {
-  const root = process.env.DIA_MSG_ROOT || join(homedir(), ".local", "share", "dia", "msg");
+  const root = msg.msgRoot();
   const agent = positional(args)[0] || "unknown";
   const id = positional(args)[1] || `unknown-${Date.now()}`;
   const dir = join(root, agent);
@@ -933,7 +934,7 @@ async function kitCli(argv: string[]): Promise<number> {
 
 /** `dia wt …` → packages/wt/bin/dia-wt（bash 实现，与 dia-job 同模式）。 */
 function wtCli(argv: string[]): number {
-  const home = resolvePath(process.env.DIA_HOME_INSTALL || `${process.env.HOME}/.local/share/dia`, "packages/wt/bin/dia-wt");
+  const home = resolvePath(paths.installDir(), "packages/wt/bin/dia-wt");
   const candidates = [
     process.env.DIA_WT_BIN,
     home,
@@ -1158,6 +1159,14 @@ export async function main(rawArgv: string[]): Promise<number> {
     }
   }
   if (cmd === "doctor") {
+    if (has(argv, "--paths")) {
+      const roots = {
+        data: paths.diaHome(), personas: paths.personasDir(), msg: paths.msgRoot(),
+        agents: paths.agentsRoot(), state: paths.stateDir(), cache: paths.cacheRoot(), job: paths.jobRoot(),
+      };
+      out(has(argv, "--json") ? JSON.stringify(roots, null, 1) : Object.entries(roots).map(([k, v]) => `${k.padEnd(9)} ${v}`).join("\n"));
+      return 0;
+    }
     const r = await doctor.run({ persona: flag(argv, "--persona") });
     if (has(argv, "--json")) out(JSON.stringify(r, null, 1));
     else {

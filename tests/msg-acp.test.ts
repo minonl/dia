@@ -9,7 +9,7 @@ const cli = join(import.meta.dir, "..", "packages", "cli", "src", "index.ts");
 const mock = join(import.meta.dir, "fixtures", "mock-acp.mjs");
 const run = (args: string[]) => spawnSync("bun", [cli, ...args], {
   encoding: "utf8",
-  env: { ...process.env, DIA_AGENTS_ROOT: agentsRoot, DIA_MSG_ROOT: msgRoot, DIA_ACP_TIMEOUT: "15000" },
+  env: { ...process.env, DIA_ROOT: agentsRoot, DIA_ACP_TIMEOUT: "15000" },
 });
 
 beforeAll(() => {

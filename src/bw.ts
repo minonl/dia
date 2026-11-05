@@ -14,7 +14,7 @@ import { execFileSync } from "node:child_process";
 import { connect } from "node:net";
 
 const home = () => process.env.DIA_HOME || homedir();
-const dataDir = () => process.env.DIA_DATA_DIR || join(home(), ".local", "share", "dia");
+const dataDir = () => paths.diaHome();
 
 export function sessionFile(): string {
   return process.env.DIA_BW_SESSION_FILE || join(dataDir(), "state", "bw.session");
@@ -157,6 +157,7 @@ export function parseMaps(raw: string[]): Map[] {
 // ---------------------------------------------------------------------------
 import { createServer } from "node:net";
 import { appendFileSync } from "node:fs";
+import * as paths from "./paths.ts";
 
 export function socketFile(): string {
   return process.env.DIA_BW_SOCKET || join(dataDir(), "state", "bw.sock");

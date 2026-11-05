@@ -22,10 +22,11 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { execFileSync } from "node:child_process";
 import * as config from "./config.ts";
+import * as paths from "./paths.ts";
 
 // 目录在调用时解析（不在模块加载时固化）：测试与多 persona 场景下 env 会变。
-const dataDir = () => process.env.DIA_DATA_DIR || join(homedir(), ".local", "share", "dia");
-const cacheDir = () => process.env.DIA_CACHE_DIR || join(homedir(), ".cache", "dia", "src");
+const dataDir = () => paths.diaHome();
+const cacheDir = () => paths.srcCacheDir();
 const homeDir = () => process.env.DIA_HOME || homedir();
 
 export interface FileArtifact { from: string; to: string }

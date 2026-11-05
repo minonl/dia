@@ -6,9 +6,10 @@ import { basename, dirname, join, relative, resolve } from "node:path";
 import { zstdDecompressSync } from "node:zlib";
 import { redact } from "./redact.ts";
 import { openDb } from "./sqlite.ts";
+import * as paths from "./paths.ts";
 
 const CACHE = join(homedir(), ".cache", "dia", "ingest");
-const DATA = join(homedir(), ".local", "share", "dia", "ingest");
+const DATA = paths.ingestDir();
 
 export interface Episode {
   schema_v: 1;

@@ -6,8 +6,9 @@ import { createHash } from "node:crypto";
 import { append as auditAppend } from "./audit.ts";
 import { countCalls, callsFile as runtimeCallsFile } from "./runtime.ts";
 import { status as freezeStatus } from "./freeze.ts";
+import * as paths from "./paths.ts";
 
-const DATA = process.env.DIA_DATA_DIR || join(homedir(), ".local", "share", "dia");
+const DATA = () => paths.diaHome();
 
 export interface RunOpts {
   session: string;
@@ -72,7 +73,7 @@ export function runWrapped(argv: string[], opts: RunOpts): RunResult {
   } catch { audit_written = false; }
 
   try {
-    mkdirSync(join(DATA, "runtime"), { recursive: true });
+    mkdirSync(join(DATA(), "runtime"), { recursive: true });
     appendFileSync(runtimeCallsFile(), JSON.stringify({
       run_id, session: opts.session, tool, params_hash,
       ts: new Date(started).toISOString(), duration_ms, exit,

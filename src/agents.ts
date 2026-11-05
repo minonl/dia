@@ -7,9 +7,10 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, w
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
+import * as paths from "./paths.ts";
 
-const dataDir = () => process.env.DIA_DATA_DIR || join(homedir(), ".local", "share", "dia");
-export const agentsRoot = () => process.env.DIA_AGENTS_ROOT || join(dataDir(), "agents");
+const dataDir = () => paths.diaHome();
+export const agentsRoot = () => paths.agentsRoot();
 
 export interface AgentRecord {
   agent: string;

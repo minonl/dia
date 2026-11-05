@@ -9,7 +9,7 @@ let root: string, msgRoot: string;
 const cli = join(import.meta.dir, "..", "packages", "cli", "src", "index.ts");
 const run = (args: string[]) => spawnSync("bun", [cli, ...args], {
   encoding: "utf8",
-  env: { ...process.env, DIA_AGENTS_ROOT: root, DIA_MSG_ROOT: msgRoot },
+  env: { ...process.env, DIA_ROOT: root },
 });
 
 beforeAll(() => {
@@ -20,14 +20,14 @@ beforeAll(() => {
 describe("dia agents 注册表", () => {
   test("register / list / unregister", () => {
     expect(run(["agents", "register", "--agent", "reviewer", "--host", "codex", "--cwd", "/tmp"]).status).toBe(0);
-    expect(existsSync(join(root, "reviewer.json"))).toBe(true);
+    expect(existsSync(join(root, "agents", "reviewer.json"))).toBe(true);
     const list = JSON.parse(run(["agents", "list", "--json"]).stdout);
     expect(list.map((r: any) => r.agent)).toEqual(["reviewer"]);
     // 没有 pane 的记录视为离线，投递必须失败（不猜）
     const off = JSON.parse(run(["agents", "list", "--live", "--json"]).stdout);
     expect(off[0].live).toBe(false);
     expect(run(["agents", "unregister", "reviewer"]).status).toBe(0);
-    expect(existsSync(join(root, "reviewer.json"))).toBe(false);
+    expect(existsSync(join(root, "agents", "reviewer.json"))).toBe(false);
   });
 
   test("deliver 对离线 agent 报 E_OFFLINE", () => {

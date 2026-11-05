@@ -6,11 +6,12 @@ import { AcpClient } from "./acp.ts";
 import { costOf, loadPrices } from "./pricing.ts";
 import { execFileSync } from "node:child_process";
 import { zstdDecompressSync } from "node:zlib";
+import * as paths from "./paths.ts";
 
-const DATA = process.env.DIA_DATA_DIR || join(homedir(), ".local", "share", "dia");
-const RUNS = join(DATA, "runs");
+const DATA = () => paths.diaHome();
+const RUNS = () => join(DATA(), "runs");
 
-export function runDir(id: string) { return join(RUNS, id); }
+export function runDir(id: string) { return join(RUNS(), id); }
 
 export function runMock(id: string) {
   const t = get(id);
@@ -171,8 +172,8 @@ function recordModelCall(taskId: string, role: string, model: string | null, usa
   const row = { ts: new Date().toISOString(), task_id: taskId, role, model, input_tokens: input, output_tokens: output, total_tokens: total, reported_total_tokens: reported, cost_usd: c.usd, priced: c.priced };
   acc.rows.push(row); acc.input += input; acc.output += output; acc.total += total;
   if (c.usd !== null) acc.cost += c.usd; else acc.unpriced++;
-  mkdirSync(join(DATA, "runtime"), { recursive: true });
-  appendFileSync(join(DATA, "runtime", "model-calls.jsonl"), JSON.stringify(row) + "\n");
+  mkdirSync(join(DATA(), "runtime"), { recursive: true });
+  appendFileSync(join(DATA(), "runtime", "model-calls.jsonl"), JSON.stringify(row) + "\n");
 }
 
 const SENSITIVE = [

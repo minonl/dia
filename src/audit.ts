@@ -6,8 +6,9 @@ import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { freeze } from "./freeze.ts";
+import * as paths from "./paths.ts";
 
-const DATA = process.env.DIA_DATA_DIR || join(homedir(), ".local", "share", "dia");
+const DATA = () => paths.diaHome();
 
 export interface AuditEvent {
   /** 1-based position in the append-only log (added with the hash chain). */
@@ -39,7 +40,7 @@ export const HASH_LEN = 16;
 export const GENESIS = "0".repeat(HASH_LEN);
 
 export function auditDir(): string {
-  return join(DATA, "audit");
+  return join(DATA(), "audit");
 }
 
 export function auditFile(): string {

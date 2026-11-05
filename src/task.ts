@@ -2,8 +2,9 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
+import * as paths from "./paths.ts";
 
-const DATA = process.env.DIA_DATA_DIR || join(homedir(), ".local", "share", "dia");
+const DATA = () => paths.diaHome();
 export type Status = "todo" | "doing" | "blocked" | "review" | "done" | "dropped" | "awaiting_acceptance" | "accepted" | "rejected" | "escalated";
 
 export interface Task {
@@ -17,7 +18,7 @@ export interface Task {
   updated_at: string;
 }
 
-function file() { return join(DATA, "tasks", "ledger.jsonl"); }
+function file() { return join(DATA(), "tasks", "ledger.jsonl"); }
 
 function fold(): Map<string, Task> {
   const map = new Map<string, Task>();
@@ -37,7 +38,7 @@ function fold(): Map<string, Task> {
 }
 
 function append(e: object) {
-  mkdirSync(join(DATA, "tasks"), { recursive: true });
+  mkdirSync(join(DATA(), "tasks"), { recursive: true });
   appendFileSync(file(), JSON.stringify({ ts: new Date().toISOString(), ...e }) + "\n");
 }
 

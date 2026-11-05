@@ -9,9 +9,10 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync,
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
+import * as paths from "./paths.ts";
 
-const dataDir = () => process.env.DIA_DATA_DIR || join(homedir(), ".local", "share", "dia");
-export const msgRoot = () => process.env.DIA_MSG_ROOT || join(dataDir(), "msg");
+const dataDir = () => paths.diaHome();
+export const msgRoot = () => paths.msgRoot();
 
 export type MsgKind = "question" | "handoff" | "notify" | "reply";
 export type MsgState = "pending" | "delivered" | "acked" | "replied" | "closed" | "escalated";

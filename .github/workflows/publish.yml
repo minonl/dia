@@ -48,6 +48,22 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run build
       - run: bun test tests
+      - name: OIDC preflight（诊断用，不打印 token）
+        run: |
+          set -u
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]; then
+            echo "::error::缺少 id-token 环境变量（检查 permissions: id-token: write）"
+            exit 1
+          fi
+          echo "id-token env: present"
+          ID=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+                 "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=npm:registry.npmjs.org" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("value",""))')
+          [ -n "$ID" ] || { echo "::error::拿不到 OIDC id token"; exit 1; }
+          code=$(curl -s -o /tmp/exchange.json -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer $ID" \
+            "https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/@minonl%2fdia")
+          echo "exchange status: $code"
+          if [ "$code" != "200" ]; then echo "--- body ---"; cat /tmp/exchange.json; fi
       - name: 版本 → dist-tag（预发布走 next，正式走 latest）
         id: tag
         run: |

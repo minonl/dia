@@ -161,6 +161,8 @@ for r in a b; do
   [ -n "$(git -C "$AR/$r" config --get core.hooksPath || true)" ] && ok "adopt --all: $r 已配 hooksPath" || bad "adopt --all: $r 未配置"
 done
 [ ! -d "$AR/a-worktree--w/.git/dia" ] && ok "adopt --all 跳过 worktree 目录" || bad "adopt --all 误改 worktree"
+out="$(DIA_WT_REPOS_ROOT="$AR" DIA_WT_DATA_ROOT="$TD/dr4" bash "$WT" doctor --all --json 2>/dev/null)"
+printf '%s' "$out" | grep -q "$AR/a" && ok "doctor --all 覆盖 DIA_WT_REPOS_ROOT" || bad "doctor --all 未覆盖自定义仓根"
 DIA_WT_REPOS_ROOT="$TD/empty-root" DIA_WT_DATA_ROOT="$TD/dr3" bash "$WT" adopt --all >/dev/null 2>&1
 [ $? = 2 ] && ok "adopt --all 空结果 exit 2" || bad "adopt --all 空结果未 exit 2"
 

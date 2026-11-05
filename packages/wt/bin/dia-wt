@@ -215,6 +215,31 @@ JS
 }
 
 # adopt 写入的路径模板（<git-common-dir>/dia/config.json 的 template）；未 adopt → 空
+# 仓根集合：<data>/repos + DIA_WT_REPOS_ROOTS（冒号分隔；默认 ~/repos + ~/.yan-agent/repos）
+wt_repo_roots() {
+  local dr r
+  local -a out=()
+  dr="$(dia_wt_data_root 2>/dev/null || true)"
+  [ -n "$dr" ] && [ -d "$dr/repos" ] && out+=("$dr/repos")
+  local rr="${DIA_WT_REPOS_ROOTS:-${DIA_WT_REPOS_ROOT:-$HOME/repos:$HOME/.yan-agent/repos}}"
+  while IFS= read -r r; do [ -n "$r" ] && [ -d "$r" ] && out+=("$r"); done < <(printf '%s\n' "$rr" | tr ':' '\n')
+  [ ${#out[@]} -gt 0 ] && printf '%s\n' "${out[@]}"
+  return 0
+}
+# 所有主 checkout（git-dir == common-dir）；跳过 *-worktree--*
+wt_discover_main_checkouts() {
+  local root sub gd cd_
+  while IFS= read -r root; do
+    while IFS= read -r -d '' gd; do
+      sub="$(dirname "$gd")"
+      case "$(basename "$sub")" in *-worktree--*) continue ;; esac
+      cd_="$(git -C "$sub" rev-parse --git-common-dir 2>/dev/null || true)"
+      gd="$(cd "$sub" 2>/dev/null && cd "$gd" 2>/dev/null && pwd -P)"
+      cd_="$(cd "$sub" 2>/dev/null && cd "$cd_" 2>/dev/null && pwd -P)"
+      [ -n "$gd" ] && [ "$gd" = "$cd_" ] && printf '%s\n' "$sub"
+    done < <(find "$root" -maxdepth 3 -name .git -type d -print0 2>/dev/null)
+  done < <(wt_repo_roots)
+}
 wt_repo_template() {
   local repo="$1" common cfg
   common="$(wt_common_dir "$repo" 2>/dev/null)" || return 1
@@ -1259,26 +1284,8 @@ cmd_adopt() {
   esac; done
   if [ "$all" = 1 ]; then
     [ -z "$repo" ] || die "--all 不能与 <repo> 同时给（要么单个仓，要么全量）"
-    local -a roots=() repos=()
-    local dr rr
-    dr="$(dia_wt_data_root 2>/dev/null || true)"
-    rr="${DIA_WT_REPOS_ROOT:-$HOME/repos}"
-    [ -n "$dr" ] && [ -d "$dr/repos" ] && roots+=("$dr/repos")
-    [ -d "$rr" ] && roots+=("$rr")
-    [ ${#roots[@]} -gt 0 ] || { echo "usage: dia wt adopt --all（未找到仓根：${rr}）" >&2; exit 2; }
-    local root sub gd cd_
-    for root in "${roots[@]}"; do
-      while IFS= read -r -d '' gd; do
-        sub="$(dirname "$gd")"
-        case "$(basename "$sub")" in *-worktree--*) continue ;; esac
-        cd_="$(git -C "$sub" rev-parse --git-common-dir 2>/dev/null || true)"
-        # 统一物理路径（macOS /tmp → /private/tmp），否则等式比较会假失败
-        gd="$(cd "$sub" 2>/dev/null && cd "$gd" 2>/dev/null && pwd -P)"
-        cd_="$(cd "$sub" 2>/dev/null && cd "$cd_" 2>/dev/null && pwd -P)"
-        [ -n "$gd" ] && [ "$gd" = "$cd_" ] || continue   # 只处理主 checkout
-        repos+=("$sub")
-      done < <(find "$root" -maxdepth 3 -name .git -type d -print0 2>/dev/null)
-    done
+    local -a repos=()
+    while IFS= read -r r; do repos+=("$r"); done < <(wt_discover_main_checkouts)
     [ ${#repos[@]} -gt 0 ] || { echo "usage: dia wt adopt --all（未匹配到任何主 checkout）" >&2; exit 2; }
     local -a pass=()
     local a
@@ -1400,7 +1407,7 @@ cmd_doctor() {
     *) repos+=("$1"); shift ;;
   esac; done
   if [ "$all" = 1 ] && [ ${#repos[@]} -eq 0 ]; then
-    while IFS= read -r -d '' d; do repos+=("$(dirname "$d")"); done < <(find "${HOME}/repos" -maxdepth 3 -name .git -type d -print0 2>/dev/null)
+    while IFS= read -r d; do repos+=("$d"); done < <(wt_discover_main_checkouts)
   fi
   if [ ${#repos[@]} -eq 0 ]; then
     echo "usage: dia wt doctor <repo>... | --all（--all 未匹配到任何仓库）" >&2

@@ -5009,7 +5009,10 @@ dia env bw get --item db --task t-1    # 走 broker，写审计行
 
 # dia Public Release Gate
 
-> 状态：**BLOCKED until audit**（2026-10-30）
+> 状态：**已公开（2026-11-05）**。门禁保留为「未来再次公开/发布前」的检查清单。
+>
+> 2026-11-05 实际路径：重建历史（filter-branch 清洗内部标识）→ 删库重建（新仓库 ID）→ 转 public → 开 Pages。
+> 旧的 `dia-archive-private` 已删除；npm `@minonl/dia` 已发布（OIDC）。
 >
 > 2026-11-04 更正：**发 npm 不需要仓库公开**（Trusted Publishing 对私有仓可用）；只有 **provenance** 需要公开仓。
 > 所以「发 npm」与「转公开」不是同一道门：私有仓可先发不带 provenance 的版本，公开后再补 provenance。

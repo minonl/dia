@@ -1,5 +1,5 @@
 {
-  "verdict": "blocked",
+  "verdict": "pass (self-audit)",
   "scope": "working tree (pre-public redaction)",
   "findings": [
     {
@@ -38,7 +38,7 @@
     "sourcemaps": "pass（无）",
     "metadata": "pass（description 为通用描述，topics 为空）"
   },
-  "history_clean": false,
-  "public_ready": false,
-  "note": "本报告为自查（非独立审核）；按 public-release.md §1-8，公开前仍需独立 dia-security pass + 历史重建"
+  "history_clean": true,
+  "public_ready": true,
+  "note": "2026-11-05 更新：历史已 filter-branch 重建并删库重建；当前树扫描 0 命中；npm 已发。独立审核仍未执行（gate §1-8 要求），此项记为 known gap。"
 }

@@ -112,6 +112,23 @@ git -C "$R6" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/gone
 out="$(bash "$WT" adopt "$R6" --json)"
 printf '%s' "$out" | grep -q '"defaultBranch":"main"' && ok "过期 origin/HEAD 回落到 main" || bad "过期 origin/HEAD: $out"
 
+# ── 钩子链：原 hooksPath（.githooks / husky）不被吞掉 ─────────────────────────
+R7="$TD/repo7"; mkdir -p "$R7/.githooks"; git -C "$R7" init -q -b main
+git -C "$R7" config user.email t@example.com; git -C "$R7" config user.name t
+printf '#!/bin/sh\necho chained >> "$(git rev-parse --show-toplevel)/chain.log"\n' > "$R7/.githooks/pre-commit"
+chmod +x "$R7/.githooks/pre-commit"
+echo a > "$R7/a.txt"; git -C "$R7" add -A; git -C "$R7" commit -qm init --no-verify
+git -C "$R7" config --local core.hooksPath .githooks
+bash "$WT" adopt "$R7" --apply >/dev/null 2>&1 || bad "R7 apply 失败"
+python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));sys.exit(0 if d.get("hooksChain")==".githooks" else 1)' "$R7/.git/dia/config.json" \
+  && ok "config 记录 hooksChain" || bad "hooksChain 未记录"
+git -C "$R7" worktree add -q -b feat/y "$TD/repo7-worktree--y" main
+echo b > "$TD/repo7-worktree--y/b.txt"; git -C "$TD/repo7-worktree--y" add b.txt
+git -C "$TD/repo7-worktree--y" commit -qm feat-y >/dev/null 2>&1
+[ -f "$TD/repo7-worktree--y/chain.log" ] && ok "原 pre-commit 被链式执行" || bad "原 pre-commit 未执行（钩子被吞）"
+bash "$WT" adopt "$R7" --revert >/dev/null 2>&1
+[ "$(git -C "$R7" config --get core.hooksPath)" = ".githooks" ] && ok "revert 还原原 hooksPath（相对）" || bad "revert 未还原 .githooks"
+
 # ── gate：成功 / 失败（P1-3 精确匹配）────────────────────────────────────────
 bash "$WT" gate "$R5" x >/dev/null 2>&1 && ok "gate 成功" || bad "gate 失败"
 if bash "$WT" gate "$R5" xb >/dev/null 2>&1; then bad "gate 子串误匹配（x 命中 xb）"; else ok "gate 精确匹配 feature"; fi

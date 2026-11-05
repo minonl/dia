@@ -9,6 +9,7 @@ import * as persona from "../../../src/persona.ts";
 import * as msg from "../../../src/msg.ts";
 import * as collab from "../../../src/collab.ts";
 import * as claims from "../../../src/claims.ts";
+import * as graph from "../../../src/graph.ts";
 import * as defaultMsg from "../../../src/default-msg.ts";
 import * as paths from "../../../src/paths.ts";
 import * as agents from "../../../src/agents.ts";
@@ -188,7 +189,8 @@ usage:
   dia msg send|show|inbox|ack|delivered|deliver [--wait]|reply|needs-info|status|stuck|thread|escalate|agents|migrate
   dia agents list|register|unregister|discover
   dia msg deliver <agent> <id> [--transport tmux|acp]
-  dia task add|list|status|done
+  dia task add|list|link|status|done [--owner S] [--depends a,b] [--touches p1,p2]
+  dia graph [--json] [--task t-...]
   dia claim <path> [--reason R] [--ttl 4h] [--session S] | dia claims [--all] [--mine] | dia unclaim <path|id> [--force]
   dia team run <id> --mock | --acp|--dsh --workspace DIR
   dia team gate|accept|reject|next
@@ -466,38 +468,71 @@ async function guardCli(argv: string[]): Promise<number> {
 async function taskCli(argv: string[]): Promise<number> {
   const [sub, ...args] = argv;
   const asJson = has(args, "--json");
+  const csv = (name: string) => (flag(args, name) || "").split(",").map((x) => x.trim()).filter(Boolean);
   try {
     if (sub === "add") {
-      const title = positional(args).filter((x) => x !== "add").join(" ") || flag(args, "--title");
+      const title = positional(args).join(" ") || flag(args, "--title");
       if (!title) { err("missing title"); return 2; }
-      const t = task.add(title, { role: flag(args, "--role"), judge: flag(args, "--judge") });
+      const t = task.add(title, { role: flag(args, "--role"), judge: flag(args, "--judge"), owner: flag(args, "--owner"), deps: csv("--depends"), touches: csv("--touches") });
       out(asJson ? JSON.stringify(t) : `${t.id} ${t.title}`);
       return 0;
     }
     if (sub === "list") {
       const rows = task.list();
-      out(asJson ? JSON.stringify(rows, null, 1) : rows.map((t) => `${t.id}\t${t.status}\t${t.title}`).join("\n") || "(none)");
+      out(asJson ? JSON.stringify(rows, null, 1) : rows.map((t) => `${t.id}\t${t.status}\t${t.title}${t.owner ? `\towner=${t.owner}` : ""}${t.deps.length ? `\tdeps=${t.deps.length}` : ""}`).join("\n") || "(none)");
+      return 0;
+    }
+    if (sub === "link") {
+      const id = positional(args)[0];
+      if (!id) { err("usage: dia task link <id> [--depends a,b] [--remove-depends c] [--touches p1,p2] [--remove-touches p3]"); return 2; }
+      const t = task.link(id, { addDeps: csv("--depends"), removeDeps: csv("--remove-depends"), addTouches: csv("--touches"), removeTouches: csv("--remove-touches") });
+      out(asJson ? JSON.stringify(t) : `${t.id}\tdeps=${t.deps.join(",") || "-"}\ttouches=${t.touches.join(",") || "-"}`);
       return 0;
     }
     if (sub === "status") {
       const id = positional(args)[0];
       const st = positional(args)[1] as task.Status;
-      if (!id || !st) { err("usage: dia task status <id> <status> [--evidence ...]"); return 2; }
-      const t = task.status(id, st, flag(args, "--evidence"));
-      out(asJson ? JSON.stringify(t) : `${t.id} -> ${t.status}`);
+      if (!id || !st) { err("usage: dia task status <id> <status> [--evidence ...] [--reason R] [--blocked-reason R]"); return 2; }
+      const t = task.status(id, st, flag(args, "--evidence"), { closureReason: flag(args, "--reason"), blockedReason: flag(args, "--blocked-reason") });
+      out(asJson ? JSON.stringify(t) : `${t.id} -> ${t.status}${t.closure_reason ? ` (${t.closure_reason})` : ""}`);
       return 0;
     }
     if (sub === "done") {
       const id = positional(args)[0];
       if (!id) { err("missing id"); return 2; }
-      const t = task.status(id, "done", flag(args, "--evidence"));
-      out(asJson ? JSON.stringify(t) : `${t.id} -> done`);
+      const t = task.status(id, "done", flag(args, "--evidence"), { closureReason: flag(args, "--reason") });
+      out(asJson ? JSON.stringify(t) : `${t.id} -> done${t.closure_reason ? ` (${t.closure_reason})` : ""}`);
       return 0;
     }
   } catch (e: any) { err(e?.message || String(e)); return 30; }
-  err("usage: dia task add|list|status|done");
+  err("usage: dia task add|list|link|status|done");
   return 2;
 }
+
+async function graphCli(argv: string[]): Promise<number> {
+  const asJson = has(argv, "--json");
+  try {
+    const g = graph.build({ task: flag(argv, "--task") });
+    if (asJson) out(JSON.stringify(g, null, 1));
+    else {
+      for (const n of g.nodes.filter((x) => x.kind === "task")) {
+        out(`${n.label}\t[${n.status || "?"}]${n.owner ? `\towner=${n.owner}` : ""}`);
+        for (const e of g.edges.filter((x) => x.from === n.id && x.kind === "depends_on")) out(`  -> ${e.to.replace(/^task:/, "")}`);
+      }
+      const claimEdges = g.edges.filter((e) => e.kind === "claims");
+      if (claimEdges.length) {
+        out("claims:");
+        for (const e of claimEdges) out(`  ${e.from.replace(/^session:/, "")} -> ${e.to.replace(/^path:/, "")}`);
+      }
+      for (const c of g.cycles) out(`⚠ cycle: ${c.join(" -> ")}`);
+    }
+    return g.cycles.length ? 3 : 0;
+  } catch (e: any) {
+    err(e?.message || String(e));
+    return String(e?.message || e).startsWith("E_GRAPH") ? 2 : 31;
+  }
+}
+
 
 
 
@@ -1621,6 +1656,7 @@ export async function main(rawArgv: string[]): Promise<number> {
     return rc;
   }
   if (cmd === "task") return taskCli(argv.slice(1));
+  if (cmd === "graph") return graphCli(argv.slice(1));
   if (cmd === "msg") return msgCli(argv.slice(1));
   if (cmd === "claim" || cmd === "claims" || cmd === "unclaim") return claimsCli(argv);
   if (cmd === "collab") return collabCli(argv.slice(1));

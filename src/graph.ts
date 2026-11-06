@@ -12,6 +12,22 @@ export interface GraphNode {
   status?: string;
   owner?: string;
   blocked_by?: string[];
+  /** 计划优先级 P0–P99（M1.1，additive） */
+  prio?: string;
+  /** 计划开始日 YYYY-MM-DD */
+  start?: string;
+  /** 计划结束日 YYYY-MM-DD */
+  due?: string;
+  /** 进度 0–100；缺省时按 status 派生 */
+  progress?: number;
+  /** progress 是否来自派生（估算），而非人工录入 */
+  progress_derived?: boolean;
+  created_at?: string;
+  updated_at?: string;
+  /** 进入 done/accepted 的时间 */
+  closed_at?: string;
+  deps?: string[];
+  touches?: string[];
 }
 
 export interface GraphEdge {
@@ -23,10 +39,14 @@ export interface GraphEdge {
 
 export interface Graph {
   schema: 1;
+  /** 本版本可选的图能力；读者据此决定是否渲染优先级/时间线/进度 */
+  capabilities?: string[];
   nodes: GraphNode[];
   edges: GraphEdge[];
   cycles: string[][];
 }
+
+const DERIVED_PROGRESS: Record<string, number> = { todo: 0, doing: 50, review: 80, done: 100, accepted: 100, blocked: 0, dropped: 0, rejected: 0, escalated: 50, awaiting_acceptance: 90 };
 
 const taskNode = (id: string) => `task:${id}`;
 const sessionNode = (id: string) => `session:${id}`;
@@ -67,7 +87,20 @@ export function build(opts: { task?: string } = {}): Graph {
 
   for (const t of tasks) {
     const blocked = t.deps.filter((d) => byId.get(d)?.status !== "done");
-    nodes.set(taskNode(t.id), { id: taskNode(t.id), kind: "task", label: t.title, status: t.status, owner: t.owner, ...(blocked.length ? { blocked_by: blocked } : {}) });
+    nodes.set(taskNode(t.id), {
+      id: taskNode(t.id), kind: "task", label: t.title, status: t.status, owner: t.owner,
+      ...(blocked.length ? { blocked_by: blocked } : {}),
+      ...(t.prio ? { prio: t.prio } : {}),
+      ...(t.start ? { start: t.start } : {}),
+      ...(t.due ? { due: t.due } : {}),
+      progress: t.progress ?? (DERIVED_PROGRESS[t.status] ?? 0),
+      progress_derived: t.progress === undefined,
+      created_at: t.created_at,
+      updated_at: t.updated_at,
+      ...(t.closed_at ? { closed_at: t.closed_at } : {}),
+      deps: t.deps,
+      touches: t.touches,
+    });
     if (t.owner) nodes.set(sessionNode(t.owner), { id: sessionNode(t.owner), kind: "session", label: t.owner });
     for (const d of t.deps) {
       if (byId.has(d)) edges.push({ from: taskNode(t.id), to: taskNode(d), kind: "depends_on", source: "declared" });
@@ -101,5 +134,5 @@ export function build(opts: { task?: string } = {}): Graph {
 
   filteredNodes.sort((a, b) => a.id.localeCompare(b.id));
   filteredEdges.sort((a, b) => (a.from + "\0" + a.to + "\0" + a.kind).localeCompare(b.from + "\0" + b.to + "\0" + b.kind));
-  return { schema: 1, nodes: filteredNodes, edges: filteredEdges, cycles: findCycles(tasks) };
+  return { schema: 1, capabilities: ["prio", "timeline", "progress"], nodes: filteredNodes, edges: filteredEdges, cycles: findCycles(tasks) };
 }

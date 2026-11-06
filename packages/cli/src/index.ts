@@ -190,7 +190,7 @@ usage:
   dia msg send|show|inbox|ack|delivered|deliver [--wait]|reply|needs-info|status|stuck|thread|escalate|agents|migrate
   dia agents list|register|unregister|discover
   dia msg deliver <agent> <id> [--transport tmux|acp]
-  dia task add|list|link|status|done [--owner S] [--depends a,b] [--touches p1,p2]
+  dia task add|list|link|plan|status|done [--owner S] [--depends a,b] [--touches p1,p2] [--prio P1] [--start D] [--due D] [--progress 0-100]
   dia graph [--json] [--task t-...] [--tui [--watch] [--status S] [--owner S] [--width N] [--no-color]]
   dia claim <path> [--reason R] [--ttl 4h] [--session S] | dia claims [--all] [--mine] [--gc [--days 7]] | dia unclaim <path|id> [--force]
   dia team run <id> --mock | --acp|--dsh --workspace DIR
@@ -474,7 +474,13 @@ async function taskCli(argv: string[]): Promise<number> {
     if (sub === "add") {
       const title = positional(args).join(" ") || flag(args, "--title");
       if (!title) { err("missing title"); return 2; }
-      const t = task.add(title, { role: flag(args, "--role"), judge: flag(args, "--judge"), owner: flag(args, "--owner"), deps: csv("--depends"), touches: csv("--touches") });
+      const prog = flag(args, "--progress");
+      const t = task.add(title, {
+        role: flag(args, "--role"), judge: flag(args, "--judge"), owner: flag(args, "--owner"),
+        deps: csv("--depends"), touches: csv("--touches"),
+        prio: flag(args, "--prio"), start: flag(args, "--start"), due: flag(args, "--due"),
+        progress: prog === undefined ? undefined : task.normProgress(prog),
+      });
       out(asJson ? JSON.stringify(t) : `${t.id} ${t.title}`);
       return 0;
     }
@@ -488,6 +494,17 @@ async function taskCli(argv: string[]): Promise<number> {
       if (!id) { err("usage: dia task link <id> [--depends a,b] [--remove-depends c] [--touches p1,p2] [--remove-touches p3]"); return 2; }
       const t = task.link(id, { addDeps: csv("--depends"), removeDeps: csv("--remove-depends"), addTouches: csv("--touches"), removeTouches: csv("--remove-touches") });
       out(asJson ? JSON.stringify(t) : `${t.id}\tdeps=${t.deps.join(",") || "-"}\ttouches=${t.touches.join(",") || "-"}`);
+      return 0;
+    }
+    if (sub === "plan") {
+      const id = positional(args)[0];
+      if (!id) { err("usage: dia task plan <id> [--prio P1] [--start YYYY-MM-DD] [--due YYYY-MM-DD] [--progress 0-100]"); return 2; }
+      const prog = flag(args, "--progress");
+      const t = task.plan(id, {
+        prio: flag(args, "--prio"), start: flag(args, "--start"), due: flag(args, "--due"),
+        progress: prog === undefined ? undefined : task.normProgress(prog),
+      });
+      out(asJson ? JSON.stringify(t) : `${t.id}\tprio=${t.prio || "-"}\tstart=${t.start || "-"}\tdue=${t.due || "-"}\tprogress=${t.progress ?? "-"}`);
       return 0;
     }
     if (sub === "status") {
@@ -506,7 +523,7 @@ async function taskCli(argv: string[]): Promise<number> {
       return 0;
     }
   } catch (e: any) { err(e?.message || String(e)); return 30; }
-  err("usage: dia task add|list|link|status|done");
+  err("usage: dia task add|list|link|plan|status|done");
   return 2;
 }
 

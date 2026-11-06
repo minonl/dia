@@ -104,7 +104,8 @@ dia persona remove dabo
 | `kb index/search/query/get/lint/path/review` | **已实现** | persona 作用域下索引过期自动重建；显式 `--root` 保持「缺索引即报错」 |
 | `kb <域命令>` | **已实现（委派）** | 未命中内置 → persona `commands` → 委派；argv 透传、exit code 原样 |
 | `<persona-cmd>` / `cmd <name>` | **已实现** | 一级委派（内置优先）；`dia cmd` 只查外部命令，可绕开同名内置 |
-| `task add/list/status/done` | **已实现** | done 需 judge + evidence |
+| `task add/list/link/plan/status/done` | **已实现** | done 需 judge + evidence；`plan` 写计划态（prio/start/due/progress），只覆盖出现的字段 |
+| `graph [--json] [--task T] [--tui …]` | **已实现** | 图 JSON（schema 1 + capabilities）；节点带 prio/start/due/progress/时间戳，缺省进度按状态派生并标 `progress_derived` |
 | `team run --mock / --acp / --dsh`、`team gate/accept/reject` | **已实现** | 状态机 + 门禁；成功/失败路径均跑通 |
 | `job …` | **已实现** | 转发 `packages/job`（launchd/cron/schtasks） |
 | `patch …` | **未实现** | 当前 `unknown command`；设计见 `docs/patching.md` |

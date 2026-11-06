@@ -1352,6 +1352,17 @@ async function serviceCli(argv: string[]): Promise<number> {
       if (!id) { err("usage: dia service health <id>"); return 2; }
       const fromWrapper = has(args, "--from-wrapper");
       const ex = flag(args, "--exit");
+      // agent 型（§14.3）：健康由 dia 自己发起 ACP initialize + session/new，没有外部 cmd 可跑
+      const dir = service.serviceDir(id);
+      const svc = service.readServiceManifest(dir);
+      if (service.healthcheckKind(svc.healthcheck) === "acp" && !fromWrapper) {
+        const run = await service.runAcpHealth(svc, { dir });
+        const rec = service.recordHealth(svc, run.judgement, { gen: flag(args, "--gen"), stateFile: flag(args, "--state-file") });
+        const code = run.judgement.state === "ok" ? 0 : run.judgement.state === "degraded" ? 30 : 1;
+        if (asJson) out(JSON.stringify({ id, verdict: run.judgement.state, shown: rec.record.state, exit: run.judgement.exit, detail: run.judgement.detail, steps: run.steps }, null, 1));
+        else out(`${id}: ${run.judgement.state}（shown=${rec.record.state}${run.judgement.detail ? ", " + run.judgement.detail : ""}）`);
+        return code;
+      }
       const r = service.runServiceHealth(id, {
         wrapperExit: fromWrapper ? Number(ex ?? "1") : undefined,
         gen: flag(args, "--gen"),

@@ -352,3 +352,79 @@ unknown（stale）**不单独返回**——`health` 是实时执行，不存在�
 
 1. 判据写成**可判定的检查**：`node scripts/docs-index.mjs --check && node scripts/docs-link-check.mjs`（+ 可选 checklist 计数）；
 2. 或者把它当**评审工具**用：接受 `escalated` 是预期结果，只取 `verify.json` 的 findings 作为 grill 产出。
+
+## 14. P2：agent 型服务（entry = persona 会话）
+
+> 状态：**草案（待实现）**。§0 已定「本版只做脚本型」；本节把 P2 的形状先定下来，避免实现时二次发明语义。
+
+### 14.1 与脚本型的关系
+
+```mermaid
+flowchart LR
+  S["service"] --> A["脚本型（已实现）<br/>entry = bin/*"]
+  S --> B["agent 型（P2）<br/>entry = ACP 会话"]
+  B --> J["job：把 ACP 端点拉起并保持<br/>(dsh --profile dia-acp / opencode acp)"]
+  B --> H["healthcheck：端点可应答 + 最近一轮成功<br/>(不判断“想得对不对”)"]
+```
+
+**不变的**：`lifecycle`（job 托管）、`healthcheck` 契约（专用码域）、台账（`kind:"health"`）、`gen` 代际。
+**不同的**：没有 `stdin` 事件契约 —— 输入是 ACP 的 `prompt`，输出是会话事件；所以 `contract` 换成 ACP 语义。
+
+### 14.2 清单
+
+```jsonc
+{
+  "kind": "service",
+  "id": "example-agent",
+  "entry": {
+    "agent": {
+      "host": "dsh",                 // dsh | opencode
+      "profile": "dia-acp",          // 由 persona/宿主提供；缺省用宿主默认
+      "persona": "yan"               // 可选：仅做归属校验，不注入内容
+    }
+  },
+  "lifecycle": { "type": "service", "target": "local" },
+  "healthcheck": { "kind": "acp", "interval": 1800, "timeout": 60 },
+  "kits": []
+}
+```
+
+| 字段 | 语义 |
+|---|---|
+| `entry.agent.host` | 用哪套 ACP 实现（`dsh --profile <p>` 或 `opencode acp`） |
+| `entry.agent.profile` | 宿主的 profile 名（不复制 persona 内容，只引用） |
+| `entry.agent.persona` | 可选；`verify` 时校验「该 profile 是否属于此 persona」，防止挂错人 |
+| `healthcheck.kind: "acp"` | 走 ACP 健康检查（见 §14.3），**不再要求 `cmd`** |
+
+### 14.3 健康检查（ACP 版）
+
+| 检查 | 判据 | 失败归类 |
+|---|---|---|
+| 端点存活 | `initialize` 能返回 `protocolVersion`（JSON-RPC 1.0） | 连不上/超时 → `degraded` |
+| 会话可用 | `session/new` 成功返回 `sessionId` | 返回错误 → `fail` |
+| 最近一轮 | 台账里最近一次 `prompt` 的成功/失败（由调用方写事件） | 连续失败 `debounce` 次 → `degraded` |
+
+**明确不做**：不判断「回答质量」、不重放 prompt、不在 healthcheck 里跑真实业务（成本 + 副作用）。
+
+### 14.4 与脚本型的复用
+
+- `healthView` / `transition` / `gen` / 台账格式**完全复用**（`state.jsonl` + `kind:"health"`）
+- 差异只在「怎么产生一次 judgement」：`runHealth()` 换成 `runAcpHealth()`（`initialize` + `session/new`）
+- `dia service health <id>` 对 agent 型走 `runAcpHealth`，退出码沿用 §5
+
+### 14.5 边界
+
+| 场景 | 行为 |
+|---|---|
+| 宿主未安装 / profile 不存在 | `add` 期 `E_BACKEND`（不装半套） |
+| 端点活着但 `session/new` 失败 | `fail`（配置/鉴权问题，不是 infra 抖动） |
+| 长任务（一轮 prompt 很久） | **不算失败**；只有「端点不可应答」才算 |
+| 多实例 | `lifecycle.target` 声明归属；ACP 端点同机只允许一个 |
+| 权限/凭据 | 由宿主 profile 自己管；`dia` 不读取、不注入 |
+
+### 14.6 验收（P2）
+
+- [ ] 单测：清单校验（`entry.agent` 与 `entry.cmd` **互斥**，同时给 → `E_MANIFEST`）
+- [ ] 单测：`runAcpHealth` 用 `tests/fixtures/fake-acp.mjs` 覆盖 `initialize` 失败 / `session/new` 失败 / 正常三态
+- [ ] 单测：`healthcheck.kind` 缺省时按脚本型（向后兼容）
+- [ ] e2e：装一个 agent 型 demo（fake ACP）→ `dia job status` 显示 `health=ok…`，杀掉端点后变 `degraded(stale)`

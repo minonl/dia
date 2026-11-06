@@ -31,7 +31,9 @@
   .seg button{border:0;background:transparent;color:var(--muted);padding:6px 10px;font:inherit;font-size:12px;cursor:pointer}
   .seg button.on{background:var(--blue);color:#fff}
   .toolbar .hint{margin-left:auto;color:var(--muted);font-size:12px}
-  .canvas{position:relative;height:620px;overflow:auto;padding:10px}
+  .canvas{position:relative;height:620px;overflow:hidden}
+  .canvas-scroll{position:absolute;inset:0;overflow:auto;padding:10px}
+  .lane-rail{position:absolute;left:0;top:0;bottom:0;width:110px;z-index:6;pointer-events:none;background:linear-gradient(90deg,var(--panel) 86%,transparent)}
   svg.edges{position:absolute;inset:0;pointer-events:none;overflow:visible}
   .node{position:absolute;width:190px;border:1px solid var(--line);border-left:1px solid var(--line);border-radius:10px;background:var(--panel);padding:8px 10px;box-shadow:var(--shadow);cursor:pointer}
   .node.path{border-left-color:var(--violet)}
@@ -107,23 +109,26 @@
   .kv{display:grid;grid-template-columns:70px 1fr;gap:4px 10px;font-size:12px}
   .kv .k{color:var(--muted)}
   /* timeline */
-  .timeline{padding:14px 16px 18px;overflow:auto}
-  .tl-head{display:grid;grid-template-columns:190px 1fr;gap:8px;align-items:end;color:var(--muted);font-size:11px;margin-bottom:8px}
-  .tl-axis{position:relative;height:22px}
-  .tl-axis span{position:absolute;transform:translateX(-50%);white-space:nowrap}
+  .timeline{padding:14px 16px 18px;overflow:hidden}
+  .tl-scroll{overflow:auto;max-height:620px}
+  .tl-head{display:grid;grid-template-columns:190px var(--tlw,900px);gap:8px;align-items:end;color:var(--muted);font-size:11px;margin-bottom:8px;position:sticky;top:0;z-index:4;background:var(--panel)}
+  .tl-axis{position:relative;height:34px;width:var(--tlw,900px)}
+  .tl-axis span{position:absolute;transform:translateX(-50%);white-space:nowrap;line-height:1.2}
+  .tl-axis span small{display:block;font-size:9px;opacity:.55}
   .tl-body{position:relative}
-  .tl-row{display:grid;grid-template-columns:190px 1fr;gap:8px;align-items:center;min-height:38px;border-top:1px dashed var(--line)}
-  .tl-id{font-size:12px;min-width:0}
+  .tl-row{display:grid;grid-template-columns:190px var(--tlw,900px);gap:8px;align-items:center;min-height:38px;border-top:1px dashed var(--line)}
+  .tl-head > div:first-child{position:sticky;left:0;z-index:5;background:var(--panel);padding-right:8px}
+  .tl-id{font-size:12px;min-width:0;position:sticky;left:0;z-index:2;background:var(--panel);padding-right:8px}
   .tl-id b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .tl-id span{color:var(--muted);font-size:10px}
-  .tl-track{position:relative;height:28px}
+  .tl-track{position:relative;height:28px;overflow:hidden;width:var(--tlw,900px)}
   .tl-bar{position:absolute;top:7px;height:14px;border-radius:5px;background:var(--blue);opacity:.9;cursor:pointer}
   .tl-bar .fill{position:absolute;left:0;top:0;bottom:0;border-radius:5px;background:rgba(255,255,255,.45)}
   .tl-bar.blocked{background:var(--red)} .tl-bar.done,.tl-bar.accepted,.tl-bar.todo{background:var(--muted)}
   .tl-bar.review{background:var(--amber)}
   .tl-bar.critical{outline:2px solid var(--amber);outline-offset:2px}
   .tl-today{position:absolute;top:0;bottom:0;pointer-events:none;z-index:2;border-left:1px dashed var(--red);color:var(--red);font-size:10px;padding-left:4px}
-  .tl-caption{color:var(--muted);font-size:12px;padding:2px 0 10px}
+  .tl-caption{color:var(--muted);font-size:12px;padding:10px 0 2px}
   footer{padding:0 22px 22px;color:var(--muted);font-size:11px}
   @media (max-width:980px){ main{grid-template-columns:1fr} .canvas{height:560px} }
 </style>
@@ -151,11 +156,26 @@
           <button data-m="detail">详细</button>
         </div>
       </div>
+      <div id="time-tools" style="display:none;gap:8px;align-items:center">
+        <div class="seg" id="range">
+          <button data-r="7d">7 天</button>
+          <button data-r="14d">14 天</button>
+          <button class="on" data-r="30d">30 天</button>
+        </div>
+        <div class="seg" id="zoom">
+          <button data-z="-">－</button>
+          <button data-z="reset">100%</button>
+          <button data-z="+">＋</button>
+        </div>
+      </div>
       <span class="hint" id="hint">按优先级分行（P0 最高）；行内从左到右 = 依赖顺序。简约只看任务和依赖，详细展开具体关联。</span>
     </div>
     <div id="view-graph">
       <div class="canvas" id="canvas">
-        <svg class="edges" id="edges"></svg>
+        <div class="canvas-scroll" id="canvas-scroll">
+          <svg class="edges" id="edges"></svg>
+        </div>
+        <div class="lane-rail" id="lane-rail"></div>
         <div class="legend-overlay" id="legend">
           <div class="row"><svg class="sample" viewBox="0 0 38 10"><defs><marker id="lg-dep" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6" fill="#2563eb"/></marker></defs><line x1="1" y1="5" x2="30" y2="5" stroke="#2563eb" stroke-width="1.6" marker-end="url(#lg-dep)"/></svg><span><b>→ depends_on</b> 单向</span></div>
           <div class="row detail-row"><svg class="sample" viewBox="0 0 38 10"><defs><marker id="lg-touch" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6" fill="#7c3aed"/></marker></defs><line x1="1" y1="5" x2="30" y2="5" stroke="#7c3aed" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#lg-touch)"/></svg><span><b>→ touches</b> 单向</span></div>
@@ -166,8 +186,10 @@
     </div>
     <div id="view-time" style="display:none">
       <div class="timeline">
-        <div class="tl-head"><div>任务</div><div class="tl-axis" id="tl-axis"></div></div>
-        <div class="tl-body" id="tl-body"></div>
+        <div class="tl-scroll" id="tl-scroll">
+          <div class="tl-head"><div>任务</div><div class="tl-axis" id="tl-axis"></div></div>
+          <div class="tl-body" id="tl-body"></div>
+        </div>
         <div class="tl-caption">橙色描边 = 关键路径（数据根迁移 → install.sh 拆分 → launchd）；红色虚线 = 今天。</div>
       </div>
     </div>
@@ -177,10 +199,10 @@
     <div class="panel">
       <div class="side-title"><h2>概览</h2><span>live data</span></div>
       <div class="list">
-        <div class="item"><span class="k"><i class="dot" style="background:var(--muted)"></i>任务</span><b>7</b></div>
-        <div class="item"><span class="k"><i class="dot" style="background:var(--red)"></i>阻塞</span><b>1</b></div>
-        <div class="item"><span class="k"><i class="dot" style="background:var(--amber)"></i>待评审</span><b>1</b></div>
-        <div class="item"><span class="k"><i class="dot" style="background:var(--muted)"></i>完成</span><b>2</b></div>
+        <div class="item"><span class="k"><i class="dot" style="background:var(--muted)"></i>任务</span><b id="stat-tasks">100</b></div>
+        <div class="item"><span class="k"><i class="dot" style="background:var(--red)"></i>阻塞</span><b id="stat-blocked">0</b></div>
+        <div class="item"><span class="k"><i class="dot" style="background:var(--amber)"></i>待评审</span><b id="stat-review">0</b></div>
+        <div class="item"><span class="k"><i class="dot" style="background:var(--muted)"></i>完成</span><b id="stat-done">0</b></div>
         <div class="item"><span class="k">claims</span><b>3</b></div>
       </div>
     </div>
@@ -209,30 +231,31 @@
 <footer>颜色只表达警告/异常：红=阻塞/P0，橙=待评审/P1；其余状态用中性灰 + 单一蓝色进度。关系图按依赖深度分层，时间线独立展示执行情况。</footer>
 
 <script>
-const tasks = [
-  {id:'t-1', label:'数据根迁移', status:'done', prio:'P1', progress:100, start:-8, end:-5, owner:'ses_a', deps:[]},
-  {id:'t-2', label:'install.sh 拆分', status:'doing', prio:'P0', progress:60, start:-4, end:1, owner:'ses_a', deps:['t-1']},
-  {id:'t-3', label:'launchd 安装脚本', status:'blocked', prio:'P1', progress:20, start:1, end:4, owner:'ses_b', deps:['t-2']},
-  {id:'t-4', label:'graph TUI', status:'review', prio:'P2', progress:80, start:-2, end:1, owner:'ses_b', deps:['t-2']},
-  {id:'t-5', label:'dia msg M0', status:'done', prio:'P1', progress:100, start:-8, end:-5, owner:null, deps:[]},
-  {id:'t-6', label:'claim 机制', status:'accepted', prio:'P1', progress:100, start:-5, end:-2, owner:null, deps:[]},
-  {id:'t-7', label:'handoff + claim', status:'doing', prio:'P2', progress:40, start:-2, end:2, owner:'ses_a', deps:['t-6','t-5']}
-];
-const paths = ['install.sh','src/collab.ts','docs/msg.md'];
-const taskEdges = [
-  {from:'t-2', to:'t-1', kind:'depends_on'},
-  {from:'t-3', to:'t-2', kind:'depends_on'},
-  {from:'t-4', to:'t-2', kind:'depends_on'},
-  {from:'t-7', to:'t-6', kind:'depends_on'},
-  {from:'t-2', to:'install.sh', kind:'touches'},
-  {from:'t-4', to:'src/collab.ts', kind:'touches'},
-  {from:'t-7', to:'src/collab.ts', kind:'touches'},
-  {from:'ses_a', to:'src/collab.ts', kind:'claims'},
-  {from:'ses_b', to:'install.sh', kind:'claims'},
-  {from:'t-4', to:'t-5', kind:'collaborates_with'}
-];
-const state={view:'graph', mode:'simple'};
-const canvas=document.getElementById('canvas'), svg=document.getElementById('edges');
+const paths = ['install.sh','src/collab.ts','docs/msg.md','tests/collab.test.ts','kits/dia-msg'];
+const modules = ['collab','graph','claim','release','docs','review','persona','kit'];
+const statusList = ['todo','doing','review','blocked','done','accepted'];
+const tasks = [];
+for (let i=0;i<100;i++){
+  const prio = i<6?'P0':i<24?'P1':i<62?'P2':'P3';
+  const status = statusList[(i*7)%statusList.length];
+  const progress = status==='done'||status==='accepted'?100:status==='todo'?0:(i*13)%95;
+  const startD = -15 + ((i*7)%24);
+  const endD = Math.min(15, startD + 1 + ((i*3)%8));
+  const id = 't-'+String(i+1).padStart(3,'0');
+  const deps = i>0 && i%6===0 ? ['t-'+String(i).padStart(3,'0')] : (i>5 && i%11===0 ? ['t-'+String(i-5).padStart(3,'0')] : []);
+  tasks.push({id, label:modules[i%modules.length]+' '+String(i+1).padStart(3,'0'), status, prio, progress, start:startD, end:endD, owner:i%3===0?null:(i%2?'ses_a':'ses_b'), deps});
+}
+const taskEdges = [];
+tasks.forEach(t=>t.deps.forEach(d=>taskEdges.push({from:t.id,to:d,kind:'depends_on'})));
+for(let i=0;i<20;i++) taskEdges.push({from:tasks[i*5].id,to:paths[i%paths.length],kind:'touches'});
+for(let i=0;i<12;i++) taskEdges.push({from:i%2?'ses_a':'ses_b',to:paths[i%paths.length],kind:'claims'});
+taskEdges.push({from:'t-001',to:'t-002',kind:'collaborates_with'});
+document.getElementById('stat-tasks').textContent=String(tasks.length);
+document.getElementById('stat-blocked').textContent=String(tasks.filter(t=>t.status==='blocked').length);
+document.getElementById('stat-review').textContent=String(tasks.filter(t=>t.status==='review').length);
+document.getElementById('stat-done').textContent=String(tasks.filter(t=>t.status==='done'||t.status==='accepted').length);
+const state={view:'graph', mode:'simple', range:'30d', zoom:28, from:null, to:null};
+const canvas=document.getElementById('canvas'), layer=document.getElementById('canvas-scroll'), rail=document.getElementById('lane-rail'), svg=document.getElementById('edges');
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const stIcon={doing:'▶',blocked:'⏸',review:'◐',done:'✓',accepted:'✓',todo:'○'};
 
@@ -251,11 +274,13 @@ function rowsFor(){
   const d=depths();
   const gap=state.mode==='detail'?230:145;
   const h=state.mode==='detail'?205:110;
+  const limit=state.mode==='detail'?8:6;
   return levels().map((prio,i)=>({
     prio,
     y:36+i*gap,
     h,
-    tasks:tasks.filter(t=>t.prio===prio).sort((a,b)=>(d.get(a.id)-d.get(b.id))||a.label.localeCompare(b.label))
+    all:tasks.filter(t=>t.prio===prio).sort((a,b)=>(d.get(a.id)-d.get(b.id))||a.label.localeCompare(b.label)),
+    tasks:tasks.filter(t=>t.prio===prio).sort((a,b)=>(d.get(a.id)-d.get(b.id))||a.label.localeCompare(b.label)).slice(0,limit)
   }));
 }
 function pos(){
@@ -284,7 +309,7 @@ function edgePath(a,b){
 function drawGraph(){
   canvas.classList.toggle('simple', state.mode==='simple');
   const {p,rows}=pos();
-  [...canvas.querySelectorAll('.node,.pgroup,.plane-label')].forEach(e=>e.remove());
+  [...layer.querySelectorAll('.node,.pgroup')].forEach(e=>e.remove());
   const maxX=Math.max(...rows.map(r=>Math.max(1,r.tasks.length)*230+200), 600);
   const maxY=Math.max(...rows.map(r=>r.y+r.h))+40;
   const bandH=state.mode==='detail'?230:145;
@@ -293,13 +318,18 @@ function drawGraph(){
     g.style.top=(r.y-24)+'px'; g.style.width=maxX+'px'; g.style.height=bandH+'px';
     const alpha=Math.max(0.02, 0.075-i*0.012);
     g.style.background='color-mix(in srgb, var(--blue) '+Math.round(alpha*100)+'%, transparent)';
-    canvas.appendChild(g);
+    layer.appendChild(g);
     const label=document.createElement('div'); label.className='plane-label '+r.prio.toLowerCase();
-    label.style.top=(r.y+r.h/2-6)+'px';
+    label.dataset.y=String(r.y+r.h/2-6); label.style.top=(10+r.y+r.h/2-6-layer.scrollTop)+'px';
     label.style.color=i===0?'var(--red)':i===1?'var(--amber)':'var(--muted)';
-    label.innerHTML=esc(r.prio)+(i===0?'<small>紧急</small>':i===1?'<small>高</small>':'<small>常规</small>');
-    canvas.appendChild(label);
-    r.tasks.forEach((t,j)=>canvas.appendChild(card(t,170+j*230,r.y)));
+    label.innerHTML=esc(r.prio)+' · '+r.all.length+(i===0?'<small>紧急</small>':i===1?'<small>高</small>':'<small>常规</small>');
+    rail.appendChild(label);
+    r.tasks.forEach((t,j)=>layer.appendChild(card(t,170+j*230,r.y)));
+    if(r.all.length>r.tasks.length){
+      const more=document.createElement('div'); more.className='node'; more.style.left=(170+r.tasks.length*230)+'px'; more.style.top=r.y+'px'; more.style.width='150px';
+      more.innerHTML='<b>+ '+(r.all.length-r.tasks.length)+' 个</b><div class="meta">聚合隐藏 · 时间线可看全部</div>';
+      layer.appendChild(more);
+    }
   });
   svg.setAttribute('width',maxX); svg.setAttribute('height',maxY);
   const defs=`<defs>
@@ -373,53 +403,92 @@ function closeDrawer(){
   document.getElementById('drawer').setAttribute('aria-hidden','true');
   document.getElementById('backdrop').classList.remove('show');
 }
+function dayDate(d){
+  const base=new Date('2026-11-06T00:00:00');
+  const dt=new Date(base.getTime()+d*86400000);
+  return ('0'+(dt.getMonth()+1)).slice(-2)+'-'+('0'+dt.getDate()).slice(-2);
+}
+function isoDate(d){ const base=new Date('2026-11-06T00:00:00'); const dt=new Date(base.getTime()+d*86400000); return dt.toISOString().slice(0,10); }
+function timelineWindow(){
+  if(state.from!==null&&state.to!==null) return {from:state.from,to:state.to};
+  const n=parseInt(String(state.range).replace(/d$/,''),10)||14;
+  return {from:-Math.floor(n/2),to:Math.ceil(n/2)};
+}
 function drawTimeline(){
-  const min=Math.min(...tasks.map(t=>t.start),-1), max=Math.max(...tasks.map(t=>t.end),1), span=max-min||1;
-  const x=v=>((v-min)/span)*100;
+  const win=timelineWindow(), span=Math.max(1,win.to-win.from);
+  const x=v=>((v-win.from)/span)*100;
+  const chartW=Math.max(640, span*state.zoom);
+  document.getElementById('view-time').style.setProperty('--tlw', chartW+'px');
   const axis=document.getElementById('tl-axis'); axis.innerHTML='';
-  for(let d=min;d<=max;d++){ const el=document.createElement('span'); el.style.left=x(d)+'%'; el.textContent=d===0?'今天':(d>0?'+'+d+'d':d+'d'); if(d===0)el.style.color='var(--red)'; axis.appendChild(el); }
+  const step=span<=10?1:span<=18?2:3;
+  for(let d=win.from;d<=win.to;d+=step){
+    const el=document.createElement('span'); el.style.left=x(d)+'%';
+    el.innerHTML=dayDate(d)+'<small>'+(d===0?'今天':(d>0?'+'+d+'d':d+'d'))+'</small>';
+    if(d===0)el.style.color='var(--red)'; axis.appendChild(el);
+  }
   const body=document.getElementById('tl-body'); body.innerHTML=''; const critical=new Set(['t-1','t-2','t-3']);
   tasks.slice().sort((a,b)=>a.start-b.start).forEach(t=>{
     const row=document.createElement('div'); row.className='tl-row';
     row.innerHTML=`<div class="tl-id"><b>${esc(t.label)}</b><span>${esc(t.id)} · ${esc(t.prio)} · ${esc(t.status)}</span></div><div class="tl-track"></div>`;
     const track=row.querySelector('.tl-track');
     const bar=document.createElement('div'); bar.className='tl-bar '+t.status+(critical.has(t.id)?' critical':'');
-    bar.style.left=x(t.start)+'%'; bar.style.width=Math.max(4,x(t.end)-x(t.start))+'%';
+    bar.style.left=x(t.start)+'%'; bar.style.width=Math.max(1.5,x(t.end)-x(t.start))+'%';
+    bar.title=dayDate(t.start)+' → '+dayDate(t.end)+' ('+t.progress+'%)';
     bar.innerHTML='<div class="fill" style="width:'+t.progress+'%"></div>'; bar.onclick=()=>openDrawer(t.id,'task'); track.appendChild(bar);
+    if(win.from<=0&&win.to>=0){ const line=document.createElement('div'); line.className='tl-today'; line.style.left=x(0)+'%'; line.style.top='0'; line.style.bottom='0'; line.textContent=''; track.appendChild(line); }
     body.appendChild(row);
   });
-  if(min<=0&&max>=0){ const today=document.createElement('div'); today.className='tl-today'; today.style.left=x(0)+'%'; today.textContent='today'; body.appendChild(today); }
+
 }
 function syncLaneLabels(){
-  const x=canvas.scrollLeft+20;
-  canvas.querySelectorAll('.plane-label').forEach(el=>el.style.left=x+'px');
+  rail.querySelectorAll('.plane-label').forEach(el=>{
+    el.style.top=(10+Number(el.dataset.y||0)-layer.scrollTop)+'px';
+  });
 }
 function readRoute(){
   const raw=location.hash.replace(/^#\/?/,''); const [path,qs]=raw.split('?');
   const params=new URLSearchParams(qs||location.search);
-  return {view:(path==='timeline'||params.get('view')==='timeline')?'time':'graph', mode:params.get('mode')==='detail'?'detail':'simple', task:params.get('task'), tab:params.get('tab')==='intervene'?'intervene':'task'};
+  const range=(params.get('range')||'30d');
+  const zoom=Math.min(120,Math.max(12,parseInt(params.get('zoom')||'28',10)||28));
+  const fromRaw=params.get('from'), toRaw=params.get('to');
+  const toOff=v=>v?Math.round((new Date(v+'T00:00:00').getTime()-new Date('2026-11-06T00:00:00').getTime())/86400000):null;
+  return {view:(path==='timeline'||params.get('view')==='timeline')?'time':'graph', mode:params.get('mode')==='detail'?'detail':'simple', range, zoom, from:toOff(fromRaw), to:toOff(toRaw), task:params.get('task'), tab:params.get('tab')==='intervene'?'intervene':'task'};
 }
-function routeString(view,mode){ return '#/'+(view==='time'?'timeline':'graph')+(view==='graph'&&mode==='detail'?'?mode=detail':''); }
+function routeString(view,mode,range,zoom,from,to){
+  const p=view==='time'?'timeline':'graph'; const qs=new URLSearchParams();
+  if(view==='graph'&&mode==='detail') qs.set('mode','detail');
+  if(view==='time'){
+    if(from!==null&&to!==null){ qs.set('from',isoDate(from)); qs.set('to',isoDate(to)); }
+    else if(range&&range!=='30d') qs.set('range',range);
+    if(zoom&&zoom!==28) qs.set('zoom',String(zoom));
+  }
+  return '#/'+p+(qs.toString()?'?'+qs.toString():'');
+}
 function applyRoute(){
-  const r=readRoute(); state.view=r.view; state.mode=r.mode;
+  const r=readRoute(); state.view=r.view; state.mode=r.mode; state.range=r.range; state.zoom=r.zoom; state.from=r.from; state.to=r.to;
   document.querySelectorAll('#tabs button').forEach(x=>x.classList.toggle('on',x.dataset.v===r.view));
   document.querySelectorAll('#mode button').forEach(x=>x.classList.toggle('on',x.dataset.m===r.mode));
   document.getElementById('view-graph').style.display=r.view==='graph'?'':'none';
   document.getElementById('view-time').style.display=r.view==='time'?'':'none';
   document.getElementById('graph-tools').style.display=r.view==='graph'?'flex':'none';
+  document.getElementById('time-tools').style.display=r.view==='time'?'flex':'none';
+  document.querySelectorAll('#range button').forEach(x=>x.classList.toggle('on',x.dataset.r===r.range));
+  const zbtn=document.querySelector('#zoom button[data-z="reset"]'); if(zbtn) zbtn.textContent=Math.round(r.zoom/28*100)+'%';
   document.getElementById('hint').textContent=r.view==='graph'
     ?'按优先级分行（P0 最高）；行内从左到右 = 依赖顺序'
     :'时间线：按 start/end 看执行；橙框 = 关键路径';
-  const rp=document.getElementById('route'); if(rp) rp.textContent=location.hash||routeString(r.view,r.mode);
+  const rp=document.getElementById('route'); if(rp) rp.textContent=location.hash||routeString(r.view,r.mode,r.range,state.zoom,state.from,state.to);
   document.title='dia graph · '+(r.view==='time'?'时间线':'关系图');
   if(r.view==='time') drawTimeline(); else drawGraph();
   if(r.task) openDrawer(r.task,r.tab);
   syncLaneLabels();
 }
-function go(view,mode){ const h=routeString(view,mode); if(location.hash===h) applyRoute(); else location.hash=h; }
-document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>go(b.dataset.v==='time'?'time':'graph',state.mode));
-document.querySelectorAll('#mode button').forEach(b=>b.onclick=()=>go(state.view,b.dataset.m));
-canvas.addEventListener('scroll',syncLaneLabels,{passive:true});
+function go(view,mode,range,zoom){ const h=routeString(view,mode,range||state.range,zoom||state.zoom,state.from,state.to); if(location.hash===h) applyRoute(); else location.hash=h; }
+document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>go(b.dataset.v==='time'?'time':'graph',state.mode,state.range));
+document.querySelectorAll('#mode button').forEach(b=>b.onclick=()=>go(state.view,b.dataset.m,state.range,state.zoom));
+document.querySelectorAll('#range button').forEach(b=>b.onclick=()=>{state.from=null;state.to=null;go('time',state.mode,b.dataset.r,state.zoom);});
+document.querySelectorAll('#zoom button').forEach(b=>b.onclick=()=>{ const z=b.dataset.z==='+'?state.zoom+8:b.dataset.z==='-'?state.zoom-8:28; go('time',state.mode,state.range,z); });
+layer.addEventListener('scroll',syncLaneLabels,{passive:true});
 document.querySelectorAll('.attention .row[data-task]').forEach(r=>r.onclick=()=>openDrawer(r.dataset.task,'intervene'));
 window.addEventListener('hashchange',applyRoute);
 applyRoute();

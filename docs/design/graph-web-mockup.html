@@ -109,19 +109,20 @@
   .kv{display:grid;grid-template-columns:70px 1fr;gap:4px 10px;font-size:12px}
   .kv .k{color:var(--muted)}
   /* timeline */
-  .timeline{padding:14px 16px 18px;overflow:hidden}
-  .tl-scroll{overflow:auto;max-height:620px}
+  .timeline{padding:14px 16px 18px;overflow:hidden;position:relative}
+  .tl-scroll{overflow:auto;max-height:620px;scrollbar-width:thin}
+  .scroll-hint{position:absolute;right:18px;top:10px;z-index:6;background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:3px 9px;font-size:10px;color:var(--muted);box-shadow:var(--shadow)}
   .tl-head{display:grid;grid-template-columns:190px var(--tlw,900px);gap:8px;align-items:end;color:var(--muted);font-size:11px;margin-bottom:8px;position:sticky;top:0;z-index:4;background:var(--panel)}
   .tl-axis{position:relative;height:34px;width:var(--tlw,900px)}
   .tl-axis span{position:absolute;transform:translateX(-50%);white-space:nowrap;line-height:1.2}
   .tl-axis span small{display:block;font-size:9px;opacity:.55}
   .tl-body{position:relative}
-  .tl-row{display:grid;grid-template-columns:190px var(--tlw,900px);gap:8px;align-items:center;min-height:38px;border-top:1px dashed var(--line)}
+  .tl-row{display:grid;grid-template-columns:190px var(--tlw,900px);gap:8px;align-items:start;min-height:38px;border-top:1px dashed var(--line)}
   .tl-head > div:first-child{position:sticky;left:0;z-index:5;background:var(--panel);padding-right:8px}
-  .tl-id{font-size:12px;min-width:0;position:sticky;left:0;z-index:2;background:var(--panel);padding-right:8px}
+  .tl-id{font-size:12px;min-width:0;position:sticky;left:0;z-index:2;background:var(--panel);padding:6px 8px 4px 0}
   .tl-id b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .tl-id span{color:var(--muted);font-size:10px}
-  .tl-track{position:relative;height:28px;overflow:hidden;width:var(--tlw,900px)}
+  .tl-track{position:relative;height:28px;overflow:hidden;width:var(--tlw,900px);margin-top:4px}
   .tl-bar{position:absolute;top:7px;height:14px;border-radius:5px;background:var(--blue);opacity:.9;cursor:pointer}
   .tl-bar .fill{position:absolute;left:0;top:0;bottom:0;border-radius:5px;background:rgba(255,255,255,.45)}
   .tl-bar.blocked{background:var(--red)} .tl-bar.done,.tl-bar.accepted,.tl-bar.todo{background:var(--muted)}
@@ -186,6 +187,7 @@
     </div>
     <div id="view-time" style="display:none">
       <div class="timeline">
+        <div class="scroll-hint">← 左右滚动 →</div>
         <div class="tl-scroll" id="tl-scroll">
           <div class="tl-head"><div>任务</div><div class="tl-axis" id="tl-axis"></div></div>
           <div class="tl-body" id="tl-body"></div>
@@ -480,7 +482,7 @@ function applyRoute(){
   const zbtn=document.querySelector('#zoom button[data-z="reset"]'); if(zbtn) zbtn.textContent=Math.round(r.zoom/28*100)+'%';
   document.getElementById('hint').textContent=r.view==='graph'
     ?'按优先级分行（P0 最高）；行内从左到右 = 依赖顺序'
-    :'时间线：按 start/end 看执行；橙框 = 关键路径';
+    :'时间线：左右滚动查看；－/＋缩放；橙框 = 关键路径';
   const rp=document.getElementById('route'); if(rp) rp.textContent=location.hash||routeString(r.view,r.mode,r.range,state.zoom,state.from,state.to);
   document.title='dia graph · '+(r.view==='time'?'时间线':'关系图');
   if(r.view==='time') drawTimeline(); else drawGraph();

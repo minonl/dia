@@ -58,4 +58,11 @@ describe("dia claim（advisory）", () => {
     expect(noSession.status).toBe(2);
     expect(noSession.stderr).toContain("E_NO_SESSION");
   });
+
+  test("claims --gc 清理过期/旧记录", () => {
+    const r = json(run(["claims", "--gc", "--days", "0", "--json"], "ses_a").stdout);
+    expect(r.dropped).toBeGreaterThanOrEqual(1);
+    const all = json(run(["claims", "--all", "--json"], "ses_a").stdout);
+    expect(all.some((c: any) => c.path === "docs")).toBe(false);
+  });
 });

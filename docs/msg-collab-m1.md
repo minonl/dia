@@ -93,3 +93,12 @@ dia out --to ses_xxx --kind handoff --subject "交接" --body-file handoff.md \
 - 发送时如果有他人活跃 claim，输出 `⚠ claim overlap`（advisory，仍发送）；
 - 收件方 `dia in` 会在消息下显示 `⚠ claim: <path> 由 <holder> 持有`；
 - 不自动排队/阻断；claim 仍是可见性工具。
+
+## 清理历史（可选）
+
+```bash
+dia claims --gc --days 7
+```
+
+- 保留活跃 claim + 最近 7 天的记录，删除更早的已过期/已释放事件；
+- 只压缩本地 `claims.jsonl`，不影响任何活跃 claim。

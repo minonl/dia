@@ -185,7 +185,7 @@ usage:
   dia collab status|enable|disable [--persona ID]   # dia-msg 默认能力开关（默认开）
   dia whoami [--json] [--name NAME]   # 当前会话身份（session id）
   dia in [--unread] [--all] [--legacy] [--json]   # 会话收件箱（正文内联）
-  dia out --to <session_id> --subject S (--body B|--body-file F) [--kind K] [--reply-to ID]
+  dia out --to <session_id> --subject S (--body B|--body-file F) [--kind K] [--touch p1,p2] [--reply-to ID]
   dia ack <id> | dia reply <id> --body B | dia close <id> --reason R | dia show <id>
   dia msg send|show|inbox|ack|delivered|deliver [--wait]|reply|needs-info|status|stuck|thread|escalate|agents|migrate
   dia agents list|register|unregister|discover
@@ -825,6 +825,13 @@ async function collabCli(argv: string[]): Promise<number> {
       i++;
     }
   }
+  const touchPaths = [...flags(args, "--touch"), ...(flag(args, "--touches") || "").split(",")]
+    .map((x) => x.trim()).filter(Boolean);
+  if (touchPaths.length) refs.touches = touchPaths.join(",");
+  const refPaths = (m: collab.MessageV2) => [
+    ...(m.refs?.touches || "").split(","),
+    ...(m.refs?.path ? [m.refs.path] : []),
+  ].map((x) => x.trim()).filter(Boolean);
   const view = (m: collab.MessageV2) => ({ ...m, body: collab.bodyOf(m) });
   const print = (m: collab.MessageV2) => {
     out(`${m.id}\t[${m.state}]\t${m.subject}`);
@@ -832,6 +839,11 @@ async function collabCli(argv: string[]): Promise<number> {
     out(`  to:   ${m.to.display_name || m.to.session_id} (${m.to.session_id})`);
     out(`  kind: ${m.kind}${m.requires_reply ? "  需回复" : ""}${m.deadline ? `  deadline=${m.deadline}` : ""}  thread=${m.thread_id}#${m.seq}`);
     if (m.refs && Object.keys(m.refs).length) out(`  refs: ${Object.entries(m.refs).map(([k, v]) => `${k}=${v}`).join(" ")}`);
+    const touches = refPaths(m);
+    if (touches.length) {
+      const held = claims.list({}).filter((c) => touches.includes(c.path) && c.holder !== m.to.session_id);
+      for (const c of held) out(`  ⚠ claim: ${c.path} 由 ${c.holder} 持有（${c.reason || "no reason"}）`);
+    }
     const body = collab.bodyOf(m);
     if (body) {
       const max = 4000;
@@ -915,7 +927,12 @@ async function collabCli(argv: string[]): Promise<number> {
         idempotencyKey: flag(args, "--idempotency-key"),
         hops: flag(args, "--hops") ? Number(flag(args, "--hops")) : undefined,
       });
-      out(asJson ? JSON.stringify(m, null, 1) : `${m.id}\t${m.thread_id}#${m.seq}\t${m.from.session_id} → ${m.to.session_id}\t${m.kind}\t${m.subject}`);
+      const overlaps = claims.list({}).filter((c) => touchPaths.includes(c.path) && c.holder !== m.from.session_id);
+      if (asJson) out(JSON.stringify(overlaps.length ? { ...m, claim_overlaps: overlaps } : m, null, 1));
+      else {
+        out(`${m.id}\t${m.thread_id}#${m.seq}\t${m.from.session_id} → ${m.to.session_id}\t${m.kind}\t${m.subject}`);
+        for (const c of overlaps) out(`  ⚠ claim overlap: ${c.path} 由 ${c.holder} 持有（${c.reason || "no reason"}）`);
+      }
       return 0;
     }
     if (sub === "ack") {

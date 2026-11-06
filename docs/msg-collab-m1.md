@@ -78,3 +78,18 @@ dia graph --tui --no-color      # 关 ANSI 颜色
 - 按状态分组显示 task → deps / touches / blocked_by；claims 单列；
 - 不启 HTTP/daemon，遵守框架“无网络模块”约束；
 - `--task t-...` 只显示该任务的直接邻居。
+
+---
+
+# handoff + claim 联动（M2）
+
+```bash
+dia claim src/collab.ts --reason "正在重构"
+dia out --to ses_xxx --kind handoff --subject "交接" --body-file handoff.md \
+        --touches src/collab.ts,docs/msg-collab-m1.md
+```
+
+- `--touches a,b`（也接受重复 `--touch`）写入消息 `refs.touches`；
+- 发送时如果有他人活跃 claim，输出 `⚠ claim overlap`（advisory，仍发送）；
+- 收件方 `dia in` 会在消息下显示 `⚠ claim: <path> 由 <holder> 持有`；
+- 不自动排队/阻断；claim 仍是可见性工具。

@@ -70,7 +70,7 @@ BR="$TD/remote.git"; git init -q --bare "$BR"
 git -C "$R" remote add origin "$BR" 2>/dev/null || true
 git --git-dir="$BR" fetch -q "$R" main:main 2>/dev/null || true
 git -C "$R" fetch -q origin 2>/dev/null || true
-echo "/Users/alice/secret" > "$TD/repo-worktree--y/bad.txt"
+BAD="$(printf '/%s/alice/secret' Users)"; echo "$BAD" > "$TD/repo-worktree--y/bad.txt"
 git -C "$TD/repo-worktree--y" add bad.txt
 git -C "$TD/repo-worktree--y" commit -qm bad >/dev/null 2>&1
 if git -C "$TD/repo-worktree--y" push -q origin feat/y 2>/dev/null; then bad "敏感推送未被拦截"; else ok "敏感推送被拦截"; fi

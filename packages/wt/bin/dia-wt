@@ -1439,6 +1439,17 @@ if command -v dia >/dev/null 2>&1; then
 fi
 RC
     wt_ensure_env_export SIMPLE_GIT_HOOKS_RC "$rcf"
+    # 迁移残留：本地 hooksPath 指向已删除的目录（如刚从 husky 切过来）→ 撤掉，让管理器写 .git/hooks
+    if [ -n "$prev" ]; then
+      local resolved="$prev"
+      case "$resolved" in /*) ;; *) resolved="$repo/$resolved" ;; esac
+      if [ ! -d "$resolved" ]; then
+        git -C "$repo" config --local --unset core.hooksPath 2>/dev/null || true
+        echo "[dia-wt] 清理失效的本地 core.hooksPath（$prev 已不存在）" >&2
+      else
+        echo "[dia-wt] ⚠️ 本仓仍设有 core.hooksPath=$prev（会覆盖管理器钩子），请确认后移除" >&2
+      fi
+    fi
     python3 - "$cfg" "$repo" "$def" "$template" "$prev" <<'PYG'
 import json, sys, datetime
 cfg, repo, br, tmpl, prev = sys.argv[1:6]

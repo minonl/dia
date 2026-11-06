@@ -1367,7 +1367,7 @@ async function kitCli(argv: string[]): Promise<number> {
     }
     if (sub === "list") {
       const rows = kit.list();
-      out(asJson ? JSON.stringify(rows, null, 1) : rows.map((r: any) => `${r.id}: ${r.versions.join(", ")}`).join("\n") || "(none)");
+      out(asJson ? JSON.stringify(rows, null, 1) : rows.map((r: any) => `${r.id}: ${r.versions.join(", ")}${r.tags?.length ? ` [${r.tags.join(", ")}]` : ""}`).join("\n") || "(none)");
       return 0;
     }
     if (sub === "verify") {

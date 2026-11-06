@@ -1,80 +1,69 @@
-# dia graph Web 视觉设计稿（v0.2）
+# dia graph Web 视觉设计稿（v0.3）
 
-> 静态 mockup：[`graph-web-mockup.html`](graph-web-mockup.html)（直接用浏览器打开，无网络/无依赖）
-> 数据契约：`dia graph --json`（schema 1）；本稿只做视觉与信息层级，不是实现。
+> 静态 mockup：[`graph-web-mockup.html`](graph-web-mockup.html)（浏览器直接打开，无网络/无依赖）
+> 数据契约：`dia graph --json`（schema 1）；时间线所需 start/end 为后续扩展字段。
 
-## 1. 布局
+## 1. 两个视图
 
-```
-┌ header: dia graph · 只读 · 更新时间 ──────────────────────────┐
-├ 工具栏：状态过滤 | 密度 | 提示                               │
-├ 主画布（三栏：sessions | task 状态行 | paths）  ┌ 右侧 320px ────┐
-│  sessions rail | TODO / DOING / REVIEW / BLOCKED / DONE / ACCEPTED | paths rail │ 概览 / 需要人 │
-│                                           │ 节点详情        │
-└ footer: 数据来源 / 约束 ───────────────────┴────────────────┘
-```
+顶部 tab：
 
-- 主画布是**三个维度**，不是一排状态：
-  1. **sessions rail（左）**：谁在做；
-  2. **task 状态行（中）**：todo / doing / review / blocked / done / accepted，每个状态独立一行；
-  3. **paths rail（右）**：改哪些文件/产物。
-  边方向：session → path（claim）、task → task（depends）、task → path（touches）；自上而下或跨栏。
-- 图例不再单独占侧栏，放在画布**右下角**，随画布滚动可见。
-- 右侧固定 320px：概览计数、attention（阻塞/claim/待评审）、节点详情。
-- 节点卡片颜色只表达 **kind + status**，不用于装饰。
+- **关系图**：回答“谁依赖谁、先后顺序、优先级”；
+- **时间线**：独立甘特图，回答“什么时候做、做到哪、是否延期”。
 
-## 2. 信息层级
+### 关系图：按依赖深度分层，不按状态分列
 
-| 层 | 内容 | 设计 |
-|---|---|---|
-| 第一层 | task 标题 + status | 加粗 13px；状态色只出现在左边框和 badge |
-| 第二层 | task id / owner | 11px muted；owner 显示短 id（`@a1b2c3d4`） |
-| 第三层 | 依赖/触碰/claim | SVG 边 + 右侧详情；不在卡片里堆文字 |
-| attention | 阻塞 / claim 冲突 / 待评审 | 右侧固定区，不藏在 hover 里 |
+- 横轴 = 依赖深度（拓扑层），从左到右；
+- 纵轴 = 层内排序；`依赖顺序` / `优先级` 可切换（P0 优先）；
+- **状态不占布局**：用左边框颜色 + 进度条 + `status` 文本表达；
+- `简约`：只显示 task + `depends_on`；
+- `详细`：展开 owner、session、path、touches、claims，并在卡片里列具体关联（`depends_on / depended_by / touches / claims / collaborates_with`）。
+- 图例固定在画布右下角：只显示当前模式会用到的边；`→` 单向、`↔` 双向，线型与图上一致。
 
-## 3. 边语义（方向 + 线型必须一一对应）
+### 时间线：独立甘特
 
-| 关系 | 方向 | 线型 | 颜色 | 说明 |
-|---|---|---|---|---|
-| `depends_on` | 单向 `→` | 实线 | 蓝 | 被依赖方在箭头指向的一端 |
-| `touches` | 单向 `→` | 虚线 `6 4` | 紫 | task 触碰 path |
-| `claims` | 单向 `→` | 点线 `2 3` | 青 | session 声明 path |
-| `collaborates_with` | 双向 `↔` | 点线 `1 3` + 双箭头 | 灰 | 示例（当前 M1 数据契约未包含） |
+- 每行一个 task，横轴为相对今天的天数（`-8d … today … +4d`）；
+- 条长 = start/end，内部填充 = progress；
+- 颜色 = status；橙色描边 = 关键路径；红色虚线 = 今天；
+- 点击条/行可看任务详情。
 
-- 所有单向边用**终点箭头**；双向边用**两端箭头**。
-- 图例与图上边共用同一套颜色/虚线/箭头，避免“图例是图例、图上是另一套”。
+## 2. 边语义
 
-## 4. 交互
+| 关系 | 方向 | 线型 | 颜色 |
+|---|---|---|---|
+| `depends_on` | 单向 `→` | 实线 | 蓝 |
+| `touches` | 单向 `→` | 虚线 `6 4` | 紫 |
+| `claims` | 单向 `→` | 点线 `2 3` | 青 |
+| `collaborates_with` | 双向 `↔` | 点线 `1 3` + 双箭头 | 灰（视觉示例，未进 M1 契约） |
 
-- 点击节点 → 右侧详情：kind/status/owner + 关联边列表；
-- 顶部过滤：all / doing / blocked / review；**过滤时节点和边一起重绘**（不留下指向隐藏节点的线）；
-- 密度切换：comfortable / compact；
-- 刷新：MVP 静态导出；live 版用 `dia graph --json` 轮询（2s），不做 WebSocket；
-- 不做：编辑、拖拽改依赖、写 claim（只读）。
+## 3. 为什么不再按状态列/行
 
-## 5. 与现有数据契约的映射
+状态列会把“关系”切碎，且 TODO/DONE、REVIEW/BLOCKED 混在一列没有语义。现在：
 
-| UI | `dia graph --json` |
+- 依赖顺序是主结构（拓扑层）；
+- 状态是属性（颜色/进度）；
+- 优先级是排序维度（P0/P1/P2 + 层内排序）；
+- 时间放在独立时间线，不挤在关系图里。
+
+## 4. 与数据契约的映射
+
+| UI | 数据 |
 |---|---|
-| 卡片 | `nodes[]`：task/session/path |
+| task 卡片 | `nodes[kind=task]` + status/owner |
 | 依赖边 | `edges[kind=depends_on]` |
-| 触碰边 | `edges[kind=touches]` |
-| claim 边 | `edges[kind=claims]` |
-| 阻塞提示 | task 节点 `blocked_by[]`（派生，不是边） |
-| 环 | `cycles[]`，顶部红条提示 |
+| touches / claims | `edges` 对应 kind |
+| 进度 | 后续 `task.progress`（0-100） |
+| 时间线 | 后续 `task.start/end`（相对/ISO） |
+| 关键路径 | 后续由依赖图最长路径计算 |
 
-> `collaborates_with` 是视觉稿里的双向示例，尚未进入 M1 数据契约，不应当作已实现。
+## 5. 实现约束
 
-## 5. 实现约束（重要）
+`tests/static.test.ts` 禁止框架 import `node:http` / `fetch` / 网络模块。因此：
 
-仓库的 `tests/static.test.ts` 禁止框架 import `node:http` / `fetch` / 网络模块。因此：
-
-1. **本稿只是静态 HTML**，不进入 `src/`，不启服务；
-2. 若将来要做真实 Web：
-   - 方案 A：`dia graph --export-html` 生成静态文件（推荐，不需要网络）；
-   - 方案 B：独立可选包 `@dia/graph-web`（明确例外 + 只绑 loopback + 单独评审），不改核心框架规则。
+1. 本稿是静态 HTML，不进入 `src/`；
+2. 真实实现优先 `dia graph --export-html` 生成静态文件；
+3. live Web 需独立可选包 + 单独评审（loopback only）。
 
 ## 6. 后续
 
-- 先确认视觉稿的列布局/信息密度/右侧 attention 位置；
-- 确认后先做 `--export-html` 静态导出（零网络、零 daemon），再评估 live 轮询。
+- 先确认“依赖深度分层 + 简约/详细 + 时间线”结构；
+- 确认后做 `--export-html`（零网络），再评估 live 轮询。

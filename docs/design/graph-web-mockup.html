@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>dia graph · 视觉设计稿</title>
+<title>dia graph · 视觉设计稿 v0.3</title>
 <style>
   :root{
     --bg:#f6f7f9; --panel:#fff; --ink:#111827; --muted:#6b7280; --line:#e5e7eb;
@@ -16,10 +16,13 @@
   }
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
-  header{display:flex;align-items:center;gap:16px;padding:16px 22px;border-bottom:1px solid var(--line);background:var(--panel)}
+  header{display:flex;align-items:center;gap:16px;padding:14px 22px;border-bottom:1px solid var(--line);background:var(--panel);flex-wrap:wrap}
   header h1{font-size:17px;margin:0;letter-spacing:.2px}
   header .sub{color:var(--muted);font-size:12px}
   header .spacer{flex:1}
+  .tabs{display:flex;border:1px solid var(--line);border-radius:9px;overflow:hidden}
+  .tabs button{border:0;background:transparent;color:var(--muted);padding:6px 12px;font:inherit;font-size:12px;cursor:pointer}
+  .tabs button.on{background:var(--blue);color:#fff}
   .pill{border:1px solid var(--line);border-radius:999px;padding:4px 10px;font-size:12px;color:var(--muted);background:var(--bg)}
   main{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:18px;padding:18px;max-width:1480px;margin:0 auto}
   .panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow)}
@@ -28,22 +31,25 @@
   .seg button{border:0;background:transparent;color:var(--muted);padding:6px 10px;font:inherit;font-size:12px;cursor:pointer}
   .seg button.on{background:var(--blue);color:#fff}
   .toolbar .hint{margin-left:auto;color:var(--muted);font-size:12px}
-  .canvas{position:relative;height:760px;overflow:auto;padding:10px}
+  .canvas{position:relative;height:620px;overflow:auto;padding:10px}
   svg.edges{position:absolute;inset:0;pointer-events:none;overflow:visible}
-  svg.edges line{stroke-linecap:round;fill:none}
-  .node{position:absolute;width:156px;padding:7px 9px;border:1px solid var(--line);border-left:4px solid var(--muted);border-radius:10px;background:var(--panel);padding:9px 11px;box-shadow:var(--shadow);cursor:pointer;transition:transform .12s ease,box-shadow .12s ease}
-  .node:hover{transform:translateY(-1px);box-shadow:0 10px 28px rgba(17,24,39,.12)}
+  .node{position:absolute;width:190px;border:1px solid var(--line);border-left:4px solid var(--muted);border-radius:10px;background:var(--panel);padding:8px 10px;box-shadow:var(--shadow);cursor:pointer}
   .node.task.doing{border-left-color:var(--blue)}
   .node.task.blocked{border-left-color:var(--red)}
   .node.task.review{border-left-color:var(--amber)}
   .node.task.done,.node.task.accepted{border-left-color:var(--green)}
   .node.path{border-left-color:var(--violet)}
   .node.session{border-left-color:var(--cyan)}
-  .node b{display:block;font-size:12.5px;line-height:1.3;margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .node .meta{color:var(--muted);font-size:10.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .badge{display:inline-block;font-size:10px;padding:1px 6px;border-radius:999px;border:1px solid var(--line);color:var(--muted);margin-top:4px}
-  .row-label{position:absolute;left:190px;width:96px;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
-  .rail-label{position:absolute;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+  .node b{display:block;font-size:13px;line-height:1.3;margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .node .meta{color:var(--muted);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .progress{height:4px;border-radius:99px;background:var(--line);margin-top:6px;overflow:hidden}
+  .progress i{display:block;height:100%;background:var(--blue)}
+  .prio{float:right;font-size:10px;border:1px solid var(--line);border-radius:5px;padding:0 5px;color:var(--muted);margin-left:4px}
+  .legend-overlay{position:absolute;right:12px;bottom:12px;z-index:5;background:color-mix(in srgb,var(--panel) 92%,transparent);border:1px solid var(--line);border-radius:10px;padding:8px 10px;box-shadow:var(--shadow);font-size:11px;color:var(--muted);display:grid;gap:5px;min-width:190px}
+  .legend-overlay .row{display:flex;align-items:center;gap:8px;white-space:nowrap}
+  .legend-overlay .sample{width:38px;height:10px;flex:0 0 38px}
+  .legend-overlay b{color:var(--ink);font-weight:600}
+  .canvas.simple .legend-overlay .detail-row{display:none}
   aside{display:flex;flex-direction:column;gap:14px}
   .side-title{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid var(--line)}
   .side-title h2{font-size:13px;margin:0}
@@ -52,8 +58,6 @@
   .item{display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px dashed var(--line);font-size:12px}
   .item:last-child{border-bottom:0}
   .item .k{color:var(--muted)}
-  .dot{display:inline-block;width:7px;height:7px;border-radius:99px;background:var(--muted);margin-right:6px;vertical-align:1px}
-  .dot.blue{background:var(--blue)} .dot.red{background:var(--red)} .dot.green{background:var(--green)} .dot.amber{background:var(--amber)}
   .attention{padding:8px 14px 14px}
   .attention .row{display:flex;gap:8px;align-items:flex-start;padding:8px 0;border-bottom:1px dashed var(--line);font-size:12px}
   .attention .row:last-child{border-bottom:0}
@@ -63,14 +67,26 @@
   .detail.show{display:block}
   .detail h3{font-size:14px;margin:0 0 6px}
   .detail p{margin:0 0 8px;color:var(--muted);font-size:12px}
-  .kv{display:grid;grid-template-columns:80px 1fr;gap:4px 10px;font-size:12px}
+  .kv{display:grid;grid-template-columns:70px 1fr;gap:4px 10px;font-size:12px}
   .kv .k{color:var(--muted)}
-  /* 图例放在画布角落，不单独占侧栏 */
-  .legend-overlay{position:absolute;right:12px;bottom:12px;z-index:5;background:color-mix(in srgb,var(--panel) 92%,transparent);border:1px solid var(--line);border-radius:10px;padding:8px 10px;box-shadow:var(--shadow);font-size:11px;color:var(--muted);display:grid;gap:5px;min-width:180px}
-  .legend-overlay .row{display:flex;align-items:center;gap:8px;white-space:nowrap}
-  .legend-overlay .sample{width:38px;height:10px;flex:0 0 38px}
-  .legend-overlay .label{overflow:hidden;text-overflow:ellipsis}
-  .legend-overlay b{color:var(--ink);font-weight:600}
+  /* timeline */
+  .timeline{padding:14px 16px 18px;overflow:auto}
+  .tl-head{display:grid;grid-template-columns:190px 1fr;gap:8px;align-items:end;color:var(--muted);font-size:11px;margin-bottom:8px}
+  .tl-axis{position:relative;height:22px}
+  .tl-axis span{position:absolute;transform:translateX(-50%);white-space:nowrap}
+  .tl-body{position:relative}
+  .tl-row{display:grid;grid-template-columns:190px 1fr;gap:8px;align-items:center;min-height:38px;border-top:1px dashed var(--line)}
+  .tl-id{font-size:12px;min-width:0}
+  .tl-id b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tl-id span{color:var(--muted);font-size:10px}
+  .tl-track{position:relative;height:28px}
+  .tl-bar{position:absolute;top:7px;height:14px;border-radius:5px;background:var(--blue);opacity:.9;cursor:pointer}
+  .tl-bar .fill{position:absolute;left:0;top:0;bottom:0;border-radius:5px;background:rgba(255,255,255,.45)}
+  .tl-bar.blocked{background:var(--red)} .tl-bar.done,.tl-bar.accepted{background:var(--green)}
+  .tl-bar.review{background:var(--amber)}
+  .tl-bar.critical{outline:2px solid var(--amber);outline-offset:2px}
+  .tl-today{position:absolute;top:0;bottom:0;pointer-events:none;z-index:2;border-left:1px dashed var(--red);color:var(--red);font-size:10px;padding-left:4px}
+  .tl-caption{color:var(--muted);font-size:12px;padding:2px 0 10px}
   footer{padding:0 22px 22px;color:var(--muted);font-size:11px}
   @media (max-width:980px){ main{grid-template-columns:1fr} .canvas{height:560px} }
 </style>
@@ -78,55 +94,47 @@
 <body>
 <header>
   <h1>dia graph</h1>
-  <span class="sub">只读依赖图 · 视觉设计稿 v0.2</span>
-  <span class="pill">静态 mockup · 无网络</span>
+  <span class="sub">只读依赖图 + 时间线 · 视觉设计稿 v0.3</span>
+  <div class="tabs" id="tabs">
+    <button class="on" data-v="graph">关系图</button>
+    <button data-v="time">时间线</button>
+  </div>
   <span class="spacer"></span>
+  <span class="pill">静态 mockup · 无网络</span>
   <span class="pill" id="updated">updated 18:42</span>
 </header>
 
 <main>
   <section class="panel">
     <div class="toolbar">
-      <div class="seg" id="filter">
-        <button class="on" data-f="all">全部</button>
-        <button data-f="todo">待办</button>
-        <button data-f="doing">进行中</button>
-        <button data-f="blocked">阻塞</button>
-        <button data-f="review">待评审</button>
+      <div id="graph-tools" style="display:flex;gap:8px;align-items:center">
+        <div class="seg" id="mode">
+          <button class="on" data-m="simple">简约</button>
+          <button data-m="detail">详细</button>
+        </div>
+        <div class="seg" id="sort">
+          <button class="on" data-s="dep">依赖顺序</button>
+          <button data-s="prio">优先级</button>
+        </div>
       </div>
-      <div class="seg" id="density">
-        <button class="on" data-d="comfortable">舒适</button>
-        <button data-d="compact">紧凑</button>
-      </div>
-      <span class="hint">点击节点查看详情 · 边方向见右下角图例</span>
+      <span class="hint" id="hint">简约：只看任务和依赖；详细：显示 owner / session / path / touches / claims</span>
     </div>
-    <div class="canvas" id="canvas">
-      <svg class="edges" id="edges"></svg>
-      <div class="rail-label" style="left:18px;top:12px">sessions</div>
-      <div class="rail-label" style="left:698px;top:12px">paths</div>
-      <div class="row-label" style="top:48px">todo</div>
-      <div class="row-label" style="top:138px">doing</div>
-      <div class="row-label" style="top:228px">review</div>
-      <div class="row-label" style="top:318px">blocked</div>
-      <div class="row-label" style="top:408px">done</div>
-      <div class="row-label" style="top:498px">accepted</div>
-      <div class="legend-overlay" id="legend">
-        <div class="row">
-          <svg class="sample" viewBox="0 0 38 10"><defs><marker id="lg-dep" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6" fill="#2563eb"/></marker></defs><line x1="1" y1="5" x2="30" y2="5" stroke="#2563eb" stroke-width="1.6" marker-end="url(#lg-dep)"/></svg>
-          <span class="label"><b>→ depends_on</b> 单向</span>
+    <div id="view-graph">
+      <div class="canvas" id="canvas">
+        <svg class="edges" id="edges"></svg>
+        <div class="legend-overlay" id="legend">
+          <div class="row"><svg class="sample" viewBox="0 0 38 10"><defs><marker id="lg-dep" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6" fill="#2563eb"/></marker></defs><line x1="1" y1="5" x2="30" y2="5" stroke="#2563eb" stroke-width="1.6" marker-end="url(#lg-dep)"/></svg><span><b>→ depends_on</b> 单向</span></div>
+          <div class="row detail-row"><svg class="sample" viewBox="0 0 38 10"><defs><marker id="lg-touch" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6" fill="#7c3aed"/></marker></defs><line x1="1" y1="5" x2="30" y2="5" stroke="#7c3aed" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#lg-touch)"/></svg><span><b>→ touches</b> 单向</span></div>
+          <div class="row detail-row"><svg class="sample" viewBox="0 0 38 10"><defs><marker id="lg-claim" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6" fill="#0891b2"/></marker></defs><line x1="1" y1="5" x2="30" y2="5" stroke="#0891b2" stroke-width="1.6" stroke-dasharray="2 3" marker-end="url(#lg-claim)"/></svg><span><b>→ claims</b> 单向</span></div>
+          <div class="row detail-row"><svg class="sample" viewBox="0 0 38 10"><defs><marker id="lg-collab" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6" fill="#64748b"/></marker></defs><line x1="3" y1="5" x2="32" y2="5" stroke="#64748b" stroke-width="1.6" stroke-dasharray="1 3" marker-start="url(#lg-collab)" marker-end="url(#lg-collab)"/></svg><span><b>↔ collaborates_with</b> 双向（示例）</span></div>
         </div>
-        <div class="row">
-          <svg class="sample" viewBox="0 0 38 10"><defs><marker id="lg-touch" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6" fill="#7c3aed"/></marker></defs><line x1="1" y1="5" x2="30" y2="5" stroke="#7c3aed" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#lg-touch)"/></svg>
-          <span class="label"><b>→ touches</b> 单向</span>
-        </div>
-        <div class="row">
-          <svg class="sample" viewBox="0 0 38 10"><defs><marker id="lg-claim" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6" fill="#0891b2"/></marker></defs><line x1="1" y1="5" x2="30" y2="5" stroke="#0891b2" stroke-width="1.6" stroke-dasharray="2 3" marker-end="url(#lg-claim)"/></svg>
-          <span class="label"><b>→ claims</b> 单向</span>
-        </div>
-        <div class="row">
-          <svg class="sample" viewBox="0 0 38 10"><defs><marker id="lg-collab" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6" fill="#64748b"/></marker></defs><line x1="3" y1="5" x2="32" y2="5" stroke="#64748b" stroke-width="1.6" stroke-dasharray="1 3" marker-start="url(#lg-collab)" marker-end="url(#lg-collab)"/></svg>
-          <span class="label"><b>↔ collaborates_with</b> 双向（示例）</span>
-        </div>
+      </div>
+    </div>
+    <div id="view-time" style="display:none">
+      <div class="timeline">
+        <div class="tl-head"><div>任务</div><div class="tl-axis" id="tl-axis"></div></div>
+        <div class="tl-body" id="tl-body"></div>
+        <div class="tl-caption">橙色描边 = 关键路径（数据根迁移 → install.sh 拆分 → launchd）；红色虚线 = 今天。</div>
       </div>
     </div>
   </section>
@@ -135,137 +143,182 @@
     <div class="panel">
       <div class="side-title"><h2>概览</h2><span>live data</span></div>
       <div class="list">
-        <div class="item"><span class="k"><i class="dot blue"></i>任务</span><b>7</b></div>
-        <div class="item"><span class="k"><i class="dot red"></i>阻塞</span><b>1</b></div>
-        <div class="item"><span class="k"><i class="dot amber"></i>待评审</span><b>1</b></div>
-        <div class="item"><span class="k"><i class="dot green"></i>完成</span><b>2</b></div>
+        <div class="item"><span class="k"><i class="dot" style="background:var(--blue)"></i>任务</span><b>7</b></div>
+        <div class="item"><span class="k"><i class="dot" style="background:var(--red)"></i>阻塞</span><b>1</b></div>
+        <div class="item"><span class="k"><i class="dot" style="background:var(--amber)"></i>待评审</span><b>1</b></div>
+        <div class="item"><span class="k"><i class="dot" style="background:var(--green)"></i>完成</span><b>2</b></div>
         <div class="item"><span class="k">claims</span><b>3</b></div>
       </div>
     </div>
-
     <div class="panel">
       <div class="side-title"><h2>需要人</h2><span>attention</span></div>
       <div class="attention">
-        <div class="row"><span class="tag">阻塞</span><div><b>install.sh 迁移</b><br><span class="k">等待数据根切换完成</span></div></div>
+        <div class="row"><span class="tag">阻塞</span><div><b>launchd 安装脚本</b><br><span class="k">等待 install.sh 拆分</span></div></div>
         <div class="row"><span class="tag amber">claim</span><div><b>src/collab.ts</b><br><span class="k">session-a 持有中</span></div></div>
         <div class="row"><span class="tag amber">评审</span><div><b>graph TUI</b><br><span class="k">等待独立 verifier</span></div></div>
       </div>
     </div>
-
     <div class="panel detail" id="detail">
       <div class="side-title"><h2>节点详情</h2><button onclick="document.getElementById('detail').classList.remove('show')" style="border:0;background:transparent;color:var(--muted);cursor:pointer">关闭</button></div>
       <div class="detail" style="display:block" id="detail-body"></div>
     </div>
   </aside>
 </main>
-<footer>视觉稿：布局 / 信息层级 / 边方向与线型。图例在画布右下角，不单独占侧栏。真实实现需先解除「框架无网络模块」限制并单独评审。</footer>
+<footer>关系图按依赖深度分层，状态用颜色/进度条；时间线独立展示执行情况。真实实现需先解除「框架无网络模块」限制并单独评审。</footer>
 
 <script>
-const nodes = [
-  {id:'session:ses_a', kind:'session', label:'session-a', x:20, y:40},
-  {id:'session:ses_b', kind:'session', label:'session-b', x:20, y:130},
-  {id:'task:t-1', kind:'task', status:'todo', label:'数据根迁移', x:300, y:40, owner:'ses_a'},
-  {id:'task:t-2', kind:'task', status:'doing', label:'install.sh 拆分', x:300, y:130, owner:'ses_a'},
-  {id:'task:t-3', kind:'task', status:'blocked', label:'launchd 安装脚本', x:300, y:310, owner:'ses_b'},
-  {id:'task:t-4', kind:'task', status:'review', label:'graph TUI', x:300, y:220, owner:'ses_b'},
-  {id:'task:t-5', kind:'task', status:'done', label:'dia msg M0', x:300, y:400},
-  {id:'task:t-6', kind:'task', status:'accepted', label:'claim 机制', x:300, y:490},
-  {id:'task:t-7', kind:'task', status:'doing', label:'handoff + claim', x:480, y:130, owner:'ses_a'},
-  {id:'path:install.sh', kind:'path', label:'install.sh', x:700, y:40},
-  {id:'path:src/collab.ts', kind:'path', label:'src/collab.ts', x:700, y:130},
-  {id:'path:docs/msg.md', kind:'path', label:'docs/msg.md', x:700, y:220}
+const tasks = [
+  {id:'t-1', label:'数据根迁移', status:'done', prio:'P1', progress:100, start:-8, end:-5, owner:'ses_a', deps:[]},
+  {id:'t-2', label:'install.sh 拆分', status:'doing', prio:'P0', progress:60, start:-4, end:1, owner:'ses_a', deps:['t-1']},
+  {id:'t-3', label:'launchd 安装脚本', status:'blocked', prio:'P1', progress:20, start:1, end:4, owner:'ses_b', deps:['t-2']},
+  {id:'t-4', label:'graph TUI', status:'review', prio:'P2', progress:80, start:-2, end:1, owner:'ses_b', deps:['t-2']},
+  {id:'t-5', label:'dia msg M0', status:'done', prio:'P1', progress:100, start:-8, end:-5, owner:null, deps:[]},
+  {id:'t-6', label:'claim 机制', status:'accepted', prio:'P1', progress:100, start:-5, end:-2, owner:null, deps:[]},
+  {id:'t-7', label:'handoff + claim', status:'doing', prio:'P2', progress:40, start:-2, end:2, owner:'ses_a', deps:['t-6','t-5']}
 ];
-const edges = [
-  {from:'task:t-2', to:'task:t-1', kind:'depends_on'},
-  {from:'task:t-3', to:'task:t-2', kind:'depends_on'},
-  {from:'task:t-7', to:'task:t-6', kind:'depends_on'},
-  {from:'task:t-2', to:'path:install.sh', kind:'touches'},
-  {from:'task:t-4', to:'path:src/collab.ts', kind:'touches'},
-  {from:'task:t-7', to:'path:src/collab.ts', kind:'touches'},
-  {from:'session:ses_a', to:'path:src/collab.ts', kind:'claims'},
-  {from:'session:ses_b', to:'path:install.sh', kind:'claims'},
-  {from:'task:t-4', to:'task:t-5', kind:'collaborates_with'}
+const paths = ['install.sh','src/collab.ts','docs/msg.md'];
+const taskEdges = [
+  {from:'t-2', to:'t-1', kind:'depends_on'},
+  {from:'t-3', to:'t-2', kind:'depends_on'},
+  {from:'t-4', to:'t-2', kind:'depends_on'},
+  {from:'t-7', to:'t-6', kind:'depends_on'},
+  {from:'t-2', to:'install.sh', kind:'touches'},
+  {from:'t-4', to:'src/collab.ts', kind:'touches'},
+  {from:'t-7', to:'src/collab.ts', kind:'touches'},
+  {from:'ses_a', to:'src/collab.ts', kind:'claims'},
+  {from:'ses_b', to:'install.sh', kind:'claims'},
+  {from:'t-4', to:'t-5', kind:'collaborates_with'}
 ];
-const style = {
-  depends_on:{stroke:'#2563eb', width:1.6, dash:'0', marker:'dep'},
-  touches:{stroke:'#7c3aed', width:1.6, dash:'6 4', marker:'touch'},
-  claims:{stroke:'#0891b2', width:1.6, dash:'2 3', marker:'claim'},
-  collaborates_with:{stroke:'#64748b', width:1.6, dash:'1 3', marker:'collab', both:true}
-};
-const canvas = document.getElementById('canvas');
-const svg = document.getElementById('edges');
-const byId = new Map(nodes.map(n=>[n.id,n]));
-const state = { filter:'all', density:'comfortable' };
-const esc = s => String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-const shortId = id => String(id||'').replace(/^ses_/,'').slice(-8);
+const state={view:'graph', mode:'simple', sort:'dep'};
+const canvas=document.getElementById('canvas'), svg=document.getElementById('edges');
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const color={doing:'#2563eb',blocked:'#dc2626',review:'#d97706',done:'#16a34a',accepted:'#16a34a',todo:'#6b7280'};
 
-function visibleSet(){
-  if(state.filter==='all') return new Set(nodes.map(n=>n.id));
-  const keep = new Set(nodes.filter(n=>n.kind==='task' && n.status===state.filter).map(n=>n.id));
-  // 只保留匹配任务及其直接邻居（session/path/上游 task），这样筛选时边也会跟着消失。
-  for(const e of edges){
-    if(keep.has(e.from)) keep.add(e.to);
-    if(keep.has(e.to)) keep.add(e.from);
-  }
-  return keep;
+function layers(){
+  const by=new Map(tasks.map(t=>[t.id,t])); const memo=new Map();
+  const depth=t=>{ if(memo.has(t.id)) return memo.get(t.id); const d=t.deps.length?Math.max(...t.deps.map(x=>depth(by.get(x))))+1:0; memo.set(t.id,d); return d; };
+  tasks.forEach(depth);
+  const max=Math.max(0,...memo.values());
+  const groups=Array.from({length:max+1},()=>[]);
+  tasks.forEach(t=>groups[memo.get(t.id)].push(t));
+  const cmp=(a,b)=>state.sort==='prio'?a.prio.localeCompare(b.prio)||a.label.localeCompare(b.label):a.label.localeCompare(b.label);
+  return groups.map(g=>g.sort(cmp));
 }
-
-function card(n){
-  const el=document.createElement('div');
-  el.className='node '+n.kind+(n.status?' '+n.status:'');
-  el.style.left=n.x+'px'; el.style.top=n.y+'px'; el.dataset.id=n.id;
-  if(state.density==='compact'){ el.style.padding='5px 8px'; el.style.width='150px'; }
-  const meta = n.kind==='task' ? (n.owner?'@'+shortId(n.owner):'unassigned') : n.id.split(':')[0];
-  el.innerHTML='<b>'+esc(n.label)+'</b><div class="meta">'+esc(n.id)+(n.status?' · '+esc(n.status):'')+'</div>'+
-    '<div class="meta" style="margin-top:2px">'+esc(meta)+'</div>';
-  el.onclick=()=>show(n);
+function pos(){
+  const groups=layers(); const p=new Map();
+  groups.forEach((g,d)=>g.forEach((t,i)=>p.set('task:'+t.id,{x:190+d*250,y:60+i*(state.mode==='detail'?132:92)})));
+  if(state.mode==='detail'){
+    p.set('session:ses_a',{x:10,y:60}); p.set('session:ses_b',{x:10,y:state.mode==='detail'?192:152});
+    paths.forEach((x,i)=>p.set('path:'+x,{x:190+groups.length*250,y:60+i*(state.mode==='detail'?132:92)}));
+  }
+  return {p,groups};
+}
+function cardTask(t,x,y){
+  const el=document.createElement('div'); el.className='node task '+t.status; el.style.left=x+'px'; el.style.top=y+'px';
+  const cls=t.status==='done'||t.status==='accepted'?'var(--green)':t.status==='blocked'?'var(--red)':t.status==='review'?'var(--amber)':'var(--blue)';
+  const rel=taskEdges.filter(e=>e.from===t.id||e.to===t.id).map(e=>{
+    const outgoing=e.from===t.id;
+    const other=outgoing?e.to:e.from;
+    const kind=e.kind==='depends_on'?(outgoing?'depends_on':'depended_by'):e.kind;
+    return '<div class="meta" style="margin-top:2px">↳ '+esc(kind)+': '+esc(other)+'</div>';
+  }).slice(0,4).join('');
+  el.innerHTML='<b>'+esc(t.label)+'<span class="prio">'+esc(t.prio)+'</span></b>'+
+    '<div class="meta">'+esc(t.id)+' · '+esc(t.status)+' · '+t.progress+'%</div>'+
+    '<div class="progress"><i style="width:'+t.progress+'%;background:'+cls+'"></i></div>'+
+    (state.mode==='detail'?'<div class="meta" style="margin-top:5px">'+(t.owner?'@'+esc(t.owner):'unassigned')+' · dep '+t.deps.length+'</div>'+rel:'');
+  el.onclick=()=>showTask(t); return el;
+}
+function pill(kind,label,x,y){
+  const el=document.createElement('div'); el.className='node '+kind; el.style.left=x+'px'; el.style.top=y+'px';
+  el.innerHTML='<b>'+esc(label)+'</b><div class="meta">'+esc(kind)+'</div>';
   return el;
 }
-
-function draw(){
-  const show = visibleSet();
-  const visNodes = nodes.filter(n=>show.has(n.id));
-  [...canvas.querySelectorAll('.node')].forEach(e=>e.remove());
-  visNodes.forEach(n=>canvas.appendChild(card(n)));
-  const maxX=Math.max(...visNodes.map(n=>n.x), 0)+240;
-  const maxY=Math.max(...visNodes.map(n=>n.y), 0)+120;
-  svg.setAttribute('width',maxX); svg.setAttribute('height',maxY);
-  let defs = '<defs>';
-  for(const [kind,s] of Object.entries(style)){
-    const color = s.stroke;
-    defs += '<marker id="ar-'+s.marker+'" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7" fill="'+color+'"/></marker>';
-  }
-  defs += '</defs>';
-  const lines = edges.filter(e=>show.has(e.from)&&show.has(e.to)).map(e=>{
-    const a=byId.get(e.from), b=byId.get(e.to); if(!a||!b) return '';
-    const s=style[e.kind]; if(!s) return '';
-    const dash = s.dash==='0' ? '' : ' stroke-dasharray="'+s.dash+'"';
-    const start = s.both ? ' marker-start="url(#ar-'+s.marker+')"' : '';
-    return '<line x1="'+(a.x+78)+'" y1="'+(a.y+30)+'" x2="'+(b.x+78)+'" y2="'+(b.y+30)+'" stroke="'+s.stroke+'" stroke-width="'+s.width+'"'+dash+start+' marker-end="url(#ar-'+s.marker+')" />';
-  }).join('');
-  svg.innerHTML = defs + lines;
-  document.getElementById('updated').textContent = 'updated ' + new Date().toLocaleTimeString();
+function edgePath(from,to){
+  const a=from,b=to; const x1=a.x+190,y1=a.y+30,x2=b.x,y2=b.y+30;
+  if(x2>=x1){ const mid=x1+Math.max(24,(x2-x1)/2); return `M${x1} ${y1} H${mid} V${y2} H${x2}`; }
+  const mid=x1-30; return `M${x1} ${y1} H${mid} V${y2} H${x2}`;
 }
-
-function show(n){
+function drawGraph(){
+  canvas.classList.toggle('simple', state.mode==='simple');
+  const {p,groups}=pos();
+  [...canvas.querySelectorAll('.node')].forEach(e=>e.remove());
+  groups.forEach(g=>g.forEach(t=>{const q=p.get('task:'+t.id);canvas.appendChild(cardTask(t,q.x,q.y));}));
+  if(state.mode==='detail'){
+    p.forEach((q,k)=>{ if(k.startsWith('session:')) canvas.appendChild(pill('session',k.split(':')[1],q.x,q.y)); if(k.startsWith('path:')) canvas.appendChild(pill('path',k.split(':')[1],q.x,q.y)); });
+  }
+  const maxX=Math.max(...[...p.values()].map(q=>q.x))+230, maxY=Math.max(...[...p.values()].map(q=>q.y))+110;
+  svg.setAttribute('width',maxX); svg.setAttribute('height',maxY);
+  const defs=`<defs>
+    <marker id="ar-dep" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7" fill="#2563eb"/></marker>
+    <marker id="ar-touch" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7" fill="#7c3aed"/></marker>
+    <marker id="ar-claim" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7" fill="#0891b2"/></marker>
+    <marker id="ar-collab" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7" fill="#64748b"/></marker>
+  </defs>`;
+  const lines=taskEdges.filter(e=>{
+    if(state.mode==='simple' && e.kind!=='depends_on') return false;
+    const isPath=x=>paths.includes(x)||x.includes('/');
+    const f=e.from.startsWith('ses_')?'session:'+e.from:(isPath(e.from)?'path:'+e.from:'task:'+e.from);
+    const t=e.to.startsWith('ses_')?'session:'+e.to:(isPath(e.to)?'path:'+e.to:'task:'+e.to);
+    return p.has(f)&&p.has(t);
+  }).map(e=>{
+    const isPath=x=>paths.includes(x)||x.includes('/');
+    const f=e.from.startsWith('ses_')?'session:'+e.from:(isPath(e.from)?'path:'+e.from:'task:'+e.from);
+    const t=e.to.startsWith('ses_')?'session:'+e.to:(isPath(e.to)?'path:'+e.to:'task:'+e.to);
+    const a=p.get(f),b=p.get(t); if(!a||!b) return '';
+    const style=e.kind==='touches'?'stroke="#7c3aed" stroke-dasharray="6 4" marker-end="url(#ar-touch)"':e.kind==='claims'?'stroke="#0891b2" stroke-dasharray="2 3" marker-end="url(#ar-claim)"':e.kind==='collaborates_with'?'stroke="#64748b" stroke-dasharray="1 3" marker-start="url(#ar-collab)" marker-end="url(#ar-collab)"':'stroke="#2563eb" marker-end="url(#ar-dep)"';
+    return `<path d="${edgePath(a,b)}" fill="none" stroke-width="1.6" ${style}/>`;
+  }).join('');
+  svg.innerHTML=defs+lines;
+  document.getElementById('updated').textContent='updated '+new Date().toLocaleTimeString();
+  if(!groups.flat().length) canvas.insertAdjacentHTML('beforeend','<div style="padding:20px;color:var(--muted)">(no tasks)</div>');
+}
+function showTask(t){
   const d=document.getElementById('detail'), body=document.getElementById('detail-body');
-  const out=edges.filter(e=>e.from===n.id||e.to===n.id).map(e=>{
-    const other=e.from===n.id?e.to:e.from;
-    return '<div class="item"><span class="k">'+esc(e.kind)+'</span><span>'+esc(other)+'</span></div>';
-  }).join('') || '<p class="muted">无边</p>';
-  body.innerHTML='<h3>'+esc(n.label)+'</h3><p>'+esc(n.id)+'</p><div class="kv"><div class="k">kind</div><div>'+esc(n.kind)+'</div><div class="k">status</div><div>'+esc(n.status||'-')+'</div><div class="k">owner</div><div>'+esc(n.owner||'-')+'</div></div><h3 style="margin-top:14px">关联</h3>'+out;
+  const rel=taskEdges.filter(e=>e.from===t.id||e.to===t.id).map(e=>`<div class="item"><span class="k">${esc(e.kind)}</span><span>${esc(e.from===t.id?e.to:e.from)}</span></div>`).join('')||'<p>无边</p>';
+  body.innerHTML=`<h3>${esc(t.label)}</h3><p>${esc(t.id)} · ${esc(t.prio)} · ${t.progress}%</p><div class="kv"><div class="k">status</div><div>${esc(t.status)}</div><div class="k">owner</div><div>${esc(t.owner||'-')}</div><div class="k">deps</div><div>${t.deps.map(esc).join(', ')||'-'}</div></div><h3 style="margin-top:14px">关联</h3>${rel}`;
   d.classList.add('show');
 }
-
-document.querySelectorAll('#filter button').forEach(b=>b.onclick=()=>{
-  document.querySelectorAll('#filter button').forEach(x=>x.classList.remove('on')); b.classList.add('on');
-  state.filter=b.dataset.f; draw();
+function drawTimeline(){
+  const min=Math.min(...tasks.map(t=>t.start),-1), max=Math.max(...tasks.map(t=>t.end),1);
+  const span=max-min||1;
+  const x=v=>((v-min)/span)*100;
+  const axis=document.getElementById('tl-axis'); axis.innerHTML='';
+  for(let d=min;d<=max;d++){ const el=document.createElement('span'); el.style.left=x(d)+'%'; el.textContent=d===0?'今天':(d>0?'+'+d+'d':d+'d'); if(d===0)el.style.color='var(--red)'; axis.appendChild(el); }
+  const body=document.getElementById('tl-body'); body.innerHTML='';
+  const critical=new Set(['t-1','t-2','t-3']);
+  tasks.slice().sort((a,b)=>a.start-b.start).forEach(t=>{
+    const row=document.createElement('div'); row.className='tl-row';
+    row.innerHTML=`<div class="tl-id"><b>${esc(t.label)}</b><span>${esc(t.id)} · ${esc(t.prio)} · ${esc(t.status)}</span></div><div class="tl-track"></div>`;
+    const track=row.querySelector('.tl-track');
+    const bar=document.createElement('div'); bar.className='tl-bar '+t.status+(critical.has(t.id)?' critical':'');
+    bar.style.left=x(t.start)+'%'; bar.style.width=Math.max(4,x(t.end)-x(t.start))+'%';
+    bar.innerHTML='<div class="fill" style="width:'+t.progress+'%"></div>';
+    bar.title=`${t.label} ${t.start}d → ${t.end}d (${t.progress}%)`;
+    bar.onclick=()=>showTask(t); track.appendChild(bar);
+    body.appendChild(row);
+  });
+  if(min<=0&&max>=0){ const today=document.createElement('div'); today.className='tl-today'; today.style.left=x(0)+'%'; today.textContent='today'; body.appendChild(today); }
+}
+document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('#tabs button').forEach(x=>x.classList.remove('on')); b.classList.add('on');
+  state.view=b.dataset.v;
+  document.getElementById('view-graph').style.display=state.view==='graph'?'':'none';
+  document.getElementById('view-time').style.display=state.view==='time'?'':'none';
+  document.getElementById('graph-tools').style.display=state.view==='graph'?'flex':'none';
+  document.getElementById('hint').textContent=state.view==='graph'?'简约：只看任务和依赖；详细：显示 owner / session / path / touches / claims':'时间线：按 start/end 看执行；橙框 = 关键路径';
+  if(state.view==='time') drawTimeline(); else drawGraph();
 });
-document.querySelectorAll('#density button').forEach(b=>b.onclick=()=>{
-  document.querySelectorAll('#density button').forEach(x=>x.classList.remove('on')); b.classList.add('on');
-  state.density=b.dataset.d; draw();
+document.querySelectorAll('#mode button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('#mode button').forEach(x=>x.classList.remove('on')); b.classList.add('on');
+  state.mode=b.dataset.m; drawGraph();
 });
-draw();
+document.querySelectorAll('#sort button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('#sort button').forEach(x=>x.classList.remove('on')); b.classList.add('on');
+  state.sort=b.dataset.s; drawGraph();
+});
+drawGraph(); drawTimeline();
+if(location.hash==='#time') document.querySelector('#tabs button[data-v="time"]').click();
+if(location.hash==='#detail') document.querySelector('#mode button[data-m="detail"]').click();
 </script>
 </body>
 </html>

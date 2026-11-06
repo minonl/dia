@@ -156,6 +156,10 @@
   <section class="panel">
     <div class="toolbar">
       <div id="graph-tools" style="display:flex;gap:8px;align-items:center">
+        <div class="seg" id="layout">
+          <button class="on" data-l="priority">优先级视图</button>
+          <button data-l="dep">依赖视图</button>
+        </div>
         <div class="seg" id="mode">
           <button class="on" data-m="simple">简约</button>
           <button data-m="detail">详细</button>
@@ -257,6 +261,8 @@ for (let i=0;i<100;i++){
   const deps = i>0 && i%6===0 ? ['t-'+String(i).padStart(3,'0')] : (i>5 && i%11===0 ? ['t-'+String(i-5).padStart(3,'0')] : []);
   tasks.push({id, label:modules[i%modules.length]+' '+String(i+1).padStart(3,'0'), status, prio, progress, start:startD, end:endD, owner:i%3===0?null:(i%2?'ses_a':'ses_b'), deps});
 }
+const pad=n=>'t-'+String(n+1).padStart(3,'0');
+[[6,1],[7,2],[8,3],[24,7],[25,8],[62,25],[63,26]].forEach(([i,j])=>{ if(tasks[i]&&!tasks[i].deps.includes(pad(j))) tasks[i].deps.push(pad(j)); });
 const taskEdges = [];
 tasks.forEach(t=>t.deps.forEach(d=>taskEdges.push({from:t.id,to:d,kind:'depends_on'})));
 for(let i=0;i<20;i++) taskEdges.push({from:tasks[i*5].id,to:paths[i%paths.length],kind:'touches'});
@@ -266,7 +272,7 @@ document.getElementById('stat-tasks').textContent=String(tasks.length);
 document.getElementById('stat-blocked').textContent=String(tasks.filter(t=>t.status==='blocked').length);
 document.getElementById('stat-review').textContent=String(tasks.filter(t=>t.status==='review').length);
 document.getElementById('stat-done').textContent=String(tasks.filter(t=>t.status==='done'||t.status==='accepted').length);
-const state={view:'graph', mode:'simple', range:'30d', zoom:28, from:null, to:null};
+const state={view:'graph', layout:'priority', mode:'simple', range:'30d', zoom:28, from:null, to:null};
 const canvas=document.getElementById('canvas'), layer=document.getElementById('canvas-scroll'), rail=document.getElementById('lane-rail'), svg=document.getElementById('edges');
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const stIcon={doing:'▶',blocked:'⏸',review:'◐',done:'✓',accepted:'✓',todo:'○'};
@@ -301,14 +307,15 @@ function pos(){
   rows.forEach(r=>r.tasks.forEach((t,i)=>p.set(t.id,{x:170+i*230,y:cardTop(r)})));
   return {p,rows};
 }
-function card(t,x,y){
+function card(t,x,y,showPrio=false){
   const el=document.createElement('div'); el.className='node task '+t.status; el.style.left=x+'px'; el.style.top=y+'px';
   const rel=taskEdges.filter(e=>e.from===t.id||e.to===t.id).map(e=>{
     const outgoing=e.from===t.id, other=outgoing?e.to:e.from;
     const kind=e.kind==='depends_on'?(outgoing?'depends_on':'depended_by'):e.kind;
     return '<div class="meta" style="margin-top:2px">↳ '+esc(kind)+': '+esc(other)+'</div>';
   }).slice(0,4).join('');
-  el.innerHTML='<b>'+esc(t.label)+'</b>'+
+  const badge=showPrio?'<span class="prio '+esc(t.prio.toLowerCase())+'">'+esc(t.prio)+'</span>':'';
+  el.innerHTML='<b>'+esc(t.label)+badge+'</b>'+
     '<div class="meta">'+esc(t.id)+' · <span class="st '+esc(t.status)+'">'+stIcon[t.status]+' '+esc(t.status)+'</span> · '+t.progress+'%</div>'+
     '<div class="progress"><i class="'+esc(t.status)+'" style="width:'+t.progress+'%"></i></div>'+
     (state.mode==='detail'?'<div class="meta" style="margin-top:5px">'+(t.owner?'@'+esc(t.owner):'unassigned')+' · dep '+t.deps.length+'</div>'+rel:'');
@@ -321,6 +328,7 @@ function edgePath(a,b){
 }
 function drawGraph(){
   canvas.classList.toggle('simple', state.mode==='simple');
+  if(state.layout==='dep'){ drawDepGraph(); return; }
   const {p,rows}=pos();
   [...layer.querySelectorAll('.node,.pgroup')].forEach(e=>e.remove());
   const maxX=Math.max(600, ...rows.map(r=>{
@@ -458,6 +466,42 @@ function drawTimeline(){
   });
 
 }
+function drawDepGraph(){
+  const d=depths(), groups=new Map();
+  tasks.forEach(t=>{ const k=d.get(t.id)||0; groups.set(k,[...(groups.get(k)||[]),t]); });
+  const limit=state.mode==='detail'?8:6;
+  const p=new Map(); const rows=[];
+  let maxY=600;
+  [...groups.keys()].sort((a,b)=>a-b).forEach((depth,ci)=>{
+    const all=groups.get(depth).sort((a,b)=>a.prio.localeCompare(b.prio)||a.label.localeCompare(b.label));
+    const visible=all.slice(0,limit);
+    visible.forEach((t,i)=>{ const x=170+ci*230, y=60+i*96; p.set(t.id,{x,y}); maxY=Math.max(maxY,y+90); });
+    rows.push({depth,all,visible,x:170+ci*230});
+  });
+  [...layer.querySelectorAll('.node,.pgroup')].forEach(e=>e.remove());
+  rail.innerHTML='';
+  rows.forEach(r=>{
+    r.visible.forEach((t,i)=>layer.appendChild(card(t,r.x,60+i*96,true)));
+    if(r.all.length>r.visible.length){
+      const more=document.createElement('div'); more.className='node'; more.style.left=r.x+'px'; more.style.top=(60+r.visible.length*96)+'px'; more.style.width='150px';
+      more.innerHTML='<b>+ '+(r.all.length-r.visible.length)+' 个</b><div class="meta">D'+r.depth+' · 聚合隐藏</div>';
+      layer.appendChild(more);
+    }
+  });
+  const maxX=Math.max(600,...rows.map(r=>r.x+200));
+  svg.setAttribute('width',maxX); svg.setAttribute('height',maxY+40);
+  const defs=`<defs>
+    <marker id="ar-dep" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7" fill="#2563eb"/></marker>
+    <marker id="ar-collab" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7" fill="#64748b"/></marker>
+  </defs>`;
+  const lines=taskEdges.filter(e=>e.kind==='depends_on'||e.kind==='collaborates_with').map(e=>{
+    const a=p.get(e.from), b=p.get(e.to); if(!a||!b) return '';
+    const style=e.kind==='collaborates_with'?'stroke="#64748b" stroke-dasharray="1 3" marker-start="url(#ar-collab)" marker-end="url(#ar-collab)"':'stroke="#2563eb" marker-end="url(#ar-dep)"';
+    return `<path d="${edgePath(a,b)}" fill="none" stroke-width="1.6" ${style}/>`;
+  }).join('');
+  svg.innerHTML=defs+lines;
+  document.getElementById('updated').textContent='updated '+new Date().toLocaleTimeString();
+}
 function syncLaneLabels(){
   rail.querySelectorAll('.plane-label').forEach(el=>{
     el.style.top=(10+Number(el.dataset.y||0)-layer.scrollTop)+'px';
@@ -471,11 +515,12 @@ function readRoute(){
   const sx=Number(params.get('sx')||0);
   const fromRaw=params.get('from'), toRaw=params.get('to');
   const toOff=v=>v?Math.round((new Date(v+'T00:00:00').getTime()-new Date('2026-11-06T00:00:00').getTime())/86400000):null;
-  return {view:(path==='timeline'||params.get('view')==='timeline')?'time':'graph', mode:params.get('mode')==='detail'?'detail':'simple', range, zoom, sx, from:toOff(fromRaw), to:toOff(toRaw), task:params.get('task'), tab:params.get('tab')==='intervene'?'intervene':'task'};
+  return {view:(path==='timeline'||params.get('view')==='timeline')?'time':'graph', layout:params.get('layout')==='dep'?'dep':'priority', mode:params.get('mode')==='detail'?'detail':'simple', range, zoom, sx, from:toOff(fromRaw), to:toOff(toRaw), task:params.get('task'), tab:params.get('tab')==='intervene'?'intervene':'task'};
 }
 function routeString(view,mode,range,zoom,from,to){
   const p=view==='time'?'timeline':'graph'; const qs=new URLSearchParams();
   if(view==='graph'&&mode==='detail') qs.set('mode','detail');
+  if(view==='graph'&&state.layout==='dep') qs.set('layout','dep');
   if(view==='time'){
     if(from!==null&&to!==null){ qs.set('from',isoDate(from)); qs.set('to',isoDate(to)); }
     else if(range&&range!=='30d') qs.set('range',range);
@@ -484,9 +529,10 @@ function routeString(view,mode,range,zoom,from,to){
   return '#/'+p+(qs.toString()?'?'+qs.toString():'');
 }
 function applyRoute(){
-  const r=readRoute(); state.view=r.view; state.mode=r.mode; state.range=r.range; state.zoom=r.zoom; state.sx=r.sx||0; state.from=r.from; state.to=r.to;
+  const r=readRoute(); state.view=r.view; state.layout=r.layout; state.mode=r.mode; state.range=r.range; state.zoom=r.zoom; state.sx=r.sx||0; state.from=r.from; state.to=r.to;
   document.querySelectorAll('#tabs button').forEach(x=>x.classList.toggle('on',x.dataset.v===r.view));
   document.querySelectorAll('#mode button').forEach(x=>x.classList.toggle('on',x.dataset.m===r.mode));
+  document.querySelectorAll('#layout button').forEach(x=>x.classList.toggle('on',x.dataset.l===r.layout));
   document.getElementById('view-graph').style.display=r.view==='graph'?'':'none';
   document.getElementById('view-time').style.display=r.view==='time'?'':'none';
   document.getElementById('graph-tools').style.display=r.view==='graph'?'flex':'none';
@@ -495,7 +541,7 @@ function applyRoute(){
   const zbtn=document.querySelector('#zoom button[data-z="reset"]'); if(zbtn) zbtn.textContent=Math.round(r.zoom/28*100)+'%';
   const dec=document.querySelector('#zoom button[data-z="-"]'), inc=document.querySelector('#zoom button[data-z="+"]'); if(dec) dec.disabled=r.zoom<=14; if(inc) inc.disabled=r.zoom>=84;
   document.getElementById('hint').textContent=r.view==='graph'
-    ?'按优先级分行（P0 最高）；行内从左到右 = 依赖顺序'
+    ?(r.layout==='dep'?'依赖视图：从左到右 = 依赖深度；卡片 badge = 优先级':'按优先级分行（P0 最高）；行内从左到右 = 依赖顺序')
     :'时间线：左右滚动查看；－/＋缩放；橙框 = 关键路径';
   const rp=document.getElementById('route'); if(rp) rp.textContent=location.hash||routeString(r.view,r.mode,r.range,state.zoom,state.from,state.to);
   document.title='dia graph · '+(r.view==='time'?'时间线':'关系图');
@@ -505,6 +551,7 @@ function applyRoute(){
 }
 function go(view,mode,range,zoom){ const h=routeString(view,mode,range||state.range,zoom||state.zoom,state.from,state.to); if(location.hash===h) applyRoute(); else location.hash=h; }
 document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>go(b.dataset.v==='time'?'time':'graph',state.mode,state.range));
+document.querySelectorAll('#layout button').forEach(b=>b.onclick=()=>{state.layout=b.dataset.l;go(state.view,state.mode,state.range,state.zoom);});
 document.querySelectorAll('#mode button').forEach(b=>b.onclick=()=>go(state.view,b.dataset.m,state.range,state.zoom));
 document.querySelectorAll('#range button').forEach(b=>b.onclick=()=>{state.from=null;state.to=null;go('time',state.mode,b.dataset.r,state.zoom);});
 document.querySelectorAll('#zoom button').forEach(b=>b.onclick=()=>{ const z=b.dataset.z==='+'?Math.min(84,state.zoom+8):b.dataset.z==='-'?Math.max(14,state.zoom-8):28; go('time',state.mode,state.range,z); });

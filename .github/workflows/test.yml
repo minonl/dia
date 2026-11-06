@@ -1,7 +1,36 @@
 name: test
-on: [push, pull_request]
+
+# 只在 PR 上跑（避免「推特性分支」和「开 PR」各跑一遍）
+on:
+  pull_request:
+  workflow_dispatch:
+
 jobs:
+  # 判断改动是否只碰文档：是 → 跳过耗时的测试矩阵，只跑文档检查（docs-only 快通道）
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - id: filter
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="${{ github.event.pull_request.base.sha }}"
+          if [ -z "$base" ]; then echo "code=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          files="$(git diff --name-only "$base" HEAD || true)"
+          if [ -z "$files" ]; then echo "code=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          # 只要有一行不是 docs/ 或 llms*.txt，就算代码改动
+          if printf '%s\n' "$files" | grep -qvE '^(docs/|llms(-full)?\.txt$)'; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          fi
+
   test:
+    needs: changes
     strategy:
       fail-fast: false
       matrix:
@@ -17,13 +46,48 @@ jobs:
         with: { node-version: '24' }
       - run: pnpm install --frozen-lockfile
       - run: bun --version && node --version && pnpm --version
-      - run: bun test tests
+
+      # 文档检查：docs-only 也要跑（快）
       - run: node scripts/docs-link-check.mjs
-      - run: pnpm --filter @dia/kb test
+      - run: node scripts/docs-index.mjs --check
+
+      # 以下仅代码改动才跑（docs-only → 跳过，节省 ~80s × 2 系统）
+      - if: needs.changes.outputs.code == 'true'
+        run: bun test tests
+      - if: needs.changes.outputs.code == 'true'
+        run: pnpm --filter @dia/kb test
       # job 测试两端都跑（2026-10-30：Linux 后端落地，linux.test.sh 在非 Linux 上自动跳过）
-      - run: pnpm --filter @dia/job test
-      - run: bun run build
-      - run: bash tests/install-dia.test.sh
-      - run: bash tests/smoke.sh
-      - run: bash tests/e2e.sh
-      - run: DIA_E2E_RUNTIME=bun bash tests/e2e.sh
+      - if: needs.changes.outputs.code == 'true'
+        run: pnpm --filter @dia/job test
+      - if: needs.changes.outputs.code == 'true'
+        run: bun run build
+      - if: needs.changes.outputs.code == 'true'
+        run: bash tests/install-dia.test.sh
+      - if: needs.changes.outputs.code == 'true'
+        run: bash tests/smoke.sh
+      - if: needs.changes.outputs.code == 'true'
+        run: bash tests/e2e.sh
+      - if: needs.changes.outputs.code == 'true'
+        run: DIA_E2E_RUNTIME=bun bash tests/e2e.sh
+
+  # Windows：**非阻塞 smoke**（后端尚未实现：`dia job install` 在 Windows 返回 rc=3；
+  # 大量 POSIX 测试脚本跑不了）。先只验证「能在 Windows 上装起来 + 纯逻辑测试过」，
+  # 等 Windows 后端真正落地再升为 required。
+  windows-smoke:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: '12.5.1' }
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: latest }
+      - uses: actions/setup-node@v4
+        with: { node-version: '24' }
+      - run: pnpm install --frozen-lockfile
+      - run: bun --version
+      - run: bun packages/cli/src/index.ts --version
+      # 纯逻辑用例（不依赖 bash / launchd / systemd）
+      - run: bun test tests/jsonc.test.ts

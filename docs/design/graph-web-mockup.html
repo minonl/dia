@@ -53,7 +53,7 @@
   .prio.p0{background:var(--red);border-color:var(--red);color:#fff}
   .prio.p1{border-color:var(--amber);color:var(--amber)}
   .prio.p2{border-color:var(--line);color:var(--muted)}
-  .pgroup{position:absolute;border:1px dashed var(--line);border-radius:12px;pointer-events:none}
+  .pgroup{position:absolute;left:0;pointer-events:none;border-bottom:1px dashed var(--line)}
   .plane-label{position:absolute;left:20px;width:78px;transform:translateY(-50%);font-size:13px;font-weight:700;letter-spacing:.1em}
   .plane-label small{display:block;font-size:9px;font-weight:400;letter-spacing:0;opacity:.7;margin-top:2px}
   .legend-overlay{position:absolute;right:12px;bottom:12px;z-index:5;background:color-mix(in srgb,var(--panel) 92%,transparent);border:1px solid var(--line);border-radius:10px;padding:8px 10px;box-shadow:var(--shadow);font-size:11px;color:var(--muted);display:grid;gap:5px;min-width:190px}
@@ -285,10 +285,12 @@ function drawGraph(){
   canvas.classList.toggle('simple', state.mode==='simple');
   const {p,rows}=pos();
   [...canvas.querySelectorAll('.node,.pgroup,.plane-label')].forEach(e=>e.remove());
+  const maxX=Math.max(...rows.map(r=>Math.max(1,r.tasks.length)*230+200), 600);
+  const maxY=Math.max(...rows.map(r=>r.y+r.h))+40;
+  const bandH=state.mode==='detail'?230:145;
   rows.forEach((r,i)=>{
     const g=document.createElement('div'); g.className='pgroup '+r.prio.toLowerCase();
-    g.style.left='120px'; g.style.top=(r.y-28)+'px';
-    g.style.width=(Math.max(1,r.tasks.length)*230+60)+'px'; g.style.height=r.h+'px';
+    g.style.top=(r.y-28)+'px'; g.style.width=maxX+'px'; g.style.height=bandH+'px';
     const alpha=Math.max(0.02, 0.075-i*0.012);
     g.style.background='color-mix(in srgb, var(--blue) '+Math.round(alpha*100)+'%, transparent)';
     canvas.appendChild(g);
@@ -299,8 +301,6 @@ function drawGraph(){
     canvas.appendChild(label);
     r.tasks.forEach((t,j)=>canvas.appendChild(card(t,170+j*230,r.y)));
   });
-  const maxX=Math.max(...rows.map(r=>Math.max(1,r.tasks.length)*230+200), 600);
-  const maxY=Math.max(...rows.map(r=>r.y+r.h))+40;
   svg.setAttribute('width',maxX); svg.setAttribute('height',maxY);
   const defs=`<defs>
     <marker id="ar-dep" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7" fill="#2563eb"/></marker>

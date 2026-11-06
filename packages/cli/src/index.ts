@@ -192,7 +192,7 @@ usage:
   dia msg deliver <agent> <id> [--transport tmux|acp]
   dia task add|list|link|status|done [--owner S] [--depends a,b] [--touches p1,p2]
   dia graph [--json] [--task t-...] [--tui [--watch] [--no-color]]
-  dia claim <path> [--reason R] [--ttl 4h] [--session S] | dia claims [--all] [--mine] | dia unclaim <path|id> [--force]
+  dia claim <path> [--reason R] [--ttl 4h] [--session S] | dia claims [--all] [--mine] [--gc [--days 7]] | dia unclaim <path|id> [--force]
   dia team run <id> --mock | --acp|--dsh --workspace DIR
   dia team gate|accept|reject|next
   dia team accept <id> [--note ...] [--pr N [--repo R] [--merge]]   # --pr：先验 CI，绿才接受/合并
@@ -788,6 +788,11 @@ async function claimsCli(argv: string[]): Promise<number> {
       return 0;
     }
     if (sub === "claims") {
+      if (has(args, "--gc")) {
+        const r = claims.compact({ days: Number(flag(args, "--days") || 7) });
+        out(asJson ? JSON.stringify(r, null, 1) : `claims gc: before=${r.before} after=${r.after} dropped=${r.dropped}`);
+        return 0;
+      }
       const mine = has(args, "--mine") ? collab.resolveSessionId(session) : undefined;
       const rows = claims.list({ all: has(args, "--all"), mine });
       out(asJson ? JSON.stringify(rows, null, 1)

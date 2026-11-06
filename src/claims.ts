@@ -2,7 +2,7 @@
 //
 // 设计：docs/msg-collab-m1-design.md §1
 // 事实源：~/.dia/collab/claims.jsonl（append-only）；不阻断、不排队，只让“谁在改”可见。
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { basename, join, relative, resolve, sep } from "node:path";
@@ -141,3 +141,39 @@ export function unclaim(target: string, opts: { session?: string; force?: boolea
 }
 
 export function fileOf(): string { return file(); }
+
+/** 压缩 claims.jsonl：保留活跃 claim + 最近 N 天的 claim/release，删除更早的已过期/已释放记录。 */
+export function compact(opts: { days?: number; now?: Date } = {}): { before: number; after: number; dropped: number } {
+  const days = Math.max(0, Number(opts.days ?? 7));
+  const now = opts.now || new Date();
+  const cutoff = now.getTime() - days * 86_400_000;
+  return withLock("claims", () => {
+    const f = file();
+    if (!existsSync(f)) return { before: 0, after: 0, dropped: 0 };
+    const raw = readFileSync(f, "utf8");
+    const lines = raw.split("\n").filter((l) => l.trim());
+    const keepIds = new Set<string>();
+    for (const line of lines) {
+      let e: ClaimEvent; try { e = JSON.parse(line); } catch { continue; }
+      if (e.event !== "claim" || !e.id) continue;
+      const created = new Date(e.created_at || e.ts).getTime();
+      if (isActive({ id: e.id, path: e.path || "", scope: e.scope || "", holder: e.holder || "", created_at: e.created_at || e.ts, expires_at: e.expires_at || e.ts }, now.getTime()) || created > cutoff) {
+        keepIds.add(e.id);
+      }
+    }
+    const kept: string[] = [];
+    let dropped = 0;
+    for (const line of lines) {
+      let e: ClaimEvent; try { e = JSON.parse(line); } catch { dropped++; continue; }
+      if (e.id && keepIds.has(e.id)) kept.push(line);
+      else dropped++;
+    }
+    if (dropped) {
+      const tmp = `${f}.tmp.${process.pid}`;
+      writeFileSync(tmp, kept.join("\n") + (kept.length ? "\n" : ""), { mode: 0o600 });
+      renameSync(tmp, f);
+    }
+    const after = existsSync(f) ? readFileSync(f, "utf8").length : 0;
+    return { before: raw.length, after, dropped };
+  });
+}

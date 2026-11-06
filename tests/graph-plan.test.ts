@@ -20,7 +20,8 @@ describe("graph 计划字段（schema 1 additive）", () => {
     const t = json(run(["task", "add", "计划任务", "--prio", "P1", "--start", "2026-11-01", "--due", "2026-11-08", "--progress", "30", "--touches", "src/a.ts", "--json"]).stdout);
     const g = json(run(["graph", "--json"]).stdout);
     expect(g.schema).toBe(1);
-    expect(g.capabilities).toEqual(["prio", "timeline", "progress"]);
+    expect(g.capabilities).toEqual(["prio", "timeline", "progress", "eff-prio", "ready", "rank", "split"]);
+    expect(g.ranking).toEqual({ policy: "kahn-v1" });
     const n = g.nodes.find((x: any) => x.id === `task:${t.id}`);
     expect(n.prio).toBe("P1");
     expect(n.start).toBe("2026-11-01");

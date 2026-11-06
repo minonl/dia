@@ -12,6 +12,7 @@ import * as claims from "../../../src/claims.ts";
 import * as graph from "../../../src/graph.ts";
 import * as graphTui from "../../../src/graph-tui.ts";
 import * as graphHtml from "../../../src/graph-html/render.ts";
+import * as plan from "../../../src/plan.ts";
 import * as defaultMsg from "../../../src/default-msg.ts";
 import * as paths from "../../../src/paths.ts";
 import * as agents from "../../../src/agents.ts";
@@ -191,9 +192,11 @@ usage:
   dia msg send|show|inbox|ack|delivered|deliver [--wait]|reply|needs-info|status|stuck|thread|escalate|agents|migrate
   dia agents list|register|unregister|discover
   dia msg deliver <agent> <id> [--transport tmux|acp]
-  dia task add|list|link|plan|status|done [--owner S] [--depends a,b] [--touches p1,p2] [--prio P1] [--start D] [--due D] [--progress 0-100]
+  dia task add|list|link|plan|split|status|done [--owner S] [--depends a,b] [--touches p1,p2] [--prio P1] [--start D] [--due D] [--progress 0-100]
+  dia task split <id> --into "切片A,切片B" [--slice 切片A] [--role R] [--judge J] [--touches p] [--force]
   dia graph [--json] [--task t-...] [--tui [--watch] [--status S] [--owner S] [--width N] [--no-color]]
   dia graph --export-html [path] [--out path] [--now ISO] [--redact] [--all] [--limit N] [--force]
+  dia graph --next [n] | --explain <id> | --lint   # 只读编排建议（Kahn-v1）
   dia claim <path> [--reason R] [--ttl 4h] [--session S] | dia claims [--all] [--mine] [--gc [--days 7]] | dia unclaim <path|id> [--force]
   dia team run <id> --mock | --acp|--dsh --workspace DIR
   dia team gate|accept|reject|next
@@ -509,6 +512,18 @@ async function taskCli(argv: string[]): Promise<number> {
       out(asJson ? JSON.stringify(t) : `${t.id}\tprio=${t.prio || "-"}\tstart=${t.start || "-"}\tdue=${t.due || "-"}\tprogress=${t.progress ?? "-"}`);
       return 0;
     }
+    if (sub === "split") {
+      const id = positional(args)[0];
+      const into = flag(args, "--into");
+      if (!id || !into) { err("usage: dia task split <id> --into \"切片A,切片B\" [--slice 切片A] [--force]"); return 2; }
+      const parent = task.split(id, into.split(","), {
+        slice: flag(args, "--slice"), role: flag(args, "--role"), judge: flag(args, "--judge"),
+        touches: csv("--touches"), force: has(args, "--force"),
+      });
+      const kids = (parent.split_children || []).map((cid) => { const c = task.get(cid); return `${c.id}\t${c.title}${c.slice ? "\t[slice]" : ""}`; });
+      out(asJson ? JSON.stringify(parent) : `${parent.id}\tchildren=${(parent.split_children || []).length}\n${kids.join("\n")}`);
+      return 0;
+    }
     if (sub === "status") {
       const id = positional(args)[0];
       const st = positional(args)[1] as task.Status;
@@ -525,12 +540,63 @@ async function taskCli(argv: string[]): Promise<number> {
       return 0;
     }
   } catch (e: any) { err(e?.message || String(e)); return 30; }
-  err("usage: dia task add|list|link|plan|status|done");
+  err("usage: dia task add|list|link|plan|split|status|done");
   return 2;
 }
 
 async function graphCli(argv: string[]): Promise<number> {
   const asJson = has(argv, "--json");
+  if (has(argv, "--next") || has(argv, "--explain") || has(argv, "--lint")) {
+    const tasks = task.list();
+    const dr = plan.derive(tasks);
+    if (has(argv, "--explain")) {
+      const id = flag(argv, "--explain");
+      if (!id || id.startsWith("--")) { err("usage: dia graph --explain <id>"); return 2; }
+      const t = tasks.find((x) => x.id === id);
+      const d = dr.byId.get(id);
+      if (!t || !d) { err(`E_GRAPH: 任务不存在 ${id}`); return 2; }
+      const info = {
+        id, title: t.title, status: t.status, declared: t.prio ?? null, eff: d.eff_prio,
+        inherited: d.prio_inherited, source: d.prio_source ?? null,
+        ready: d.ready, startable: d.startable, rank: d.rank,
+        blocked_by: d.blocked_by, released_by: d.released_by, dangling: d.dangling_deps,
+        unblocks: d.unblocks, critical: d.critical, slice: !!t.slice,
+      };
+      out(asJson ? JSON.stringify(info) : [
+        `${id}  ${t.title}`,
+        `status=${t.status}  declared=${info.declared ?? "-"}  eff=${info.eff}${d.prio_inherited ? ` (继承自 ${d.prio_source?.id} ${d.prio_source?.declared}, ${d.prio_source?.distance} 跳)` : ""}`,
+        `ready=${d.ready}  startable=${d.startable}  rank=${d.rank ?? "-"}  unblocks=${d.unblocks}  critical=${d.critical}`,
+        `blocked_by=${d.blocked_by.join(",") || "-"}  released_by=${d.released_by.join(",") || "-"}  dangling=${d.dangling_deps.join(",") || "-"}`,
+      ].join("\n"));
+      return 0;
+    }
+    if (has(argv, "--lint")) {
+      const findings = dr.lint;
+      out(asJson ? JSON.stringify({ findings, cycles: dr.cycles }) : (findings.length ? findings.map((f) => `${f.kind}\t${f.id}\t${f.detail}`).join("\n") : "(clean)"));
+      return dr.cycles.length ? 3 : 0;
+    }
+    // --next [n]
+    const raw = flag(argv, "--next");
+    const n = raw && /^\d+$/.test(raw) ? Math.max(1, Number(raw)) : 5;
+    const doing = tasks.filter((t) => t.status === "doing" && dr.byId.get(t.id)!.rank !== null)
+      .sort((a, b) => (dr.byId.get(a.id)!.rank! - dr.byId.get(b.id)!.rank!));
+    const startable = tasks.filter((t) => dr.byId.get(t.id)!.startable)
+      .sort((a, b) => (dr.byId.get(a.id)!.rank! - dr.byId.get(b.id)!.rank!));
+    const picked = [...doing, ...startable].slice(0, n);
+    const items = picked.map((t) => {
+      const d = dr.byId.get(t.id)!;
+      return {
+        id: t.id, title: t.title, status: t.status, rank: d.rank,
+        declared: t.prio ?? null, eff: d.eff_prio, inherited: d.prio_inherited,
+        ready: d.ready, critical: d.critical, unblocks: d.unblocks,
+        blocked_by: d.blocked_by,
+        why: `${t.status === "doing" ? "进行中" : "可开工"} · eff=${d.eff_prio}${d.prio_inherited ? `(←${d.prio_source?.id})` : ""} · 解锁${d.unblocks}${d.critical ? " · 关键路径" : ""}`,
+      };
+    });
+    out(asJson ? JSON.stringify({ policy: dr.ranking.policy, items })
+      : (items.length ? items.map((x, i) => `#${i + 1}\t${x.id}\t${x.eff}${x.inherited ? "(继承)" : ""}\t${x.title}\t${x.why}`).join("\n") : "(没有可开工任务)"));
+    return dr.cycles.length ? 3 : 0;
+  }
   if (has(argv, "--export-html") || has(argv, "--out")) {
     const nowRaw = flag(argv, "--now");
     const now = nowRaw ? new Date(nowRaw) : new Date();

@@ -11,6 +11,7 @@ import * as collab from "../../../src/collab.ts";
 import * as claims from "../../../src/claims.ts";
 import * as graph from "../../../src/graph.ts";
 import * as graphTui from "../../../src/graph-tui.ts";
+import * as graphHtml from "../../../src/graph-html/render.ts";
 import * as defaultMsg from "../../../src/default-msg.ts";
 import * as paths from "../../../src/paths.ts";
 import * as agents from "../../../src/agents.ts";
@@ -27,7 +28,7 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { mkdirSync, openSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve as resolvePath, sep as pathSep } from "node:path";
 import * as task from "../../../src/task.ts";
@@ -192,6 +193,7 @@ usage:
   dia msg deliver <agent> <id> [--transport tmux|acp]
   dia task add|list|link|plan|status|done [--owner S] [--depends a,b] [--touches p1,p2] [--prio P1] [--start D] [--due D] [--progress 0-100]
   dia graph [--json] [--task t-...] [--tui [--watch] [--status S] [--owner S] [--width N] [--no-color]]
+  dia graph --export-html [path] [--out path] [--now ISO] [--redact] [--all] [--limit N] [--force]
   dia claim <path> [--reason R] [--ttl 4h] [--session S] | dia claims [--all] [--mine] [--gc [--days 7]] | dia unclaim <path|id> [--force]
   dia team run <id> --mock | --acp|--dsh --workspace DIR
   dia team gate|accept|reject|next
@@ -529,6 +531,30 @@ async function taskCli(argv: string[]): Promise<number> {
 
 async function graphCli(argv: string[]): Promise<number> {
   const asJson = has(argv, "--json");
+  if (has(argv, "--export-html") || has(argv, "--out")) {
+    const nowRaw = flag(argv, "--now");
+    const now = nowRaw ? new Date(nowRaw) : new Date();
+    if (Number.isNaN(now.getTime())) { err(`E_GRAPH: --now 不是合法时间（收到 ${nowRaw}）`); return 2; }
+    const limitRaw = flag(argv, "--limit");
+    const limit = has(argv, "--all") ? 0 : (limitRaw === undefined ? 500 : Number(limitRaw));
+    if (!Number.isInteger(limit) || limit < 0) { err("E_GRAPH: --limit 必须是 >=0 的整数"); return 2; }
+    const stamp = `${graphHtml.localDay(now).replace(/-/g, "")}-${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}`;
+    const argPath = flag(argv, "--export-html");
+    const positionalOut = argPath && !argPath.startsWith("-") ? argPath : "";
+    const outPath = flag(argv, "--out") || positionalOut || join(paths.diaHome(), "export", `graph-${stamp}.html`);
+    if (existsSync(outPath) && !has(argv, "--force")) { err(`E_GRAPH: 已存在 ${outPath}（用 --force 覆盖）`); return 2; }
+    try {
+      const g = graph.build({ task: flag(argv, "--task") });
+      const html = graphHtml.renderHtml(g, { now, redact: has(argv, "--redact"), limit, claims: claims.list().length });
+      mkdirSync(join(outPath, ".."), { recursive: true });
+      writeFileSync(outPath, html, { mode: 0o600 });
+      out(outPath);
+      return 0;
+    } catch (e: any) {
+      err(e?.message || String(e));
+      return String(e?.message || e).startsWith("E_GRAPH") ? 2 : 31;
+    }
+  }
   if (has(argv, "--tui") || has(argv, "--watch")) {
     const width = Number(flag(argv, "--width") || 0);
     const tuiOpts = {

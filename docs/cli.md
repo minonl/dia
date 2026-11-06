@@ -105,7 +105,7 @@ dia persona remove dabo
 | `kb <域命令>` | **已实现（委派）** | 未命中内置 → persona `commands` → 委派；argv 透传、exit code 原样 |
 | `<persona-cmd>` / `cmd <name>` | **已实现** | 一级委派（内置优先）；`dia cmd` 只查外部命令，可绕开同名内置 |
 | `task add/list/link/plan/status/done` | **已实现** | done 需 judge + evidence；`plan` 写计划态（prio/start/due/progress），只覆盖出现的字段 |
-| `graph [--json] [--task T] [--tui …]` | **已实现** | 图 JSON（schema 1 + capabilities）；节点带 prio/start/due/progress/时间戳，缺省进度按状态派生并标 `progress_derived` |
+| `graph [--json] [--task T] [--tui …] [--export-html]` | **已实现** | 图 JSON（schema 1 + capabilities）；节点带 prio/start/due/progress/时间戳，缺省进度按状态派生并标 `progress_derived`；`--export-html [--out p] [--now ISO] [--redact] [--all/--limit N] [--force]` 导出单文件 HTML（0600，默认 `~/.dia/export/`，无网络） |
 | `team run --mock / --acp / --dsh`、`team gate/accept/reject` | **已实现** | 状态机 + 门禁；成功/失败路径均跑通 |
 | `job …` | **已实现** | 转发 `packages/job`（launchd/cron/schtasks） |
 | `patch …` | **未实现** | 当前 `unknown command`；设计见 `docs/patching.md` |

@@ -85,6 +85,12 @@ $ dia --persona yan kb scene S1  → 正常出场景卡
 
 ---
 
+## 3.1 CI 口径（见 README「CI 矩阵」）
+
+- required = `test (ubuntu-latest)` + `test (macos-latest)`（分支保护，`enforce_admins`）
+- `windows-smoke` 非阻塞：Windows 后端未实现（`dia job install` rc=3），落地后再升 required
+- **docs-only 快通道**：只改 `docs/**` / 根 `*.md` / `llms*.txt` 时跳过测试矩阵
+
 ## 4. 已知缺口（按优先级）
 
 1. **yan 安装落后来源仓 1 个提交**（`83fbaa9` vs `8d10cc5`，内容是 dsh profile 根 `cordis.yml` 修复）。

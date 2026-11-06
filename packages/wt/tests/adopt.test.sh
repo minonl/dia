@@ -59,6 +59,16 @@ bash "$WT" adopt "$R2" --apply >/dev/null 2>&1
 [ "$(git -C "$R2" config --get core.hooksPath)" = ".githooks" ] && ok "保留仓库本地 hooksPath（husky 等）" || bad "破坏了本地 hooksPath"
 bash "$WT" doctor "$R2" 2>&1 | grep -q "本地 hooksPath" && ok "doctor 提示本地 hooksPath 覆盖全局" || bad "doctor 未提示覆盖"
 
+# 配置外溢：全局钩子目录已有别人的钩子 → adopt 拒绝覆盖
+RF="$TD/foreign"; mkdir -p "$RF"; printf '#!/bin/sh\nexit 0\n' > "$RF/pre-commit"; chmod +x "$RF/pre-commit"
+git config --global core.hooksPath "$RF"
+R4="$TD/repo4"; mkdir -p "$R4"; git -C "$R4" init -q -b main
+git -C "$R4" config user.email t@example.com; git -C "$R4" config user.name t
+echo a > "$R4/a.txt"; git -C "$R4" add -A; git -C "$R4" commit -qm init
+if bash "$WT" adopt "$R4" --apply >/dev/null 2>&1; then bad "外溢检查失效：覆盖了别人的全局钩子"; else ok "拒绝覆盖别人的全局钩子"; fi
+head -2 "$RF/pre-commit" | grep -q "exit 0" && ok "别人的全局钩子未被改动" || bad "别人的全局钩子被改写"
+git config --global core.hooksPath "$GH"
+
 # 未 adopt 的仓：全局钩子纯透传（主 checkout 可正常提交）
 R3="$TD/repo3"; mkdir -p "$R3"; git -C "$R3" init -q -b main
 git -C "$R3" config user.email t@example.com; git -C "$R3" config user.name t

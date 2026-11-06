@@ -61,6 +61,14 @@ grep -q "SIMPLE_GIT_HOOKS_RC" "$HOME/.zshenv" 2>/dev/null && ok "shell rc 注入
 bash "$WT" doctor "$RN" >/dev/null 2>&1 && ok "npm 仓 doctor 通过" || bad "npm 仓 doctor 失败"
 (cd "$RN" && DIA_WT_GUARD_PROBE=1 bash "$WT" guard pre-commit >/dev/null 2>&1) && bad "guard 未拦截 main 提交" || ok "guard 拦截 main 提交"
 
+# RC 注入不得自递归：模拟管理器钩子（source RC 后应直接结束，不再链回自己）
+RC="$( wt_hooks_rc_dir 2>/dev/null || true )"; true
+printf '#!/usr/bin/env bash\nset -e\nname=pre-commit\nsource "$SIMPLE_GIT_HOOKS_RC"\n' > "$TD/pre-commit"
+chmod +x "$TD/pre-commit"
+(cd "$RN" && timeout 10 env SIMPLE_GIT_HOOKS_RC="$DIA_ROOT/hooks/simple-git-hooks-rc.sh" "$TD/pre-commit" >/tmp/rc.log 2>&1)
+rc=$?; [ "$rc" != 124 ] && ok "RC 注入不自递归（main 上被守卫拦截，退出码 $rc）" || bad "RC 注入自递归/超时"
+cd - >/dev/null
+
 # 全局配置残留检查：旧版全局钩子目录 → doctor FAIL
 LEGACY="$TD/legacy-hooks"; mkdir -p "$LEGACY"
 printf '#!/usr/bin/env bash\n# dia-wt guard（旧）\nexit 0\n' > "$LEGACY/pre-commit"; chmod +x "$LEGACY/pre-commit"

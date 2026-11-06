@@ -45,6 +45,16 @@ git -C "$WT" add package.json && git -C "$WT" commit -q -m "chore(release): v$NE
 git -C "$WT" push -q -u origin "$BR" || { echo "E_PUSH: 分支推送失败" >&2; exit 1; }
 
 gh pr create --repo "$REPO" --head "$BR" --base main --title "chore(release): v$NEW" --body "版本号 v$NEW；合后打 tag 并触发 publish。" >/dev/null
+# 新 PR 刚创建时 checks 可能还没注册；`gh pr checks` 在空列表上会直接失败。
+# 先轮询到至少 1 个 check 出现（最多 5 分钟），再 watch 到全部结束。
+N=0
+for _ in $(seq 1 30); do
+  CHECKS="$(gh pr checks "$BR" --repo "$REPO" --json name,bucket 2>/dev/null || true)"
+  N="$(printf '%s' "$CHECKS" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const a=JSON.parse(s);console.log(Array.isArray(a)?a.length:0)}catch{console.log(0)}})')"
+  [ "$N" -gt 0 ] && break
+  sleep 10
+done
+[ "$N" -gt 0 ] || { echo "E_CI: 5 分钟内没有 checks 注册（gh pr checks 为空）" >&2; exit 1; }
 gh pr checks "$BR" --repo "$REPO" --watch --interval 10 >/dev/null || { echo "E_CI: 检查未通过" >&2; exit 1; }
 gh pr merge "$BR" --repo "$REPO" --squash >/dev/null || { echo "E_MERGE: 合并失败" >&2; exit 1; }
 git -C "$WT" push -q origin --delete "$BR" 2>/dev/null || true

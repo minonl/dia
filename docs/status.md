@@ -28,6 +28,7 @@
 | `history/framework-bootstrap.md` | 早期启动与分发选型（已归档） | **归档**：方案未采用，实际分发是 `install.sh`，不要按它部署 |
 | `entrypoints.md` | 用户入口矩阵 | **部分过时**：终端 dabo preset 已渲染；IM bridge 未写；`dia status` / `dia model` 不存在 |
 | `kit-install.md` | kit 清单、渲染、生命周期 | **设计**：实现只有 `add/list/verify/remove`；`show/update/gc/create` 未做 |
+| `install-guard-design.md` | **安装防呆**：脚本安装 vs npm 全局安装的抢链接判据、exit 3 逃生舱、`doctor install_shadow` | **实现**（D0.65 + `tests/install-guard.test.sh`） |
 | `patching.md` | 本地 patch | **未实现**（`unknown command`） |
 | `team-automation.md` | 计划→实现→验证全自动循环 | **未实现**（D0.6–D0.9 只跑通 mock / ACP 驱动） |
 | `proposals.md` | `team next` 目标候选 | **v0 已实现**（`dia team next`，纯规则打分） |
@@ -90,6 +91,7 @@
 | D0.21 | worktree 抽取 `packages/wt` | **完成** | 7 处 python→node；`dia wt`；4 套测试原样迁移全绿 |
 | D0.23 | doctor 平台版本自检 | **完成** | `platform:opencode` / `platform:dsh` 报版本（缺宿主 = warn，不判红）；`tests/active-doctor.test.ts` |
 | D0.44 | 配置迁移走 LLM 任务 | **完成** | `docs/migrations/llm-migration.md`：升级只改声明；迁移=任务+判据+回滚；禁止代码里堆版本分支（安全敏感/原子场景例外） |
+| D0.65 | 安装防呆：脚本安装不抢包管理器全局安装 | **完成** | `install.sh` 守卫（目标 bin 属于包管理器全局安装且为 `command -v dia` 命中项 → exit 3，零改动）：npm/bun 软链看 `node_modules/@minonl/dia`，pnpm/yarn shim 看内容，volta 看 bin 目录；放行 = `DIA_ALLOW_SCRIPT_INSTALL=1` / `--dry-run` / **bin 目录被重定向**（`--home` 等只改安装目录不算沙箱）；装完打印 `effective:`；`doctor install_shadow` 双向一致判定（含 shim）；`tests/install-guard.test.sh` + `tests/install-guard-strict.test.sh` |
 | D0.64 | 复制过滤按相对路径判断 | **完成** | 绝对路径匹配 `node_modules` 会误伤 npm 全局安装（kit 整树被过滤 → `E_KIT_EMPTY`）；改 `copyFilter(base)` 用相对路径，persona/kit 共用 |
 | D0.63 | 运行时数据 `.data/` 不进快照、不参与哈希 | **完成** | `TREE_SKIP`（kit/persona 共用）：安装复制与 `hashTree`/verify 都跳过 `.data`，防运行时写入造成 verify 假漂移 |
 | D0.62 | persona 旧版技能软链视为受管 | **完成** | `linkManaged` 同时认 `~/.dia/kits/**` 与 `~/.dia/personas/**`；`persona update` 升级不再需要 `--force` |

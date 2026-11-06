@@ -3,9 +3,9 @@
 // 只做组合与判定，不实现检查逻辑：
 //   persona verify / kit verify / default_agent / kb 索引 / wt 包 / job 包
 // 退出码：0 全绿；1 有 warn；2 有 fail（便于脚本与 CI 判定）
-import { existsSync, readFileSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, readSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import * as persona from "./persona.ts";
 import * as kit from "./kit.ts";
 import * as scope from "./scope.ts";
@@ -39,6 +39,103 @@ function platformChecks(): Check[] {
 /** detail 里的重建命令要能直接复制执行：含 shell 元字符时加单引号（导出仅为单测覆盖转义）。 */
 export function quoteArg(v: string): string {
   return /^[\w.@%+=:,\/-]+$/.test(v) ? v : `'${v.replace(/'/g, "'\\''")}'`;
+}
+
+/** 路径是否落在 npm 全局包 @minonl/dia 里（包管理器无关：pnpm/yarn/bun 也走 node_modules）。 */
+export function npmOwnedPath(p: string): boolean {
+  return /(^|[\\/])node_modules[\\/]@minonl[\\/]dia([\\/]|$)/.test(p);
+}
+
+/**
+ * shim 形态的包管理器全局安装：pnpm / yarn-berry 在全局 bin 放的是**脚本**（不是软链），
+ * 内容里带包路径 —— 只看 realpath 会把这类安装误判成「脚本安装」。
+ */
+export function pkgShimPath(p: string): boolean {
+  try {
+    const st = statSync(p);
+    if (!st.isFile() || st.size > 1024 * 1024) return false;
+    const fd = openSync(p, "r");
+    try {
+      const buf = Buffer.alloc(8192);
+      const n = readSync(fd, buf, 0, buf.length, 0);
+      return /@minonl\/dia|node_modules\/(@minonl\/)?dia\//.test(buf.subarray(0, n).toString("utf8"));
+    } finally { closeSync(fd); }
+  } catch { return false; }
+}
+
+/** 已知包管理器全局 bin 目录（volta 的同名二进制 shim 不含包路径，只能靠目录归属判断）。 */
+export function pkgBinDirOwned(p: string): boolean {
+  const d = realOrSelf(dirname(p));
+  const home = homedir();
+  const known = [
+    join(home, ".volta/bin"), join(home, ".bun/bin"), join(home, ".yarn/bin"),
+    join(home, ".pnpm-global/bin"), join(home, ".local/share/pnpm"), join(home, ".npm-global/bin"),
+    process.env.PNPM_HOME, process.env.YARN_GLOBAL_FOLDER,
+    process.env.VOLTA_HOME ? join(process.env.VOLTA_HOME, "bin") : "",
+    process.env.BUN_INSTALL ? join(process.env.BUN_INSTALL, "bin") : "",
+  ].filter(Boolean);
+  return known.some((k) => realOrSelf(k) === d);
+}
+
+/** 包管理器全局安装（软链形态看 realpath，shim 形态看内容，volta 看 bin 目录归属）。 */
+export function pkgOwnedPath(p: string): boolean {
+  return npmOwnedPath(p) || pkgShimPath(p) || pkgBinDirOwned(p);
+}
+
+function realOrSelf(p: string): string {
+  try { return realpathSync(p); } catch { return resolve(p); }
+}
+
+/**
+ * `command -v dia` 的等价实现：PATH 里第一个可执行的 `dia`。
+ * 脚本里看不到 shell 函数/alias，因此这里也只认文件；找不到返回 null（调用方降级）。
+ */
+export function whichDia(pathEnv: string = process.env.PATH || ""): string | null {
+  for (const dir of pathEnv.split(delimiter)) {
+    if (!dir) continue;
+    const cand = join(dir, "dia");
+    try {
+      const st = statSync(cand); // 跟随软链：断链会抛错 → 该目录跳过
+      if (!st.isFile()) continue;
+      if (process.platform !== "win32" && (st.mode & 0o111) === 0) continue;
+      return cand;
+    } catch { /* 该目录没有可用的 dia */ }
+  }
+  return null;
+}
+
+/**
+ * install_shadow：脚本安装与包管理器全局安装「互相遮挡」的可见化。
+ * 判据是**双向一致**——installDir() 与 `command -v dia` 的真实路径必须同属包管理器安装或同属脚本安装。
+ * 包管理器一致安装（install 与 PATH bin 都在 `node_modules/@minonl/dia` 下）必须 pass，不能误报。
+ * bin 是 pnpm/yarn 的 shim 脚本时按内容识别（软链形态只看 realpath 会漏）。
+ */
+function installShadowCheck(): Check {
+  const name = "install_shadow";
+  const install = paths.installDir();
+  const installNpm = npmOwnedPath(realOrSelf(install));
+  // 源码 checkout（bun run dev / bun packages/cli/src/index.ts）不是「安装」，比出来只会误报：
+  // 跳过一致性判定，只在真的安装根（npm 包或脚本安装有 install.json）上判。
+  if (!installNpm && !existsSync(join(install, "install.json"))) {
+    return { name, status: "ok", detail: `源码运行（install=${install} 无 install.json，跳过一致性判定）` };
+  }
+  const bin = whichDia();
+  if (!bin) return { name, status: "ok", detail: `PATH 中没有 dia（跳过一致性判定；install=${install}）` };
+  const binReal = realOrSelf(bin);
+  const binNpm = pkgOwnedPath(binReal);
+  const kind = (npm: boolean) => (npm ? "包管理器全局安装" : "脚本安装");
+  if (installNpm === binNpm) {
+    return { name, status: "ok", detail: `一致（${kind(installNpm)}）：install=${install}；PATH dia=${binReal}` };
+  }
+  // 修复方向跟着「谁是预期安装」走；npm 方向给一条可直接复制的命令（不真的调 npm，确定性优先）
+  const fix = installNpm
+    ? `ln -sfn "$(npm prefix -g)/bin/dia" ${quoteArg(bin)}`
+    : `ln -sfn ${quoteArg(join(install, "bin/dia.js"))} ${quoteArg(bin)}`;
+  return {
+    name,
+    status: "fail",
+    detail: `安装类型不一致：install=${install}（${kind(installNpm)}）但 PATH dia=${binReal}（${kind(binNpm)}）；修复：${fix}`,
+  };
 }
 
 function describeStale(st: IndexStatus): string {
@@ -206,6 +303,7 @@ export async function run(opts: { persona?: string } = {}): Promise<{
     status: install === paths.diaHome() ? "warn" : "ok",
     detail: `install=${install} data=${paths.diaHome()}${install === paths.diaHome() ? "（安装物与数据同根）" : ""}`,
   });
+  checks.push(installShadowCheck());
 
   const wt = join(install, "packages/wt/bin/dia-wt");
   checks.push({ name: "wt", status: existsSync(wt) ? "ok" : "warn", detail: existsSync(wt) ? wt : "dia wt 未安装（dia install.sh）" });

@@ -90,6 +90,18 @@ bash tests/smoke.sh     # 用 Node 跑一遍构建产物
 bun src/cli.ts version  # 直接跑源码
 ```
 
+### CI 矩阵（`.github/workflows/test.yml`）
+
+| job | 触发 | 是否 required | 说明 |
+|---|---|---|---|
+| `test (ubuntu-latest)` | PR | ✅ | 全量：单测 / kb / job / build / install / smoke / e2e |
+| `test (macos-latest)` | PR | ✅ | 同上（**macOS 特有差异只有这里能抓到**，例如没有 `timeout(1)`） |
+| `windows-smoke` | PR（代码改动） | ❌ 非阻塞 | 装依赖 + `dia --version` + 纯逻辑测试；`dia job` 的 Windows 后端尚未实现（`install` 返回 rc=3），落地后再升 required |
+| `changes` | PR | ❌ | 判定改动是否只碰 `docs/**` / `llms*.txt`：是则跳过测试矩阵（docs-only 快通道） |
+
+> 只在 `pull_request` 上跑（不再对特性分支的 push 重复跑）。
+> 改这里时**保持 `test (…)` 的 job 名不变**——分支保护按名字要求这两个 check。
+
 ## 命令
 
 ```bash

@@ -250,6 +250,7 @@ unknown（stale）**不单独返回**——`health` 是实时执行，不存在�
   仅对 `local.dia-job-svc-<id>` 行追加，其它行原样（向后兼容）。
 - 对 `service` 型（常驻）任务：Linux 走 systemd `--user`，**常驻需 `loginctl enable-linger`**（`job doctor` 已提示，`dia service add` 一并转述）；
   对 `periodic` 任务，cron 后端**没有进程状态**，health 是唯一判据 → 新鲜度条款（§4.6）尤其关键。
+- **性能**：只读台账、零执行；实测 N=50 时 `3.1ms`（阈值 200ms），基准见 `tests/service-health-status.perf.test.ts`。
 
 ## 7. 边界与异常
 
@@ -452,7 +453,7 @@ flowchart LR
 | §6 `dia job status` 追列 health | ✅ | `decorateStatus` + `runJobCapture`（#54） |
 | §7 边界（`E_UNSTABLE_ENTRY` / adopted / three-state） | ✅ | `verify` / `healthView`（#49、#54） |
 | §14 agent 型（`entry.agent` + `kind:"acp"`） | ✅ | `acpAgentCommand` / `runAcpHealth` / `recordHealth`（#60） |
-| §6 性能基准（N=50 ≤200ms） | ⏳ 未测 | 实现为「逐行读台账」，复杂度 O(服务数)，风险低；待补 benchmark |
+| §6 性能基准（N=50 ≤200ms） | ✅ | 实测 **3.1ms**（单服务 0.1ms，macOS / bun 1.4.4）；`tests/service-health-status.perf.test.ts` 断言 ≤200ms 且不随 N 线性增长 |
 
 ### 15.1 已知与设计的偏差
 

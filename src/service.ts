@@ -11,7 +11,7 @@
 //   · contract.exit —— 服务自己的业务/生命周期语义（如 `0=ok/2=retry`），dia 不解读；
 //   · healthcheck   —— 专用码域 0=ok / 20=degraded / 21=fail（外加 124=timeout、信号=crash），
 //                      **只此一套**参与健康判定。contract.exit 的 2/3 绝不借用给 health。
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import {
   appendFileSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync,
@@ -25,7 +25,40 @@ import * as paths from "./paths.ts";
 
 // ── 清单（dia.json kind=service）──────────────────────────────────────────────
 
-export interface ServiceEntry { cmd: string }
+/**
+ * agent 型入口（§14.2）：不写死命令，只声明「哪套 ACP 宿主 + 哪个 profile」。
+ * 命令由 host 推导（见 acpAgentCommand），**不允许同时声明 cmd**（入口互斥，§14.6）。
+ */
+export interface ServiceAgentEntry {
+  /** ACP 实现：dsh | opencode（其它值 → E_MANIFEST） */
+  host: string;
+  /** 宿主的 profile 名（不复制 persona 内容，只引用；缺省用宿主默认） */
+  profile?: string;
+  /** 可选：仅做归属校验，不注入内容 */
+  persona?: string;
+}
+
+/** 入口二选一：`cmd`（脚本型）或 `agent`（agent 型）。 */
+export interface ServiceEntry {
+  cmd?: string;
+  agent?: ServiceAgentEntry;
+}
+
+/** ACP 健康检查（§14.3）：不要求 cmd，判据 = initialize + session/new。 */
+export interface ServiceHealthcheck {
+  /** 缺省 "script"（向后兼容）；"acp" = 走 runAcpHealth */
+  kind?: "script" | "acp";
+  cmd?: string;
+  /** 默认 1800s；须 ≥60s、整分 */
+  interval?: number;
+  /** 默认 60s；由 dia / job wrapper 包超时（exit 124） */
+  timeout?: number;
+  ok_exit?: number[];
+  degraded_exit?: number[];
+  fail_exit?: number[];
+  /** 默认 2：连续 N 次同结果才切换状态（本切片只做校验） */
+  debounce?: number;
+}
 
 export interface ServiceLifecycle {
   type: "periodic" | "bounded" | "service";
@@ -40,19 +73,6 @@ export interface ServiceContract {
   stdin?: "json" | "text" | "none";
   exit?: string;
   idempotent_by?: string;
-}
-
-export interface ServiceHealthcheck {
-  cmd: string;
-  /** 默认 1800s；须 ≥60s、整分 */
-  interval?: number;
-  /** 默认 60s；由 dia / job wrapper 包超时（exit 124） */
-  timeout?: number;
-  ok_exit?: number[];
-  degraded_exit?: number[];
-  fail_exit?: number[];
-  /** 默认 2：连续 N 次同结果才切换状态（本切片只做校验） */
-  debounce?: number;
 }
 
 export interface ServiceManifest {
@@ -72,6 +92,77 @@ const ID_RE = /^[a-z0-9][a-z0-9-]*$/;
 const VERSION_RE = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/;
 const LIFECYCLE_TYPES = new Set(["periodic", "bounded", "service"]);
 const STDIN_TYPES = new Set(["json", "text", "none"]);
+const ACP_HOSTS = ["dsh", "opencode"] as const;
+export type AcpHost = (typeof ACP_HOSTS)[number];
+const HEALTHCHECK_KINDS = new Set(["script", "acp"]);
+
+const isPlainObject = (v: unknown): v is Record<string, any> =>
+  v !== null && typeof v === "object" && !Array.isArray(v);
+
+/** 非空字符串（去掉首尾空白后） */
+const isNonEmptyString = (v: unknown): v is string => typeof v === "string" && v.trim() !== "";
+
+/**
+ * agent 型入口的命令（§14.2 / §14.3）：只在清单这一处推导，健康检查与 job 拉起点用同一份。
+ *   · dsh（缺省 profile）→ `dsh acp`
+ *   · dsh + profile p   → `dsh --profile p acp`
+ *   · opencode          → `opencode acp`（opencode 无 profile 概念，给了 → E_MANIFEST 由校验挡下）
+ */
+export function acpAgentCommand(agent: ServiceAgentEntry): string[] {
+  if (!ACP_HOSTS.includes(agent?.host as AcpHost)) throw new Error(`E_MANIFEST: entry.agent.host must be ${ACP_HOSTS.join("|")}`);
+  const profile = agent.profile?.trim();
+  if (agent.host === "dsh") return ["dsh", ...(profile ? ["--profile", profile] : []), "acp"];
+  return ["opencode", "acp"];
+}
+
+/** 入口是 agent 型？（互斥校验已保证不会和 cmd 同时出现） */
+export const isAgentEntry = (e: ServiceEntry | undefined): e is ServiceEntry & { agent: ServiceAgentEntry } =>
+  !!e && e.agent !== undefined && e.agent !== null;
+
+/** 健康检查类型：缺省 script（向后兼容，§14.6）。 */
+export const healthcheckKind = (hc?: ServiceHealthcheck): "script" | "acp" => hc?.kind ?? "script";
+
+/** 脚本型入口解析用的命令：没有 cmd（agent 型）时返回空串，绝不把 undefined 塞给 resolveEntry。 */
+export const entryCmdOf = (svc: ServiceManifest): string => svc.entry.cmd ?? "";
+
+/**
+ * 校验 entry.agent 形状（host 枚举 / profile 与 host 的搭配 / persona 归属字段）。
+ * 值与只校验不推断：`profile: "  "` 这种「看起来没写」的串直接拒（摊成空串会让命令悄悄退化成宿主默认）。
+ */
+function checkAgentEntry(a: any): ServiceAgentEntry {
+  if (!isPlainObject(a)) throw new Error("E_MANIFEST: entry.agent must be an object");
+  if (!ACP_HOSTS.includes(a.host)) throw new Error(`E_MANIFEST: entry.agent.host must be ${ACP_HOSTS.join("|")}`);
+  for (const k of ["profile", "persona"] as const) {
+    if (a[k] !== undefined && !isNonEmptyString(a[k])) throw new Error(`E_MANIFEST: entry.agent.${k} must be a non-empty string`);
+  }
+  // opencode 没有 profile 概念：「写上了」比「忽略了」更危险（人以为生效了），直接拒绝
+  if (a.host !== "dsh" && a.profile !== undefined) {
+    throw new Error(`E_MANIFEST: entry.agent.profile 只适用于 host=dsh（${a.host} 没有 profile）`);
+  }
+  return a as ServiceAgentEntry;
+}
+
+/**
+ * entry 入口二选一（§14.6）：`cmd`（脚本型）与 `agent`（agent 型）**互斥且必选其一**。
+ * · 同时给 → E_MANIFEST（不猜谁优先：猜错就是「装了半套」）；
+ * · 都没有 → E_MANIFEST（没有入口的服务无从托管）；
+ * · agent 型光声明不够：healthcheck 必须 `kind:"acp"`；`kind:"acp"` 反过来也只能配 agent 型
+ *   （否则 health 会去跑一条不存在的命令，永远 crash）。
+ */
+function checkEntry(entry: any): ServiceEntry {
+  if (!isPlainObject(entry)) throw new Error("E_MANIFEST: entry required");
+  const hasCmd = entry.cmd !== undefined && entry.cmd !== null;
+  const hasAgent = entry.agent !== undefined && entry.agent !== null;
+  if (hasCmd && hasAgent) throw new Error("E_MANIFEST: entry.cmd 与 entry.agent 互斥，只能声明其一");
+  if (!hasCmd && !hasAgent) throw new Error("E_MANIFEST: entry.cmd required（脚本型）或 entry.agent（agent 型）");
+  if (hasCmd) {
+    if (typeof entry.cmd !== "string" || !entry.cmd.trim()) throw new Error("E_MANIFEST: entry.cmd required");
+  } else {
+    checkAgentEntry(entry.agent);
+  }
+  return entry as ServiceEntry;
+}
+
 
 /** 稳定入口目录（与 packages/job/lib/policy.sh 同一解析：`${DIA_JOB_ENTRY_DIR:-<job root>/bin}`）。 */
 export function entryDir(): string {
@@ -129,7 +220,13 @@ const LEVELS = ["ok", "degraded", "fail"] as const;
 
 function checkHealthcheck(hc: any): ServiceHealthcheck {
   if (hc === null || typeof hc !== "object" || Array.isArray(hc)) throw new Error("E_MANIFEST: healthcheck must be an object");
-  if (typeof hc.cmd !== "string" || !hc.cmd.trim()) throw new Error("E_MANIFEST: healthcheck.cmd required");
+  if (hc.kind !== undefined && !HEALTHCHECK_KINDS.has(hc.kind)) throw new Error("E_MANIFEST: healthcheck.kind must be script|acp");
+  // kind 缺省 = script（向后兼容，§14.6）；只有脚本型要 cmd，acp 型的判据是 initialize + session/new
+  if (healthcheckKind(hc) === "script") {
+    if (typeof hc.cmd !== "string" || !hc.cmd.trim()) throw new Error("E_MANIFEST: healthcheck.cmd required");
+  } else if (hc.cmd !== undefined) {
+    throw new Error("E_MANIFEST: healthcheck.kind=acp 不得再声明 cmd（判据是 initialize + session/new，不是外部脚本）");
+  }
   if (hc.interval !== undefined) {
     const why = checkCronInterval(hc.interval);
     if (why) throw new Error(`E_MANIFEST: healthcheck.interval: ${why}`);
@@ -157,8 +254,15 @@ export function validateServiceManifest(m: any): ServiceManifest {
   if (!m.id || !ID_RE.test(m.id)) throw new Error("E_MANIFEST: bad id");
   if (!m.version || !VERSION_RE.test(m.version)) throw new Error("E_MANIFEST: bad version");
 
-  if (m.entry === null || typeof m.entry !== "object" || Array.isArray(m.entry)) throw new Error("E_MANIFEST: entry required");
-  if (typeof m.entry.cmd !== "string" || !m.entry.cmd.trim()) throw new Error("E_MANIFEST: entry.cmd required");
+  // 入口互斥（§14.6）：entry.cmd 与 entry.agent 只能声明其一
+  checkEntry(m.entry);
+  const agentEntry = isAgentEntry(m.entry);
+  if (agentEntry && healthcheckKind(m.healthcheck) !== "acp") {
+    throw new Error('E_MANIFEST: entry.agent 必须配 healthcheck.kind="acp"（脚本型 healthcheck 无 cmd 可执行）');
+  }
+  if (!agentEntry && m.healthcheck && healthcheckKind(m.healthcheck) === "acp") {
+    throw new Error('E_MANIFEST: healthcheck.kind="acp" 只适用于 entry.agent 型服务');
+  }
 
   if (m.lifecycle === null || typeof m.lifecycle !== "object" || Array.isArray(m.lifecycle)) throw new Error("E_MANIFEST: lifecycle required");
   if (!LIFECYCLE_TYPES.has(m.lifecycle.type)) throw new Error("E_MANIFEST: lifecycle.type must be periodic|bounded|service");
@@ -995,6 +1099,116 @@ export function runHealth(
   return { judgement, report, stdout, stderr, ms };
 }
 
+// ── agent 型健康检查（§14.3）─────────────────────────────────────────────────
+
+export interface AcpCheck { step: "initialize" | "session/new"; state: HealthRaw; detail: string }
+
+export interface AcpHealthRun {
+  judgement: HealthJudgement;
+  report: { status: HealthRaw; checks: { name: string; status: string; detail: string }[] };
+  ms: number;
+  steps: AcpCheck[];
+}
+
+/**
+ * 用 ACP 判活（§14.3）：`initialize` 能应答 = 端点活着；`session/new` 成功 = 能开工。
+ *   连不上/超时 → degraded（infra 抖动）；initialize 报错 → degraded（配置面）；
+ *   session/new 报错 → fail（鉴权/配置问题，不是抖动）。
+ * **绝不判断回答质量、不重放业务 prompt**。
+ */
+export async function runAcpHealth(
+  svc: ServiceManifest,
+  opts: { dir: string; env?: NodeJS.ProcessEnv; now?: () => number },
+): Promise<AcpHealthRun> {
+  const hc = svc.healthcheck;
+  if (!hc || healthcheckKind(hc) !== "acp") throw new Error("E_MANIFEST: runAcpHealth 只处理 healthcheck.kind=acp");
+  const agent = svc.entry.agent;
+  if (!agent) throw new Error("E_MANIFEST: healthcheck.kind=acp 需要 entry.agent");
+  const timeoutMs = (hc.timeout ?? DEFAULT_HEALTH_TIMEOUT) * 1000;
+  const now = opts.now ?? Date.now;
+  const t0 = now();
+  const argv = acpAgentCommand(agent);
+  const env = { ...process.env, ...(opts.env ?? {}) };
+  const steps: AcpCheck[] = [];
+
+  const finish = (status: HealthRaw, exit: number): AcpHealthRun => {
+    const judgement: HealthJudgement = { ...judgeHealth(exit, {}), state: status, exit, timeout: false,
+      detail: steps.filter((x) => x.state !== "ok").map((x) => `${x.step}: ${x.detail}`).join("; ")
+        || `initialize + session/new ok（${agent.host}${agent.profile ? " --profile " + agent.profile : ""}）` };
+    return { judgement, report: { status, checks: steps.map((x) => ({ name: x.step, status: x.state, detail: x.detail })) }, ms: now() - t0, steps };
+  };
+
+  const child = spawn(argv[0], argv.slice(1), { cwd: opts.dir, env, stdio: ["pipe", "pipe", "pipe"] });
+  const pending = new Map<number, (m: any) => void>();
+  let buf = "";
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", (chunk: string) => {
+    buf += chunk;
+    for (let i = buf.indexOf("\n"); i >= 0; i = buf.indexOf("\n")) {
+      const line = buf.slice(0, i).trim();
+      buf = buf.slice(i + 1);
+      if (!line) continue;
+      let msg: any;
+      try { msg = JSON.parse(line); } catch { continue; }
+      const waiter = msg && msg.id !== undefined ? pending.get(msg.id) : undefined;
+      if (waiter) { pending.delete(msg.id); waiter(msg); }
+    }
+  });
+  const spawnError = await new Promise<string | null>((resolve) => {
+    let settled = false;
+    const done = (v: string | null) => { if (!settled) { settled = true; resolve(v); } };
+    child.once("error", (e: any) => done(String(e?.message || e)));
+    child.once("spawn", () => done(null));
+    setTimeout(() => done(null), 50);
+  });
+  if (spawnError) return (steps.push({ step: "initialize", state: "degraded", detail: `端点起不来：${spawnError}` }), finish("degraded", 20));
+
+  const call = (id: number, method: string, params: unknown) =>
+    new Promise<any>((resolve) => {
+      const timer = setTimeout(() => { pending.delete(id); resolve({ timeout: true }); }, timeoutMs);
+      pending.set(id, (m) => { clearTimeout(timer); resolve(m); });
+      try { child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n"); }
+      catch (e: any) { clearTimeout(timer); pending.delete(id); resolve({ died: String(e?.message || e) }); }
+    });
+
+  try {
+    const init = await call(1, "initialize", { protocolVersion: 1, clientCapabilities: {} });
+    if (init.timeout) steps.push({ step: "initialize", state: "degraded", detail: "initialize 超时" });
+    else if (init.died) steps.push({ step: "initialize", state: "degraded", detail: `端点已退出：${init.died}` });
+    else if (init.error) steps.push({ step: "initialize", state: "degraded", detail: `initialize 报错：${init.error?.message ?? JSON.stringify(init.error)}` });
+    else if (!init.result) steps.push({ step: "initialize", state: "degraded", detail: "initialize 无 result" });
+    else steps.push({ step: "initialize", state: "ok", detail: "initialize ok" });
+    if (steps[0].state !== "ok") return finish("degraded", 20);
+
+    const ns = await call(2, "session/new", { cwd: opts.dir, mcpServers: [] });
+    if (ns.timeout) steps.push({ step: "session/new", state: "fail", detail: "session/new 超时" });
+    else if (ns.error) steps.push({ step: "session/new", state: "fail", detail: `session/new 报错：${ns.error?.message ?? JSON.stringify(ns.error)}` });
+    else if (!ns.result?.sessionId) steps.push({ step: "session/new", state: "fail", detail: "session/new 未返回 sessionId" });
+    else steps.push({ step: "session/new", state: "ok", detail: `session ${ns.result.sessionId}` });
+    return steps[1].state === "ok" ? finish("ok", 0) : finish("fail", 21);
+  } finally {
+    try { child.kill("SIGKILL"); } catch { /* noop */ }
+  }
+}
+
+/** 把一次 judgement 记进台账（唯一写入方口径：`transition` + 追加）。 */
+export function recordHealth(
+  svc: ServiceManifest,
+  judgement: HealthJudgement,
+  opts: { gen?: string; stateFile?: string; now?: number; source?: "schedule" | "manual"; checks?: unknown[] } = {},
+): { record: HealthRecord; statePath: string } {
+  const id = svc.id;
+  const gen = opts.gen || generationOf(id);
+  const now = opts.now ?? Math.floor(Date.now() / 1000);
+  const file = opts.stateFile || process.env.DIA_SERVICE_HEALTH_FILE || healthStatePath(id);
+  const record = transition(findLastHealth(readHealthLines(file), id, gen), {
+    service: id, gen, source: opts.source ?? "manual", ts: now, judgement,
+    debounce: svc.healthcheck?.debounce, checks: opts.checks as any,
+  });
+  appendHealthRecord(file, record);
+  return { record, statePath: file };
+}
+
 /** 找 `timeout(1)` / mac 的 `gtimeout`；都没有返回 null（走 spawn 的 timeout）。 */
 export function whichTimeout1(): string | null {
   const probe = spawnSync("bash", ["-c", "command -v timeout || command -v gtimeout"], { encoding: "utf8" });
@@ -1083,7 +1297,7 @@ export interface JobRunner {
  */
 export function verify(dir: string, opts: { registry?: string | null; lock?: ServiceLock | null } = {}): VerifyResult {
   const svc = readServiceManifest(dir);
-  const entry = resolveEntry(svc.entry.cmd, dir);
+  const entry = resolveEntry(entryCmdOf(svc), dir);
   const drift: Drift[] = [];
 
   if (!existsSync(entry.path)) drift.push({ code: "entry_missing", detail: `entry 不存在：${entry.path}` });
@@ -1212,7 +1426,7 @@ export function add(opts: AddOptions): AddResult {
   }
   if (svc.healthcheck) healthJobInterval(svc);
 
-  const entry = resolveEntry(svc.entry.cmd, dir);
+  const entry = resolveEntry(entryCmdOf(svc), dir);
   if (!existsSync(entry.path)) throw new Error(`E_UNSTABLE_ENTRY: entry 不存在：${entry.path}`);
   if (!isExecutableFile(entry.path)) throw new Error(`E_UNSTABLE_ENTRY: entry 不可执行：${entry.path}`);
 
@@ -1220,7 +1434,7 @@ export function add(opts: AddOptions): AddResult {
   const mismatch = !!svc.lifecycle.target && normalizeHost(svc.lifecycle.target) !== normalizeHost(osHostname());
   const result: AddResult = {
     id: svc.id, version: svc.version, dir, gen, dryRun: !!opts.dryRun, backend,
-    entry: { declared: svc.entry.cmd, kind: entry.kind, path: entry.path, link: null },
+    entry: { declared: entryCmdOf(svc), kind: entry.kind, path: entry.path, link: null },
     jobs: { service: serviceJobName(svc.id), health: svc.healthcheck ? healthJobName(svc.id) : null },
     target_mismatch: mismatch,
   };
@@ -1231,7 +1445,7 @@ export function add(opts: AddOptions): AddResult {
 
   // 重装：先卸旧任务，再装新的（避免同名任务残留旧 cmd/gen）
   // 作业根在 ~/.dia/job 下、命令从 ~/.local/bin 进：不是 git 主 checkout ⇒ 用 job 的逃生舱并写明理由
-  const backfill = ["--allow-unstable", "--desc", `dia service ${svc.id}: healthcheck 只读判定，稳定入口 ${entryPathOf(svc.entry.cmd, dir)}`];
+  const backfill = ["--allow-unstable", "--desc", `dia service ${svc.id}: healthcheck 只读判定，稳定入口 ${entryPathOf(entryCmdOf(svc), dir)}`];
   const runner = opts.runner ?? defaultRunner({ backfill });
   const installed: string[] = [];
   const fail = (code: string, msg: string, rc?: number | null): never => {
@@ -1248,7 +1462,7 @@ export function add(opts: AddOptions): AddResult {
     entryPath = linkEntry(entry.path);
     result.entry.link = entryPath;
     result.entry.path = entryPath;
-  } else if (svc.entry.cmd.startsWith(entryDir())) {
+  } else if (entryCmdOf(svc).startsWith(entryDir())) {
     result.entry.link = entry.path;
   }
 

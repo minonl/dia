@@ -42,13 +42,17 @@
   .progress i{display:block;height:100%;background:var(--blue);background-image:linear-gradient(45deg,rgba(255,255,255,.28) 25%,transparent 25%,transparent 50%,rgba(255,255,255,.28) 50%,rgba(255,255,255,.28) 75%,transparent 75%);background-size:12px 12px;animation:flow 1s linear infinite}
   .progress i.blocked{background-color:var(--red);animation-play-state:paused;opacity:.65}
   .progress i.review{background-color:var(--amber)}
-  .progress i.done,.progress i.accepted{background-color:var(--green);background-image:none;animation:none}
+  .progress i.done,.progress i.accepted{background-color:var(--muted);background-image:none;animation:none}
+  .progress i.todo{background-color:var(--muted);background-image:none;animation:none}
   @keyframes flow{to{background-position:12px 0}}
   .st{font-weight:500}
-  .st.doing{color:var(--blue)} .st.blocked{color:var(--red)} .st.review{color:var(--amber)}
-  .st.done,.st.accepted{color:var(--green)} .st.todo{color:var(--muted)}
+  .st.doing{color:var(--ink)} .st.blocked{color:var(--red)} .st.review{color:var(--amber)}
+  .st.done,.st.accepted{color:var(--muted)} .st.todo{color:var(--muted)}
   .prio{float:right;font-size:10px;font-weight:600;border-radius:5px;padding:0 6px;color:#fff;margin-left:4px}
-  .prio.p0{background:var(--red)} .prio.p1{background:var(--amber)} .prio.p2{background:#64748b}
+  .prio{background:transparent;border:1px solid var(--line)}
+  .prio.p0{background:var(--red);border-color:var(--red);color:#fff}
+  .prio.p1{border-color:var(--amber);color:var(--amber)}
+  .prio.p2{border-color:var(--line);color:var(--muted)}
   .legend-overlay{position:absolute;right:12px;bottom:12px;z-index:5;background:color-mix(in srgb,var(--panel) 92%,transparent);border:1px solid var(--line);border-radius:10px;padding:8px 10px;box-shadow:var(--shadow);font-size:11px;color:var(--muted);display:grid;gap:5px;min-width:190px}
   .legend-overlay .row{display:flex;align-items:center;gap:8px;white-space:nowrap}
   .legend-overlay .sample{width:38px;height:10px;flex:0 0 38px}
@@ -86,7 +90,7 @@
   .tl-track{position:relative;height:28px}
   .tl-bar{position:absolute;top:7px;height:14px;border-radius:5px;background:var(--blue);opacity:.9;cursor:pointer}
   .tl-bar .fill{position:absolute;left:0;top:0;bottom:0;border-radius:5px;background:rgba(255,255,255,.45)}
-  .tl-bar.blocked{background:var(--red)} .tl-bar.done,.tl-bar.accepted{background:var(--green)}
+  .tl-bar.blocked{background:var(--red)} .tl-bar.done,.tl-bar.accepted,.tl-bar.todo{background:var(--muted)}
   .tl-bar.review{background:var(--amber)}
   .tl-bar.critical{outline:2px solid var(--amber);outline-offset:2px}
   .tl-today{position:absolute;top:0;bottom:0;pointer-events:none;z-index:2;border-left:1px dashed var(--red);color:var(--red);font-size:10px;padding-left:4px}
@@ -148,10 +152,10 @@
     <div class="panel">
       <div class="side-title"><h2>概览</h2><span>live data</span></div>
       <div class="list">
-        <div class="item"><span class="k"><i class="dot" style="background:var(--blue)"></i>任务</span><b>7</b></div>
+        <div class="item"><span class="k"><i class="dot" style="background:var(--muted)"></i>任务</span><b>7</b></div>
         <div class="item"><span class="k"><i class="dot" style="background:var(--red)"></i>阻塞</span><b>1</b></div>
         <div class="item"><span class="k"><i class="dot" style="background:var(--amber)"></i>待评审</span><b>1</b></div>
-        <div class="item"><span class="k"><i class="dot" style="background:var(--green)"></i>完成</span><b>2</b></div>
+        <div class="item"><span class="k"><i class="dot" style="background:var(--muted)"></i>完成</span><b>2</b></div>
         <div class="item"><span class="k">claims</span><b>3</b></div>
       </div>
     </div>
@@ -169,7 +173,7 @@
     </div>
   </aside>
 </main>
-<footer>关系图按依赖深度分层，状态用颜色/进度条；时间线独立展示执行情况。真实实现需先解除「框架无网络模块」限制并单独评审。</footer>
+<footer>颜色只表达警告/异常：红=阻塞/P0，橙=待评审/P1；其余状态用中性灰 + 单一蓝色进度。关系图按依赖深度分层，时间线独立展示执行情况。</footer>
 
 <script>
 const tasks = [

@@ -31,7 +31,7 @@ Agent 入口：[`llms.txt`](https://github.com/minonl/dia/blob/main/llms.txt)（
 | [价目表（tokens → 金额）](pricing.md) | 原则：没有价格就不编造；unpriced 明确记录，预算按 tokens 兜底。 |
 | [目标提案（team next）](proposals.md) | 定位：团队可以提候选，不能定目标。 |
 | [Sandbox 细化设计（dia）](security-sandbox.md) | 依据：dsh 本机源码实测、Hermes/Pi 取证、[/tmp/dia-sbx 实验]。 |
-| [服务（service）：可托管的执行体](service-noun.md) | 状态：提案（设计，未实现）。只做脚本型服务；healthcheck 按专用退出码域判定，旧结果超新鲜度窗口即报 stale。 |
+| [服务（service）：可托管的执行体](service-noun.md) | 状态：已实现（v0.0.10，脚本型 + agent 型）。脚本型走 entry.cmd，agent 型走 entry.agent + healthcheck.kind="acp"； |
 | [dia 状态页（单一事实源）](status.md) | 任何"现在做到哪了"的问题，以本页为准；其他文档是细节。 |
 | [全自动团队：人只在验收介入](team-automation.md) | 目标：计划→实现→验证→对抗→修复全自动循环；人只在验收阶段拍板。 |
 | [团队章程：谁来做 dia（开发团队）](team.md) | 2026-10-28 升级：开发团队执行模式改为全自动循环（计划→实现→验证→对抗→修复），人只在验收阶段介入； |

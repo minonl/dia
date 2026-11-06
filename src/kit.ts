@@ -319,6 +319,24 @@ export function install(from: string, opts: { ref?: string; dryRun?: boolean; js
   return { id: m.id, version: m.version, dir: target, root: kitRoot, rendered, hash, changed: true };
 }
 
+/** 已安装 kit（每个 id 取最新版本），含 tags 与落盘目录 —— 供 kb 聚合检索/doctor 使用 */
+export function installed(): { id: string; version: string; dir: string; tags: string[] }[] {
+  const root = join(dataDir(), "kits");
+  if (!existsSync(root)) return [];
+  const out: { id: string; version: string; dir: string; tags: string[] }[] = [];
+  for (const e of readdirSync(root, { withFileTypes: true })) {
+    if (!e.isDirectory()) continue;
+    const versions = readdirSync(join(root, e.name)).filter((v) => statSync(join(root, e.name, v)).isDirectory()).sort();
+    const version = versions[versions.length - 1];
+    if (!version) continue;
+    const dir = join(root, e.name, version);
+    let tags: string[] = [];
+    try { tags = readKitManifest(dir).tags ?? []; } catch { /* 损坏的 manifest 不影响其它 kit */ }
+    out.push({ id: e.name, version, dir, tags });
+  }
+  return out;
+}
+
 export function list(): { id: string; versions: string[]; tags: string[] }[] {
   const root = join(dataDir(), "kits");
   if (!existsSync(root)) return [];

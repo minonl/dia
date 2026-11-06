@@ -67,3 +67,19 @@
 
 - 先确认“依赖深度分层 + 简约/详细 + 时间线”结构；
 - 确认后做 `--export-html`（零网络），再评估 live 轮询。
+
+## 7. URL 路由
+
+静态稿支持 hash 路由（`file://` 直接可用）：
+
+```
+#/graph
+#/graph?mode=simple
+#/graph?mode=detail&sort=prio
+#/timeline
+```
+
+- `view` 也可用 query 形式：`?view=timeline&mode=detail`；
+- 切换 tab / 简约详细 / 排序会同步更新 hash，便于分享/回链；
+- 真正的独立 path（`/graph`、`/timeline`）需要部署层 rewrite 到同一 HTML，或导出时生成
+  `graph.html` / `timeline.html`；静态文件本身不能凭空提供两个 path。

@@ -175,7 +175,18 @@ out="$(HOME="$H8" PATH="$H8/.local/bin:$PATH" bash "$INSTALL" --migrate 2>&1)"; 
 
 echo "── ⑦ PATH 里没有 dia 时不挂死（旧版 which_dia 死循环） ──"
 H9="$TD/h9"; mkdir -p "$H9/.local/bin"
-out="$(HOME="$H9" PATH="/usr/bin:/bin" timeout 8 bash "$INSTALL" 2>&1)"; rc=$?
+# 便携 watchdog：CI 的 macOS 没有 timeout(1)（用它会 rc=127 假失败）
+run_watchdog() {
+  local secs="$1"; shift
+  "$@" & local pid=$! n=0
+  while kill -0 "$pid" 2>/dev/null; do
+    n=$((n+1))
+    if [ "$n" -ge "$secs" ]; then kill -9 "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; return 124; fi
+    sleep 1
+  done
+  wait "$pid"; return $?
+}
+out="$(HOME="$H9" PATH="/usr/bin:/bin" run_watchdog 8 bash "$INSTALL" 2>&1)"; rc=$?
 [ "$rc" != 124 ] && ok "无 dia 的 PATH → 未挂死（rc=${rc}）" || bad "PATH 无 dia 时挂死（rc=124）"
 [ "$(readlink "$H9/.local/bin/dia" 2>/dev/null)" = "$H9/.local/share/dia/bin/dia.js" ] && ok "链接照常建立" || bad "链接未建立"
 

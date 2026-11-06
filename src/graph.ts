@@ -4,6 +4,7 @@
 // 只输出 declared 边；cycles 由任务 deps 计算；不做 inferred/UI。
 import * as task from "./task.ts";
 import * as claims from "./claims.ts";
+import * as plan from "./plan.ts";
 
 export interface GraphNode {
   id: string;
@@ -28,6 +29,21 @@ export interface GraphNode {
   closed_at?: string;
   deps?: string[];
   touches?: string[];
+  // ── M1.2 派生量（见 docs/design/graph-prio-dag.md）──
+  eff_prio?: string;
+  prio_inherited?: boolean;
+  prio_source?: { id: string; declared: string; distance: number };
+  critical?: boolean;
+  ready?: boolean;
+  startable?: boolean;
+  released_by?: string[];
+  dangling_deps?: string[];
+  depth?: number;
+  unblocks?: number;
+  rank?: number | null;
+  split_from?: string;
+  split_children?: string[];
+  slice?: boolean;
 }
 
 export interface GraphEdge {
@@ -41,6 +57,7 @@ export interface Graph {
   schema: 1;
   /** 本版本可选的图能力；读者据此决定是否渲染优先级/时间线/进度 */
   capabilities?: string[];
+  ranking?: { policy: "kahn-v1" };
   nodes: GraphNode[];
   edges: GraphEdge[];
   cycles: string[][];
@@ -80,13 +97,15 @@ function findCycles(tasks: task.Task[]): string[][] {
 
 export function build(opts: { task?: string } = {}): Graph {
   const tasks = task.list();
+  const derived = plan.derive(tasks);
   const active = claims.list();
   const nodes = new Map<string, GraphNode>();
   const edges: GraphEdge[] = [];
   const byId = new Map(tasks.map((t) => [t.id, t]));
 
   for (const t of tasks) {
-    const blocked = t.deps.filter((d) => byId.get(d)?.status !== "done");
+    const blocked = t.deps.filter((d) => !task.isSatisfied(byId.get(d)));
+    const d = derived.byId.get(t.id)!;
     nodes.set(taskNode(t.id), {
       id: taskNode(t.id), kind: "task", label: t.title, status: t.status, owner: t.owner,
       ...(blocked.length ? { blocked_by: blocked } : {}),
@@ -100,6 +119,20 @@ export function build(opts: { task?: string } = {}): Graph {
       ...(t.closed_at ? { closed_at: t.closed_at } : {}),
       deps: t.deps,
       touches: t.touches,
+      eff_prio: d.eff_prio,
+      prio_inherited: d.prio_inherited,
+      ...(d.prio_source ? { prio_source: d.prio_source } : {}),
+      critical: d.critical,
+      ready: d.ready,
+      startable: d.startable,
+      released_by: d.released_by,
+      dangling_deps: d.dangling_deps,
+      depth: d.depth,
+      unblocks: d.unblocks,
+      rank: d.rank,
+      ...(d.split_from ? { split_from: d.split_from } : {}),
+      ...(d.split_children ? { split_children: d.split_children } : {}),
+      ...(d.slice ? { slice: true } : {}),
     });
     if (t.owner) nodes.set(sessionNode(t.owner), { id: sessionNode(t.owner), kind: "session", label: t.owner });
     for (const d of t.deps) {
@@ -134,5 +167,5 @@ export function build(opts: { task?: string } = {}): Graph {
 
   filteredNodes.sort((a, b) => a.id.localeCompare(b.id));
   filteredEdges.sort((a, b) => (a.from + "\0" + a.to + "\0" + a.kind).localeCompare(b.from + "\0" + b.to + "\0" + b.kind));
-  return { schema: 1, capabilities: ["prio", "timeline", "progress"], nodes: filteredNodes, edges: filteredEdges, cycles: findCycles(tasks) };
+  return { schema: 1, capabilities: ["prio", "timeline", "progress", "eff-prio", "ready", "rank", "split"], ranking: derived.ranking, nodes: filteredNodes, edges: filteredEdges, cycles: findCycles(tasks) };
 }

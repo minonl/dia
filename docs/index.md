@@ -92,6 +92,7 @@ Agent 入口：[`llms.txt`](https://github.com/minonl/dia/blob/main/llms.txt)（
 
 | 文档 | 一句话 |
 |---|---|
+| [优先级 × 依赖：任务编排语义（M1）](design/graph-prio-dag.md) | 状态：已实现（2026-11-06）｜代码：src/plan.ts（派生纯函数）、src/task.ts（split）、src/graph.ts（契约） |
 | [dia graph Web（M1）设计：真实数据 → 单文件静态导出](design/graph-web-m1.md) | 状态：M1 设计（2026-11-06）｜前置：graph-web.md（视觉稿 v0.3）、graph-web-mockup.html（交互原型） |
 | [dia graph Web 视觉设计稿（v0.3）](design/graph-web.md) | 落地状态（2026-11-06）：M1 已实现 dia graph --export-html（真实账本 → 单文件静态 HTML，无网络）； |
 

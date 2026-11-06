@@ -30,6 +30,14 @@ export interface Task {
   progress?: number;
   /** 进入 done/accepted 的时间（派生字段，不单独入账） */
   closed_at?: string;
+  /** 由 split 产生：父任务 id（元数据，不是图边） */
+  split_from?: string;
+  /** 由 split 产生：子任务 id 列表（元数据，不是图边） */
+  split_children?: string[];
+  /** 最小可用切片标记（排序 tiebreak + 展示） */
+  slice?: boolean;
+  /** judge 继承自父任务 */
+  judge_inherited?: boolean;
 }
 
 export interface AddOptions {
@@ -107,6 +115,27 @@ function fold(): Map<string, Task> {
       });
       continue;
     }
+    if (e.event === "split" && e.parent && Array.isArray(e.children)) {
+      const parent = map.get(e.parent);
+      if (parent) {
+        for (const c of e.children) {
+          if (!c || !c.id || map.has(c.id)) continue;
+          map.set(c.id, {
+            id: c.id, title: c.title || c.id, role: c.role || "builder",
+            judge: c.judge || "", status: "todo", evidence: "",
+            deps: [], touches: uniq(c.touches || []),
+            created_at: e.ts, updated_at: e.ts,
+            split_from: e.parent,
+            ...(c.judge ? { judge_inherited: true } : {}),
+            ...(e.slice && e.slice === c.id ? { slice: true } : {}),
+          });
+        }
+        const ids = e.children.map((c: any) => c.id).filter((id: string) => map.has(id));
+        parent.deps = uniq([...parent.deps, ...ids]);
+        parent.split_children = uniq([...(parent.split_children || []), ...ids]);
+      }
+      continue;
+    }
     const t = map.get(e.id); if (!t) continue;
     if (e.event === "link") {
       const remove = new Set([...(e.remove_deps || []), ...(e.remove_touches || [])]);
@@ -172,6 +201,47 @@ export function plan(id: string, patch: PlanOptions): Task {
   if (start && due && start > due) throw new Error("E_TASK: start 不能晚于 due");
   append({ event: "plan", id, ...fields });
   return get(id);
+}
+
+const SATISFIED: Status[] = ["done", "accepted", "dropped"];
+/** 依赖是否已满足（done / accepted / dropped）；dangling 由调用方单独判断 */
+export function isSatisfied(t: Task | undefined): boolean {
+  return !!t && SATISFIED.includes(t.status);
+}
+/** 终态：不再参与排序/传播 */
+export function isTerminal(t: Task | undefined): boolean {
+  return !!t && ["done", "accepted", "dropped", "rejected"].includes(t.status);
+}
+
+export interface SplitOptions {
+  slice?: string;
+  role?: string;
+  judge?: string;
+  touches?: string[];
+  force?: boolean;
+}
+
+/** 拆分：父 depends on 子（父 = 集成收口）；单条原子 split 事件落账 */
+export function split(parentId: string, titles: string[], opts: SplitOptions = {}): Task {
+  const parent = get(parentId);
+  if (isTerminal(parent)) throw new Error("E_TASK: 终态任务不能拆分");
+  if (parent.status === "doing" && !opts.force) throw new Error("E_TASK: 进行中的任务拆分需 --force（拆分后会先等子任务）");
+  const names = titles.map((x) => x.trim()).filter(Boolean);
+  if (names.length < 2) throw new Error("E_TASK: 至少拆成 2 个切片");
+  if (new Set(names).size !== names.length) throw new Error("E_TASK: 切片标题重复");
+  if (opts.slice && !names.includes(opts.slice)) throw new Error("E_TASK: --slice 必须是某个切片标题");
+
+  const judge = opts.judge ?? parent.judge;
+  const children = names.map((title) => ({
+    id: "t-" + createHash("sha1").update(title + Date.now() + Math.random()).digest("hex").slice(0, 8),
+    title,
+    role: opts.role || parent.role,
+    judge,
+    touches: uniq(opts.touches ?? parent.touches),
+  }));
+  const sliceId = opts.slice ? children[names.indexOf(opts.slice)].id : undefined;
+  append({ event: "split", parent: parentId, children, ...(sliceId ? { slice: sliceId } : {}) });
+  return get(parentId);
 }
 
 export function list(): Task[] { return [...fold().values()]; }

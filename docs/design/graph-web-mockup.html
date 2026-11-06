@@ -74,10 +74,36 @@
   .attention .row:last-child{border-bottom:0}
   .tag{font-size:10px;border-radius:6px;padding:1px 6px;background:rgba(220,38,38,.12);color:var(--red);white-space:nowrap}
   .tag.amber{background:rgba(217,119,6,.12);color:var(--amber)}
-  .detail{padding:14px;display:none}
-  .detail.show{display:block}
-  .detail h3{font-size:14px;margin:0 0 6px}
-  .detail p{margin:0 0 8px;color:var(--muted);font-size:12px}
+  .attention .row{cursor:pointer}
+  .quick{display:flex;gap:6px;margin-top:6px}
+  .quick button,.btn{border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:7px;padding:3px 8px;font:inherit;font-size:11px;cursor:pointer}
+  .quick button.primary,.btn.primary{background:var(--blue);border-color:var(--blue);color:#fff}
+  .backdrop{position:fixed;inset:0;background:rgba(0,0,0,.35);opacity:0;pointer-events:none;transition:opacity .18s;z-index:40}
+  .backdrop.show{opacity:1;pointer-events:auto}
+  .drawer{position:fixed;top:0;right:0;bottom:0;width:440px;max-width:92vw;background:var(--panel);border-left:1px solid var(--line);box-shadow:-12px 0 40px rgba(0,0,0,.25);transform:translateX(100%);transition:transform .2s ease;z-index:50;display:flex;flex-direction:column}
+  .drawer.show{transform:none}
+  .drawer-head{display:flex;align-items:flex-start;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line)}
+  .drawer-head h3{font-size:15px;margin:0 0 3px}
+  .drawer-head .meta{color:var(--muted);font-size:11px}
+  .drawer-head .close{margin-left:auto;border:0;background:transparent;color:var(--muted);font-size:18px;cursor:pointer}
+  .drawer-tabs{display:flex;gap:6px;padding:10px 16px;border-bottom:1px solid var(--line)}
+  .drawer-tabs button{border:1px solid var(--line);background:transparent;color:var(--muted);border-radius:7px;padding:4px 10px;font:inherit;font-size:12px;cursor:pointer}
+  .drawer-tabs button.on{background:var(--blue);border-color:var(--blue);color:#fff}
+  .drawer-body{padding:14px 16px 24px;overflow:auto}
+  .drawer-body h4{font-size:12px;margin:14px 0 6px;color:var(--muted);letter-spacing:.05em;text-transform:uppercase}
+  .kv{display:grid;grid-template-columns:70px 1fr;gap:4px 10px;font-size:12px}
+  .kv .k{color:var(--muted)}
+  .iv-seg{display:flex;border:1px solid var(--line);border-radius:9px;overflow:hidden;margin-bottom:12px}
+  .iv-seg button{flex:1;border:0;background:transparent;color:var(--muted);padding:7px 8px;font:inherit;font-size:12px;cursor:pointer}
+  .iv-seg button.on{background:var(--blue);color:#fff}
+  .iv-row{display:grid;gap:6px;margin-bottom:10px}
+  .iv-row label{font-size:11px;color:var(--muted)}
+  .iv-row select,.iv-row textarea{width:100%;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);padding:8px;font:inherit;font-size:12px}
+  .iv-row textarea{min-height:96px;resize:vertical}
+  .iv-status{color:var(--green);font-size:11px;margin-left:8px}
+  .rel-list .item{display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-bottom:1px dashed var(--line);font-size:12px}
+  .rel-list .item:last-child{border-bottom:0}
+  .rel-list .k{color:var(--muted)}
   .kv{display:grid;grid-template-columns:70px 1fr;gap:4px 10px;font-size:12px}
   .kv .k{color:var(--muted)}
   /* timeline */
@@ -161,17 +187,25 @@
     <div class="panel">
       <div class="side-title"><h2>需要人</h2><span>attention</span></div>
       <div class="attention">
-        <div class="row"><span class="tag">阻塞</span><div><b>launchd 安装脚本</b><br><span class="k">等待 install.sh 拆分</span></div></div>
-        <div class="row"><span class="tag amber">claim</span><div><b>src/collab.ts</b><br><span class="k">session-a 持有中</span></div></div>
-        <div class="row"><span class="tag amber">评审</span><div><b>graph TUI</b><br><span class="k">等待独立 verifier</span></div></div>
+        <div class="row" data-task="t-3"><span class="tag">阻塞</span><div><b>launchd 安装脚本</b><br><span class="k">等待 install.sh 拆分</span><div class="quick"><button class="primary" onclick="event.stopPropagation();openDrawer('t-3','intervene')">介入</button><button onclick="event.stopPropagation();openDrawer('t-3','task')">查看</button></div></div></div>
+        <div class="row" data-task="t-4"><span class="tag amber">claim</span><div><b>src/collab.ts</b><br><span class="k">session-a 持有中</span><div class="quick"><button class="primary" onclick="event.stopPropagation();openDrawer('t-4','intervene')">联系持有者</button></div></div></div>
+        <div class="row" data-task="t-4"><span class="tag amber">评审</span><div><b>graph TUI</b><br><span class="k">等待独立 verifier</span><div class="quick"><button class="primary" onclick="event.stopPropagation();openDrawer('t-4','intervene')">开始评审</button></div></div></div>
       </div>
-    </div>
-    <div class="panel detail" id="detail">
-      <div class="side-title"><h2>节点详情</h2><button onclick="document.getElementById('detail').classList.remove('show')" style="border:0;background:transparent;color:var(--muted);cursor:pointer">关闭</button></div>
-      <div class="detail" style="display:block" id="detail-body"></div>
     </div>
   </aside>
 </main>
+<div class="backdrop" id="backdrop" onclick="closeDrawer()"></div>
+<aside class="drawer" id="drawer" aria-hidden="true">
+  <div class="drawer-head">
+    <div><h3 id="drawer-title">任务详情</h3><div class="meta" id="drawer-sub"></div></div>
+    <button class="close" onclick="closeDrawer()">×</button>
+  </div>
+  <div class="drawer-tabs">
+    <button data-dtab="task" onclick="setDrawerTab('task')">任务</button>
+    <button data-dtab="intervene" onclick="setDrawerTab('intervene')">介入</button>
+  </div>
+  <div class="drawer-body" id="drawer-body"></div>
+</aside>
 <footer>颜色只表达警告/异常：红=阻塞/P0，橙=待评审/P1；其余状态用中性灰 + 单一蓝色进度。关系图按依赖深度分层，时间线独立展示执行情况。</footer>
 
 <script>
@@ -234,7 +268,7 @@ function card(t,x,y){
     '<div class="meta">'+esc(t.id)+' · <span class="st '+esc(t.status)+'">'+stIcon[t.status]+' '+esc(t.status)+'</span> · '+t.progress+'%</div>'+
     '<div class="progress"><i class="'+esc(t.status)+'" style="width:'+t.progress+'%"></i></div>'+
     (state.mode==='detail'?'<div class="meta" style="margin-top:5px">'+(t.owner?'@'+esc(t.owner):'unassigned')+' · dep '+t.deps.length+'</div>'+rel:'');
-  el.onclick=()=>showTask(t); return el;
+  el.onclick=()=>openDrawer(t.id,'task'); return el;
 }
 function edgePath(a,b){
   const x1=a.x+190,y1=a.y+30,x2=b.x,y2=b.y+30;
@@ -270,11 +304,62 @@ function drawGraph(){
   svg.innerHTML=defs+lines;
   document.getElementById('updated').textContent='updated '+new Date().toLocaleTimeString();
 }
-function showTask(t){
-  const d=document.getElementById('detail'), body=document.getElementById('detail-body');
-  const rel=taskEdges.filter(e=>e.from===t.id||e.to===t.id).map(e=>`<div class="item"><span class="k">${esc(e.kind)}</span><span>${esc(e.from===t.id?e.to:e.from)}</span></div>`).join('')||'<p>无边</p>';
-  body.innerHTML=`<h3>${esc(t.label)}</h3><p>${esc(t.id)} · ${esc(t.prio)} · ${t.progress}%</p><div class="kv"><div class="k">status</div><div>${esc(t.status)}</div><div class="k">owner</div><div>${esc(t.owner||'-')}</div><div class="k">deps</div><div>${t.deps.map(esc).join(', ')||'-'}</div></div><h3 style="margin-top:14px">关联</h3>${rel}`;
-  d.classList.add('show');
+let drawerTask=null, drawerTab='task', ivChannel='tui';
+function relations(t){
+  return taskEdges.filter(e=>e.from===t.id||e.to===t.id).map(e=>{
+    const outgoing=e.from===t.id, other=outgoing?e.to:e.from;
+    const kind=e.kind==='depends_on'?(outgoing?'depends_on':'depended_by'):e.kind;
+    return '<div class="item"><span class="k">'+esc(kind)+'</span><span>'+esc(other)+'</span></div>';
+  }).join('') || '<p class="k">无边</p>';
+}
+function taskHtml(t){
+  return '<div class="kv"><div class="k">status</div><div>'+esc(t.status)+'</div>'+
+    '<div class="k">priority</div><div>'+esc(t.prio)+'</div>'+
+    '<div class="k">owner</div><div>'+esc(t.owner||'-')+'</div>'+
+    '<div class="k">progress</div><div>'+t.progress+'%</div>'+
+    '<div class="k">deps</div><div>'+esc(t.deps.join(', ')||'-')+'</div></div>'+
+    '<h4>关联</h4><div class="rel-list">'+relations(t)+'</div>';
+}
+function targets(ch){
+  if(ch==='dingtalk') return [['group','乐语助人前端组 · 群聊'],['dm','与 session-a 私聊']];
+  if(ch==='msg') return [['ses_a','session-a'],['ses_b','session-b']];
+  return [['ses_a','session-a · opencode TUI (online)'],['ses_b','session-b · dsh TUI (online)']];
+}
+function interveneHtml(t){
+  const chs=[['tui','TUI 会话'],['dingtalk','钉钉消息链'],['msg','dia msg']];
+  const opts=targets(ivChannel).map(([v,l])=>'<option value="'+v+'">'+esc(l)+'</option>').join('');
+  return '<div class="iv-seg">'+chs.map(([v,l])=>'<button class="'+(ivChannel===v?'on':'')+'" onclick="setChannel(\''+v+'\')">'+l+'</button>').join('')+'</div>'+
+    '<div class="iv-row"><label>目标会话 / 消息链</label><select id="iv-target">'+opts+'</select></div>'+
+    '<div class="iv-row"><label>介入消息</label><textarea id="iv-text" placeholder="例如：这个任务卡在什么点？需要我做什么？"></textarea></div>'+
+    '<div><button class="btn primary" onclick="sendIntervention()">发送介入</button><span class="iv-status" id="iv-status"></span></div>'+
+    '<p class="k" style="margin-top:12px">设计稿：发送仅演示。真实接入分别走 TUI 注入 / 钉钉消息链 / dia msg；同一任务可切换通道。</p>';
+}
+function openDrawer(id, tab){
+  drawerTask=tasks.find(t=>t.id===id); if(!drawerTask) return;
+  drawerTab=tab||'task';
+  document.getElementById('drawer-title').textContent='任务详情';
+  document.getElementById('drawer-sub').textContent=drawerTask.label+' · '+drawerTask.id+' · '+drawerTask.prio+' · '+drawerTask.status;
+  document.getElementById('drawer').classList.add('show');
+  document.getElementById('drawer').setAttribute('aria-hidden','false');
+  document.getElementById('backdrop').classList.add('show');
+  setDrawerTab(drawerTab);
+}
+function setDrawerTab(tab){
+  drawerTab=tab;
+  document.querySelectorAll('[data-dtab]').forEach(b=>b.classList.toggle('on',b.dataset.dtab===tab));
+  const body=document.getElementById('drawer-body');
+  body.innerHTML=tab==='intervene'?interveneHtml(drawerTask):taskHtml(drawerTask);
+}
+function setChannel(ch){ ivChannel=ch; setDrawerTab('intervene'); }
+function sendIntervention(){
+  const text=(document.getElementById('iv-text')||{}).value||'';
+  if(!text.trim()){ document.getElementById('iv-status').textContent='请先输入内容'; return; }
+  document.getElementById('iv-status').textContent='已排队（设计稿）';
+}
+function closeDrawer(){
+  document.getElementById('drawer').classList.remove('show');
+  document.getElementById('drawer').setAttribute('aria-hidden','true');
+  document.getElementById('backdrop').classList.remove('show');
 }
 function drawTimeline(){
   const min=Math.min(...tasks.map(t=>t.start),-1), max=Math.max(...tasks.map(t=>t.end),1), span=max-min||1;
@@ -288,7 +373,7 @@ function drawTimeline(){
     const track=row.querySelector('.tl-track');
     const bar=document.createElement('div'); bar.className='tl-bar '+t.status+(critical.has(t.id)?' critical':'');
     bar.style.left=x(t.start)+'%'; bar.style.width=Math.max(4,x(t.end)-x(t.start))+'%';
-    bar.innerHTML='<div class="fill" style="width:'+t.progress+'%"></div>'; bar.onclick=()=>showTask(t); track.appendChild(bar);
+    bar.innerHTML='<div class="fill" style="width:'+t.progress+'%"></div>'; bar.onclick=()=>openDrawer(t.id,'task'); track.appendChild(bar);
     body.appendChild(row);
   });
   if(min<=0&&max>=0){ const today=document.createElement('div'); today.className='tl-today'; today.style.left=x(0)+'%'; today.textContent='today'; body.appendChild(today); }
@@ -296,7 +381,7 @@ function drawTimeline(){
 function readRoute(){
   const raw=location.hash.replace(/^#\/?/,''); const [path,qs]=raw.split('?');
   const params=new URLSearchParams(qs||location.search);
-  return {view:(path==='timeline'||params.get('view')==='timeline')?'time':'graph', mode:params.get('mode')==='detail'?'detail':'simple'};
+  return {view:(path==='timeline'||params.get('view')==='timeline')?'time':'graph', mode:params.get('mode')==='detail'?'detail':'simple', task:params.get('task'), tab:params.get('tab')==='intervene'?'intervene':'task'};
 }
 function routeString(view,mode){ return '#/'+(view==='time'?'timeline':'graph')+(view==='graph'&&mode==='detail'?'?mode=detail':''); }
 function applyRoute(){
@@ -312,10 +397,12 @@ function applyRoute(){
   const rp=document.getElementById('route'); if(rp) rp.textContent=location.hash||routeString(r.view,r.mode);
   document.title='dia graph · '+(r.view==='time'?'时间线':'关系图');
   if(r.view==='time') drawTimeline(); else drawGraph();
+  if(r.task) openDrawer(r.task,r.tab);
 }
 function go(view,mode){ const h=routeString(view,mode); if(location.hash===h) applyRoute(); else location.hash=h; }
 document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>go(b.dataset.v==='time'?'time':'graph',state.mode));
 document.querySelectorAll('#mode button').forEach(b=>b.onclick=()=>go(state.view,b.dataset.m));
+document.querySelectorAll('.attention .row[data-task]').forEach(r=>r.onclick=()=>openDrawer(r.dataset.task,'intervene'));
 window.addEventListener('hashchange',applyRoute);
 applyRoute();
 </script>

@@ -18,6 +18,7 @@ Agent 入口：[`llms.txt`](https://github.com/minonl/dia/blob/main/llms.txt)（
 | [进化：dia 的第一性定位](evolution-process.md) | 本文不是功能清单，是过程定义。 |
 | [宿主控制面：黑盒边界与内部 seam（2026-10）](host-control-surface.md) | 问题：把 opencode（含 v2）与 dsh 当"黑盒宿主"时，我们能在哪些边界上控制它们？ |
 | [Kit：内容包安装（persona 的第二个半边）](kit-install.md) | 前置：docs/persona-install.md（persona = 人格，kit = 内容）。 |
+| [Kit 层：把「经验」从 persona 里抽出来（设计 v0.1）](kit-layer.md) | 2026-11-06 用户定调：dws-hub 作为 channel 层重构，同时把 git / node 这类通用工程经验抽成 kit 层， |
 | [模型基准与 Sidecar 监控（A+B 一起）](model-baseline-sidecar.md) | A：首次使用先跑基准，用数据决定配置。 |
 | [模型行为调控（客户端侧）](model-behavior.md) | 边界（用户定）：只使用各平台提供的通用模型；不做本地构建/微调；不依赖多数模型不支持的推理与输入输出控制参数； |
 | [dia monorepo：框架模块的归属](monorepo.md) | 结论：dia-job 回 dia monorepo，作为 packages/job；kb 作为 packages/kb。 |

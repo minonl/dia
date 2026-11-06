@@ -39,6 +39,8 @@ export interface KitManifest {
   kind: "kit";
   id: string;
   version: string;
+  /** 双标签（如 ["git","node","hooks"]）：同一份经验可被多个领域检索到 */
+  tags?: string[];
   root?: string;
   files?: FileArtifact[];
   skills?: SkillArtifact[];
@@ -317,12 +319,20 @@ export function install(from: string, opts: { ref?: string; dryRun?: boolean; js
   return { id: m.id, version: m.version, dir: target, root: kitRoot, rendered, hash, changed: true };
 }
 
-export function list(): { id: string; versions: string[] }[] {
+export function list(): { id: string; versions: string[]; tags: string[] }[] {
   const root = join(dataDir(), "kits");
   if (!existsSync(root)) return [];
   return readdirSync(root, { withFileTypes: true })
     .filter((e) => e.isDirectory())
-    .map((e) => ({ id: e.name, versions: readdirSync(join(root, e.name)).filter((v) => statSync(join(root, e.name, v)).isDirectory()) }));
+    .map((e) => {
+      const versions = readdirSync(join(root, e.name)).filter((v) => statSync(join(root, e.name, v)).isDirectory()).sort();
+      const latest = versions[versions.length - 1];
+      let tags: string[] = [];
+      if (latest) {
+        try { tags = readKitManifest(join(root, e.name, latest)).tags ?? []; } catch { /* manifest 缺失不阻塞 list */ }
+      }
+      return { id: e.name, versions, tags };
+    });
 }
 
 export function readLock(id: string, version?: string) {

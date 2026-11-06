@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeAll } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname } from "node:path";
 import { join } from "node:path";
@@ -50,6 +50,19 @@ describe("kit install", () => {
     const bdir = join(process.env.DIA_DATA_DIR!, "backups");
     expect(readdirSync(bdir).length).toBeGreaterThan(0);
     rmSync(dest, { force: true }); // 不影响后续「dry-run 不写」断言
+  });
+
+  test("persona 旧版技能软链算 dia 管理（升级不需要 --force）", () => {
+    const stale = join(home, ".agents/skills/onboarding");
+    const oldSlot = join(process.env.DIA_DATA_DIR!, "personas/yan/0.1.0/core/skills/onboarding");
+    mkdirSync(oldSlot, { recursive: true });
+    writeFileSync(join(oldSlot, "SKILL.md"), "# old\n");
+    mkdirSync(dirname(stale), { recursive: true });
+    symlinkSync(oldSlot, stale, "dir");
+    const m = { skills: [{ from: "core/skills/onboarding", name: "onboarding", mode: "link" }] };
+    expect(() => kit.renderContent(src, src, m)).not.toThrow();
+    expect(realpathSync(stale)).toBe(realpathSync(join(src, "core/skills/onboarding")));
+    rmSync(stale, { force: true });
   });
 
   test("dry-run 不写任何东西", () => {

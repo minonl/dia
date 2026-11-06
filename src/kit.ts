@@ -177,14 +177,15 @@ function checkTargetFree(path: string, kind: "file" | "link", expected: string) 
   throw new Error(`E_CONFLICT: ${path} exists and is not managed`);
 }
 
-/** 软链是否由 dia 管理：指向期望目标，或指向自家 kits 目录（含断链）。 */
+/** 软链是否由 dia 管理：指向期望目标，或指向自家 kits/personas 目录（含断链）。 */
 function linkManaged(dest: string, wantTarget: string): boolean {
   if (!isSymlink(dest)) return false;
   let cur = "";
   try { cur = readlinkSync(dest); } catch { return false; }
   const abs = resolve(dirname(dest), cur);
   if (abs === resolve(wantTarget)) return true;
-  return abs.startsWith(resolve(dataDir(), "kits") + sep);
+  // persona 升级时，旧版技能软链仍指向 personas/<id>/<旧版本>/…：同属 dia 管理，可直接覆盖
+  return [join("kits"), join("personas")].some((d) => abs.startsWith(resolve(dataDir(), d) + sep));
 }
 
 function isSymlink(p: string): boolean {

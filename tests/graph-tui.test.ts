@@ -24,11 +24,18 @@ describe("dia graph --tui", () => {
     expect(s).toContain("实现 A");
     expect(s).toContain("↳ depends 实现 B [todo]");
     expect(s).toContain("↳ touches src/x.ts");
-    expect(s).toContain("ses_a → src/x.ts");
+    expect(s).toContain("a → src/x.ts");
+  });
+
+  test("--status 过滤只保留匹配任务", () => {
+    const s = render(g, { color: false, status: "todo" });
+    expect(s).toContain("实现 B");
+    expect(s).not.toContain("实现 A");
+    expect(s).toContain("filter: status=todo");
   });
 
   test("有环时显示 cycle", () => {
     const s = render({ ...g, cycles: [["task:t-1", "task:t-2"]] }, { color: false });
-    expect(s).toContain("⚠ cycle: task:t-1 -> task:t-2");
+    expect(s).toContain("⚠ cycle: t-1 -> t-2");
   });
 });

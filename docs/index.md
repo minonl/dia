@@ -88,3 +88,9 @@ Agent 入口：[`llms.txt`](https://github.com/minonl/dia/blob/main/llms.txt)（
 |---|---|
 | [框架启动方案（bootstrap）](history/framework-bootstrap.md) | 已归档（2026-11-03）：本文的启动/分发方案（release tarball + agentctl + framework.lock）未采用； |
 
+## 其他
+
+| 文档 | 一句话 |
+|---|---|
+| [dia graph Web 视觉设计稿（v0.1）](design/graph-web.md) | 静态 mockup：graph-web-mockup.html（直接用浏览器打开，无网络/无依赖） |
+

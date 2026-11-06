@@ -83,3 +83,19 @@
 - 切换 tab / 简约详细 / 排序会同步更新 hash，便于分享/回链；
 - 真正的独立 path（`/graph`、`/timeline`）需要部署层 rewrite 到同一 HTML，或导出时生成
   `graph.html` / `timeline.html`；静态文件本身不能凭空提供两个 path。
+
+## 8. 颜色语义（v0.4）
+
+原则：**颜色只表达警告/异常，正常状态去色**。
+
+| 颜色 | 用途 | 不再用于 |
+|---|---|---|
+| 红 | blocked、P0、异常/失败 | 普通任务状态 |
+| 橙 | review、claim 提醒、P1 | 完成态 |
+| 蓝 | 只有“进行中”的进度条 | done/accepted/todo |
+| 灰 | todo / done / accepted / P2 / 中性文本 | 警告/异常 |
+
+- 优先级：P0 红实心；P1 橙描边；P2 灰描边（不抢眼）；
+- 状态文本：只有 blocked / review 带颜色，其余中性；
+- 进度条：doing 蓝色条纹动画；blocked 红色暂停/置灰；review 橙色；done/accepted 灰色静态；
+- 时间线同一套语义；关键路径只用橙色描边。

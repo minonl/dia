@@ -1,7 +1,7 @@
 # 优先级 × 依赖：任务编排语义（M1）
 
 > 状态：已实现（2026-11-06）｜代码：`src/plan.ts`（派生纯函数）、`src/task.ts`（split）、`src/graph.ts`（契约）
-> 相关：`graph-web-m1.md`（导出）、`msg-collab-m1-design.md`（任务账本）
+> 相关：`graph-web-m1.md`（导出）、`graph-ui-m1.md`（界面派生量）、`seat-scheduling-m2.md`（席位）、`msg-collab-m1-design.md`（任务账本）
 
 ## 1. 三个概念，别混
 
@@ -71,7 +71,7 @@ dia graph --lint [--json]            # 编排检查（advisory）
 
 ## 7. 边界
 
-- **席位（并发数）不在本模型里**：rank 是单席位理想序；多席位 + 上下文亲和（touches 重叠、同 split 组）留 M2；
+- **席位（并发数）不在本模型里**：rank 是单席位理想序；多席位 + 上下文亲和见 [seat-scheduling-m2.md](seat-scheduling-m2.md)（M2，未实现）；
 - `claim` 仍是唯一并发信号；eff/rank 只回答「先做什么」，不回答「谁能做」；
 - 派生量全部只读，不写回账本，不进任何门禁。
 

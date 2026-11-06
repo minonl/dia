@@ -106,11 +106,14 @@ function assertInside(base: string, p: string): string {
   return abs;
 }
 
+/** 不算「内容」的目录：版本库、依赖、运行时数据（`.data` 是人格的数据根，运行时写入会污染内容哈希） */
+export const TREE_SKIP = new Set([".git", "node_modules", ".data"]);
+
 function walkFiles(root: string): string[] {
   const out: string[] = [];
   (function rec(dir: string) {
     for (const e of readdirSync(dir, { withFileTypes: true })) {
-      if (e.name === ".git" || e.name === "node_modules" || e.name === "kit.lock") continue;
+      if (TREE_SKIP.has(e.name) || e.name === "kit.lock") continue;
       const p = join(dir, e.name);
       if (e.isDirectory()) rec(p);
       else out.push(p);
@@ -288,7 +291,7 @@ export function install(from: string, opts: { ref?: string; dryRun?: boolean; js
   if (!alreadyInstalled || hashTree(src.dir) !== hashTree(target)) {
     rmSync(target, { recursive: true, force: true });
     mkdirSync(target, { recursive: true });
-    cpSync(src.dir, target, { recursive: true, dereference: true, filter: (p: string) => !p.split(sep).includes(".git") && !p.split(sep).includes("node_modules") });
+    cpSync(src.dir, target, { recursive: true, dereference: true, filter: (p: string) => !p.split(sep).some((s) => TREE_SKIP.has(s)) });
   }
   const rendered = renderContent(src.dir, target, m) ?? planned;
   const appliedConfig = config.apply(m.config ?? []);

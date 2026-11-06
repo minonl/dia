@@ -85,7 +85,7 @@ function walkFiles(root: string): string[] {
   const out: string[] = [];
   (function rec(dir: string) {
     for (const e of readdirSync(dir, { withFileTypes: true })) {
-      if (e.name === ".git" || e.name === "node_modules") continue;
+      if (kit.TREE_SKIP.has(e.name)) continue;
       const p = join(dir, e.name);
       if (e.isDirectory()) rec(p);
       else out.push(p);
@@ -230,7 +230,7 @@ export function install(from: string, opts: { ref?: string; host?: string; home?
     const staging = join(idDir, `.staging-${process.pid}-${Date.now().toString(36)}`);
     rmSync(staging, { recursive: true, force: true });
     mkdirSync(staging, { recursive: true });
-    cpSync(src.dir, staging, { recursive: true, dereference: true, filter: (p: string) => !p.split(sep).includes(".git") && !p.split(sep).includes("node_modules") });
+    cpSync(src.dir, staging, { recursive: true, dereference: true, filter: (p: string) => !p.split(sep).some((s) => kit.TREE_SKIP.has(s)) });
     const stagingHash = hashTree(staging);
     let reuseTarget = false;
     if (existsSync(target)) {

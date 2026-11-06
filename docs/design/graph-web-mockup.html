@@ -54,7 +54,7 @@
   .prio.p1{border-color:var(--amber);color:var(--amber)}
   .prio.p2{border-color:var(--line);color:var(--muted)}
   .pgroup{position:absolute;left:0;pointer-events:none;border-bottom:1px dashed var(--line)}
-  .plane-label{position:absolute;left:20px;width:78px;transform:translateY(-50%);font-size:13px;font-weight:700;letter-spacing:.1em}
+  .plane-label{position:absolute;left:20px;width:78px;z-index:6;pointer-events:none;padding:2px 6px 2px 0;background:linear-gradient(90deg,var(--panel) 72%,transparent);transform:translateY(-50%);font-size:13px;font-weight:700;letter-spacing:.1em}
   .plane-label small{display:block;font-size:9px;font-weight:400;letter-spacing:0;opacity:.7;margin-top:2px}
   .legend-overlay{position:absolute;right:12px;bottom:12px;z-index:5;background:color-mix(in srgb,var(--panel) 92%,transparent);border:1px solid var(--line);border-radius:10px;padding:8px 10px;box-shadow:var(--shadow);font-size:11px;color:var(--muted);display:grid;gap:5px;min-width:190px}
   .legend-overlay .row{display:flex;align-items:center;gap:8px;white-space:nowrap}
@@ -253,7 +253,7 @@ function rowsFor(){
   const h=state.mode==='detail'?205:110;
   return levels().map((prio,i)=>({
     prio,
-    y:70+i*gap,
+    y:36+i*gap,
     h,
     tasks:tasks.filter(t=>t.prio===prio).sort((a,b)=>(d.get(a.id)-d.get(b.id))||a.label.localeCompare(b.label))
   }));
@@ -290,12 +290,12 @@ function drawGraph(){
   const bandH=state.mode==='detail'?230:145;
   rows.forEach((r,i)=>{
     const g=document.createElement('div'); g.className='pgroup '+r.prio.toLowerCase();
-    g.style.top=(r.y-28)+'px'; g.style.width=maxX+'px'; g.style.height=bandH+'px';
+    g.style.top=(r.y-24)+'px'; g.style.width=maxX+'px'; g.style.height=bandH+'px';
     const alpha=Math.max(0.02, 0.075-i*0.012);
     g.style.background='color-mix(in srgb, var(--blue) '+Math.round(alpha*100)+'%, transparent)';
     canvas.appendChild(g);
     const label=document.createElement('div'); label.className='plane-label '+r.prio.toLowerCase();
-    label.style.top=(r.y+r.h/2)+'px';
+    label.style.top=(r.y+r.h/2-6)+'px';
     label.style.color=i===0?'var(--red)':i===1?'var(--amber)':'var(--muted)';
     label.innerHTML=esc(r.prio)+(i===0?'<small>紧急</small>':i===1?'<small>高</small>':'<small>常规</small>');
     canvas.appendChild(label);
@@ -390,6 +390,10 @@ function drawTimeline(){
   });
   if(min<=0&&max>=0){ const today=document.createElement('div'); today.className='tl-today'; today.style.left=x(0)+'%'; today.textContent='today'; body.appendChild(today); }
 }
+function syncLaneLabels(){
+  const x=canvas.scrollLeft+20;
+  canvas.querySelectorAll('.plane-label').forEach(el=>el.style.left=x+'px');
+}
 function readRoute(){
   const raw=location.hash.replace(/^#\/?/,''); const [path,qs]=raw.split('?');
   const params=new URLSearchParams(qs||location.search);
@@ -410,10 +414,12 @@ function applyRoute(){
   document.title='dia graph · '+(r.view==='time'?'时间线':'关系图');
   if(r.view==='time') drawTimeline(); else drawGraph();
   if(r.task) openDrawer(r.task,r.tab);
+  syncLaneLabels();
 }
 function go(view,mode){ const h=routeString(view,mode); if(location.hash===h) applyRoute(); else location.hash=h; }
 document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>go(b.dataset.v==='time'?'time':'graph',state.mode));
 document.querySelectorAll('#mode button').forEach(b=>b.onclick=()=>go(state.view,b.dataset.m));
+canvas.addEventListener('scroll',syncLaneLabels,{passive:true});
 document.querySelectorAll('.attention .row[data-task]').forEach(r=>r.onclick=()=>openDrawer(r.dataset.task,'intervene'));
 window.addEventListener('hashchange',applyRoute);
 applyRoute();

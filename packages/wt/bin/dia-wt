@@ -1167,22 +1167,31 @@ wt_default_branch() {
   printf '%s' "$b"
 }
 
-wt_write_hook() {
-  local hooksdir="$1" name="$2" extra="${3:-}" chain="${4:-}"
-  cat > "$hooksdir/$name" <<'HOOK'
-#!/usr/bin/env bash
-# dia-wt guard（managed by `dia wt adopt`；勿手改）
+wt_guard_body() {
+  cat <<'HOOKBODY'
 set -uo pipefail
-name="$(basename "$0")"
+# 钩子名：生成的钩子用 basename $0；`dia wt guard` 用环境变量指定
+name="${DIA_WT_HOOK_NAME:-$(basename "$0")}"
 top="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 common="$(git rev-parse --git-common-dir 2>/dev/null || true)"
-case "$common" in /*) ;; *) common="$(cd "$top" && cd "$common" 2>/dev/null && pwd -P)" ;; esac
+case "$common" in /*) ;; *) common="$(cd "$top" 2>/dev/null && cd "$common" 2>/dev/null && pwd -P)" ;; esac
+[ -n "$common" ] || exit 0
 gd="$(git rev-parse --git-dir 2>/dev/null || true)"
-case "$gd" in /*) ;; *) gd="$(cd "$top" && cd "$gd" 2>/dev/null && pwd -P)" ;; esac
+case "$gd" in /*) ;; *) gd="$(cd "$top" 2>/dev/null && cd "$gd" 2>/dev/null && pwd -P)" ;; esac
 is_main=0; [ "$gd" = "$common" ] && is_main=1
 branch="$(git symbolic-ref --short HEAD 2>/dev/null || true)"
-prot=" main master develop dev "
 probe="${DIA_WT_GUARD_PROBE:-0}"
+
+# 只对已 adopt 的仓生效；未 adopt → 纯透传（保持本机其它仓行为不变）
+cfg="$common/dia/config.json"
+adopted=0; [ -f "$cfg" ] && adopted=1
+def=""
+if [ "$adopted" = 1 ]; then
+  def="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("defaultBranch") or "")' "$cfg" 2>/dev/null || true)"
+fi
+prot=" main master develop dev $def "
+prot="${prot//  / }"
+
 wt_guard_scan() {
 local ls="$1" rs="$2" range="" base="" hits=""
 if [ -n "$rs" ] && [ "$rs" != "0000000000000000000000000000000000000000" ] && git cat-file -e "$rs" 2>/dev/null; then
@@ -1197,72 +1206,81 @@ hits="$(git diff -U0 "$range" -- . 2>/dev/null | grep -E '^\+' | grep -vE '^\+\+
 if [ -n "$hits" ]; then
   echo "[dia-wt] 推送包含敏感内容（已阻断）：" >&2
   printf '%s\n' "$hits" >&2
-  echo "[dia-wt] 误报请修扫描规则（hooks 由 dia wt adopt 生成），不提供关闭开关" >&2
+  echo "[dia-wt] 误报请修扫描规则（hooks 由 dia wt adopt 安装），不提供关闭开关" >&2
   return 1
 fi
 }
 
-case "$name" in
-  pre-commit)
-    if [ "$probe" = 1 ]; then
-      { [ "$is_main" = 1 ] && [[ "$prot" == *" $branch "* ]]; } && exit 1 || exit 0
-    fi
-    if [ "$is_main" = 1 ] && [[ "$prot" == *" $branch "* ]]; then
-      echo "[dia-wt] 主 checkout 禁止在 $branch 直接提交；请先：dia wt create <repo> <feature>" >&2
-      exit 1
-    fi ;;
-  pre-push)
-    if [ "$probe" = 1 ]; then
-      [ "$is_main" = 1 ] && exit 1 || exit 0
-    fi
-    if [ "$is_main" = 1 ]; then
-      echo "[dia-wt] 主 checkout 禁止直接 push；请走 worktree 分支 + MR" >&2
-      exit 1
-    fi
-    while read -r _lr ls rr rs; do
-      case "${rr:-}" in
-        refs/heads/main|refs/heads/master|refs/heads/develop|refs/heads/dev)
-          echo "[dia-wt] 禁止直接 push ${rr#refs/heads/}；请走 MR" >&2; exit 1 ;;
-      esac
-      wt_guard_scan "$ls" "$rs" || exit 1
-    done ;;
-  post-checkout)
-    [ "$probe" = 1 ] && exit 0
-    if [ "$is_main" = 1 ] && [[ "$prot" != *" $branch "* ]]; then
-      echo "[dia-wt] 提示：主 checkout 当前在 $branch（建议回到默认分支）" >&2
-    fi ;;
-esac
-# 钩子链：原 hooksPath（husky / .githooks / simple-git-hooks）优先，其次仓库默认 hooks 目录
-chain="${DIA_WT_CHAIN_DIR:-}"
-case "$chain" in
-  "") ;;
-  /*) ;;
-  *) chain="$top/$chain" ;;
-esac
-if [ -n "$chain" ] && [ -x "$chain/$name" ] && [ "$chain/$name" != "$0" ]; then exec "$chain/$name" "$@"; fi
+if [ "$probe" = 1 ]; then
+  case "$name" in
+    pre-commit) { [ "$adopted" = 1 ] && [ "$is_main" = 1 ] && [[ "$prot" == *" $branch "* ]]; } && exit 1 || exit 0 ;;
+    pre-push)   { [ "$adopted" = 1 ] && [ "$is_main" = 1 ]; } && exit 1 || exit 0 ;;
+    *) exit 0 ;;
+  esac
+fi
+
+if [ "$adopted" = 1 ]; then
+  case "$name" in
+    pre-commit)
+      if [ "$is_main" = 1 ] && [[ "$prot" == *" $branch "* ]]; then
+        echo "[dia-wt] 主 checkout 禁止在 $branch 直接提交；请先：dia wt create <repo> <feature>" >&2
+        exit 1
+      fi ;;
+    pre-push)
+      if [ "$is_main" = 1 ]; then
+        echo "[dia-wt] 主 checkout 禁止直接 push；请走 worktree 分支 + MR" >&2
+        exit 1
+      fi
+      # 先把 stdin 全读进来：既要逐条判 ref / 扫敏感内容，也要原样喂给仓库自己的钩子
+      push_lines=()
+      while IFS= read -r line; do push_lines+=("$line"); done
+      for line in "${push_lines[@]}"; do
+        read -r _lr ls rr rs <<<"$line"
+        case "${rr:-}" in
+          refs/heads/main|refs/heads/master|refs/heads/develop|refs/heads/dev)
+            echo "[dia-wt] 禁止直接 push ${rr#refs/heads/}；请走 MR" >&2; exit 1 ;;
+        esac
+        [ -n "${ls:-}" ] || continue
+        wt_guard_scan "$ls" "${rs:-}" || exit 1
+      done ;;
+    post-checkout)
+      if [ "$is_main" = 1 ] && [[ "$prot" != *" $branch "* ]]; then
+        echo "[dia-wt] 提示：主 checkout 当前在 $branch（建议回到默认分支）" >&2
+      fi ;;
+  esac
+fi
+
+# 链式：仓库自己的钩子（simple-git-hooks 等管理器生成在 <common>/hooks）
 orig="$common/hooks/$name"
-if [ -x "$orig" ] && [ "$orig" != "$0" ]; then exec "$orig" "$@"; fi
+if [ -x "$orig" ] && [ "$orig" != "$0" ]; then
+  if [ "$name" = "pre-push" ] && [ ${#push_lines[@]} -gt 0 ]; then
+    printf '%s\n' "${push_lines[@]}" | "$orig" "$@"
+    exit $?
+  fi
+  exec "$orig" "$@"
+fi
 exit 0
-HOOK
-  if [ -n "$chain" ]; then
-    python3 - "$hooksdir/$name" "$chain" <<'PYCHAIN'
-import sys
-p, chain = sys.argv[1], sys.argv[2]
-s = open(p).read()
-s = s.replace('chain="${DIA_WT_CHAIN_DIR:-}"', 'chain="${DIA_WT_CHAIN_DIR:-%s}"' % chain.replace('\\', '\\\\').replace('"', '\\"'))
-open(p, "w").write(s)
-PYCHAIN
-  fi
-  if [ -n "$extra" ]; then
-    python3 - "$hooksdir/$name" "$extra" <<'PYGT'
-import sys, re
-p, extra = sys.argv[1], sys.argv[2]
-s = open(p).read()
-s = re.sub(r'^prot=" main master develop dev "$', f'prot=" main master develop dev {extra} "', s, flags=re.M)
-open(p, "w").write(s)
-PYGT
-  fi
-  chmod +x "$hooksdir/$name"
+HOOKBODY
+}
+
+wt_global_hooks_dir() { printf '%s/hooks' "$(dia_wt_data_root 2>/dev/null || echo "${DIA_ROOT:-$HOME/.dia}")"; }
+wt_write_global_hooks() {
+  local dir; dir="$(wt_global_hooks_dir)"
+  mkdir -p "$dir"
+  local h
+  for h in pre-commit pre-push post-checkout; do
+    { printf '#!/usr/bin/env bash\n# dia-wt guard（本机全局钩子；由 `dia wt adopt` 安装，勿手改）\n'; wt_guard_body; } > "$dir/$h"
+    chmod +x "$dir/$h"
+  done
+}
+
+cmd_guard() {
+  local name="${1:-}"
+  case "$name" in
+    pre-commit|pre-push|post-checkout) ;;
+    *) echo "usage: dia wt guard <pre-commit|pre-push|post-checkout>" >&2; return 2 ;;
+  esac
+  DIA_WT_HOOK_NAME="$name" eval "$(wt_guard_body)"
 }
 
 cmd_adopt() {
@@ -1305,19 +1323,18 @@ cmd_adopt() {
   local common cfgdir cfg hooksdir prev
   common="$(wt_common_dir "$repo")" || die "无法解析 git-common-dir"
   cfgdir="$common/dia"; cfg="$cfgdir/config.json"; hooksdir="$cfgdir/hooks"
-  prev="$(git -C "$repo" config --get core.hooksPath 2>/dev/null || true)"
+  prev="$(git -C "$repo" config --local --get core.hooksPath 2>/dev/null || true)"
   [ -n "$template" ] || template='{{parent}}/{{repo}}-worktree--{{feature}}'
   [ -n "$def" ] || def="$(wt_default_branch "$repo")"
 
   if [ "$mode" = "revert" ]; then
     [ -f "$cfg" ] || die "未 adopt（缺 $cfg）"
     local saved
-    saved="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("hooksPrevious") or "")' "$cfg")"
-    if [ "$prev" != "$hooksdir" ]; then
-      echo "[dia-wt] hooksPath 已被改动（$prev），跳过还原并保留 $cfgdir 备份" >&2
-      return 1
+    saved="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("hooksPrevious") or "")' "$cfg" 2>/dev/null || true)"
+    # 只还原 adopt 之前就存在的仓库级 hooksPath；当前若被别人改过则不动
+    if [ -n "$saved" ] && [ "$prev" = "$hooksdir" ]; then
+      git -C "$repo" config --local core.hooksPath "$saved"
     fi
-    if [ -n "$saved" ]; then git -C "$repo" config --local core.hooksPath "$saved"; else git -C "$repo" config --local --unset core.hooksPath 2>/dev/null || true; fi
     rm -rf "$cfgdir"
     echo "reverted：$cfgdir"
     return 0
@@ -1331,17 +1348,16 @@ cmd_adopt() {
       local cfgDef; cfgDef="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("defaultBranch") or "")' "$cfg" 2>/dev/null || true)"
       [ -n "$cfgDef" ] && def="$cfgDef"
     fi
-    case "$prev" in /*) ;; *) echo "FAIL D02 core.hooksPath 不是绝对路径（$prev）"; bad=1 ;; esac
+    local ghd ghp
+    ghd="$(wt_global_hooks_dir)"
+    ghp="$(git config --global --get core.hooksPath 2>/dev/null || true)"
+    [ "$ghp" = "$ghd" ] || { echo "FAIL D02 全局 core.hooksPath 未指向 $ghd（当前：${ghp:-未设置}）"; bad=1; }
     for h in pre-commit pre-push post-checkout; do
-      [ -x "$hooksdir/$h" ] || { echo "FAIL D02 缺 $h 钩子"; bad=1; }
+      [ -x "$ghd/$h" ] || { echo "FAIL D02 缺全局钩子 $h"; bad=1; }
     done
-    if [ -n "$def" ] && [ -x "$hooksdir/pre-commit" ]; then
-      grep -q "prot=\" main master develop dev $def \"" "$hooksdir/pre-commit" \
-        || { echo "FAIL D03 钩子未保护默认分支 $def"; bad=1; }
-      if wt_is_main_checkout "$repo" && [ "$(git -C "$repo" symbolic-ref --short HEAD 2>/dev/null)" = "$def" ]; then
-        ( cd "$repo" && DIA_WT_GUARD_PROBE=1 "$hooksdir/pre-commit" >/dev/null 2>&1 ) \
-          && { echo "FAIL D03 守卫探针未拦截主 checkout 的 $def 提交"; bad=1; }
-      fi
+    if [ -n "$def" ] && wt_is_main_checkout "$repo" && [ "$(git -C "$repo" symbolic-ref --short HEAD 2>/dev/null)" = "$def" ]; then
+      ( cd "$repo" && DIA_WT_GUARD_PROBE=1 "$ghd/pre-commit" >/dev/null 2>&1 ) \
+        && { echo "FAIL D03 守卫探针未拦截 $def 提交"; bad=1; }
     fi
     if [ "$json" = 1 ]; then
       python3 -c 'import json,sys;print(json.dumps({"repo":sys.argv[1],"ok":sys.argv[2]=="0","defaultBranch":sys.argv[3]},ensure_ascii=False,separators=(",",":")))' "$repo" "$bad" "$def"
@@ -1366,6 +1382,36 @@ cmd_adopt() {
 
   [ -n "$def" ] || die "默认分支不可解析；请 --default-branch main"
   mkdir -p "$hooksdir"
+  # 安装/刷新本机全局钩子，并让本仓走全局钩子（不改 package.json、不占用仓库钩子目录）
+  local ghd ghp
+  ghd="$(wt_global_hooks_dir)"
+  ghp="$(git config --global --get core.hooksPath 2>/dev/null || true)"
+  # 配置外溢防线：全局 hooksPath 若已被别人设置，绝不覆盖
+  if [ -n "$ghp" ] && [ "$ghp" != "$ghd" ]; then
+    die "全局 core.hooksPath 已指向 $ghp（非 dia），拒绝覆盖；请先自行处理该配置"
+  fi
+  wt_write_global_hooks
+  git config --global core.hooksPath "$ghd"
+  # 仓库级 hooksPath：旧版 dia 目录 → 撤掉迁移；别人的管理器（husky/.githooks）→ 保留并提示
+  if [ -n "$prev" ] && [ "$prev" != "$ghd" ]; then
+    if [ "$prev" = "$hooksdir" ]; then
+      git -C "$repo" config --local --unset core.hooksPath 2>/dev/null || true; prev=""
+    else
+      echo "[dia-wt] ⚠️ 该仓本地 core.hooksPath=$prev（由 hook manager 接管），全局守卫对本仓不生效" >&2
+    fi
+  fi
+  rm -rf "$hooksdir" 2>/dev/null || true
+  python3 - "$cfg" "$repo" "$def" "$template" "$prev" <<'PYG'
+import json, sys, datetime
+cfg, repo, br, tmpl, prev = sys.argv[1:6]
+json.dump({
+  "schema": 2, "repo": repo, "defaultBranch": br, "template": tmpl,
+  "hooksManager": "global", "hooksPrevious": prev or None,
+  "adoptedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+}, open(cfg, "w"), ensure_ascii=False, indent=1)
+PYG
+  echo "adopted：$repo（守卫 = 本机全局钩子 $(wt_global_hooks_dir)）"
+  return 0
   # 保留首次 adopt 记下的 hooksPrevious（重复 apply 时 prev 已是我们自己的 hooksdir）
   local savedPrev=""
   [ -f "$cfg" ] && savedPrev="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("hooksPrevious") or "")' "$cfg" 2>/dev/null || true)"
@@ -1384,11 +1430,6 @@ data = {
 }
 json.dump(data, open(cfg, "w"), ensure_ascii=False, indent=1)
 PY
-  # 提示：simple-git-hooks / husky 的 postinstall 会重写 core.hooksPath 下的钩子，
-  # 每次 `pnpm/npm install` 后可能把守卫冲掉 → 用 `dia wt doctor --fix` 或重跑 adopt --apply 修复。
-  if grep -qs '"simple-git-hooks"\|"husky"\|lefthook' "$repo/package.json" "$repo/.lefthook.yml" 2>/dev/null; then
-    echo "[dia-wt] 注意：该仓使用 hook manager（simple-git-hooks/husky/lefthook），install 后若守卫被重写，跑 dia wt doctor --fix" >&2
-  fi
   wt_write_hook "$hooksdir" pre-commit "$def" "$chain"
   wt_write_hook "$hooksdir" pre-push "$def" "$chain"
   wt_write_hook "$hooksdir" post-checkout "$def" "$chain"
@@ -1419,7 +1460,7 @@ cmd_doctor() {
     git -C "$repo" rev-parse --git-dir >/dev/null 2>&1 || continue
     local common cfgdir cfg hooksdir prev def
     common="$(wt_common_dir "$repo")"; cfgdir="$common/dia"; cfg="$cfgdir/config.json"; hooksdir="$cfgdir/hooks"
-    prev="$(git -C "$repo" config --get core.hooksPath 2>/dev/null || true)"
+    prev="$(git -C "$repo" config --local --get core.hooksPath 2>/dev/null || true)"
     def=""
     if [ -f "$cfg" ]; then
       def="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("defaultBranch") or "")' "$cfg" 2>/dev/null || true)"
@@ -1427,6 +1468,13 @@ cmd_doctor() {
     [ -n "$def" ] || def="$(wt_default_branch "$repo")"
     # --fix：无损修复（重写三个守卫钩子 + hooksPath 绝对路径）。只对已 adopt 的仓生效。
     if [ "$fix" = 1 ] && [ -f "$cfg" ]; then
+      wt_write_global_hooks
+      git config --global core.hooksPath "$(wt_global_hooks_dir)"
+      [ "$json" = 0 ] && echo "FIX $repo 全局钩子已重装"
+    fi
+    if [ "$fix" = 1 ] && [ -f "$cfg" ] && [ "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("hooksManager") or "")' "$cfg" 2>/dev/null || true)" = "global" ]; then
+      :
+    elif [ "$fix" = 1 ] && [ -f "$cfg" ]; then
       local fixChain=""
       fixChain="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("hooksChain") or "")' "$cfg" 2>/dev/null || true)"
       [ -n "$fixChain" ] || fixChain="$common/hooks"
@@ -1438,21 +1486,28 @@ cmd_doctor() {
       prev="$hooksdir"
       [ "$json" = 0 ] && echo "FIX $repo 钩子已重装（chain=$fixChain）"
     fi
-    local bad=0
+    local bad=0 mcfg=""
     [ -f "$cfg" ] || { echo "FAIL D01 $repo 未 adopt"; bad=1; }
-    case "$prev" in /*) ;; *) echo "FAIL D02 $repo hooksPath 非绝对（$prev）"; bad=1 ;; esac
+    [ -f "$cfg" ] && mcfg="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("hooksManager") or "")' "$cfg" 2>/dev/null || true)"
+    local ghd ghp
+    ghd="$(wt_global_hooks_dir)"
+    ghp="$(git config --global --get core.hooksPath 2>/dev/null || true)"
+    # D20 全局配置归属：只认 dia 自己的 hooksPath，被别人占用就报出来（绝不自动覆盖）
+    [ "$ghp" = "$ghd" ] || { echo "FAIL D20 全局 core.hooksPath 未指向 $ghd（当前：${ghp:-未设置}）"; bad=1; }
     for h in pre-commit pre-push post-checkout; do
-      [ -x "$hooksdir/$h" ] || { echo "FAIL D02 $repo 缺 $h"; bad=1; }
+      [ -x "$ghd/$h" ] || { echo "FAIL D02 缺全局钩子 $h"; bad=1; }
     done
-    if [ -n "$def" ] && [ -x "$hooksdir/pre-commit" ]; then
-      # 静态：钩子里的 protected 列表必须包含 defaultBranch
-      grep -q "prot=\" main master develop dev $def \"" "$hooksdir/pre-commit" \
-        || { echo "FAIL D03 $repo 钩子未保护默认分支 $def"; bad=1; }
-      # 动态：主 checkout 当前就在 def 上时必须被拦
-      if wt_is_main_checkout "$repo" && [ "$(git -C "$repo" symbolic-ref --short HEAD 2>/dev/null)" = "$def" ]; then
-        ( cd "$repo" && DIA_WT_GUARD_PROBE=1 "$hooksdir/pre-commit" >/dev/null 2>&1 ) \
-          && { echo "FAIL D03 $repo 守卫未拦截 $def 提交"; bad=1; }
+    # D21 仓库级 hooksPath 外溢：本地设置会覆盖全局（husky/.githooks 等）
+    if [ -n "$prev" ]; then
+      if [ "$prev" = "$hooksdir" ]; then
+        echo "FAIL D21 $repo 旧版本地 hooksPath 残留（$prev）；跑 dia wt adopt --apply 迁移到全局钩子"; bad=1
+      else
+        echo "WARN D21 $repo 本地 hooksPath=$prev 覆盖全局钩子，本仓守卫不生效"
       fi
+    fi
+    if [ -n "$def" ] && wt_is_main_checkout "$repo" && [ "$(git -C "$repo" symbolic-ref --short HEAD 2>/dev/null)" = "$def" ]; then
+      ( cd "$repo" && DIA_WT_GUARD_PROBE=1 "$ghd/pre-commit" >/dev/null 2>&1 ) \
+        && { echo "FAIL D03 $repo 守卫探针未拦截 $def 提交"; bad=1; }
     fi
     if wt_is_main_checkout "$repo"; then
       [ -z "$(git -C "$repo" status --porcelain 2>/dev/null)" ] || echo "WARN D04 $repo 主 checkout 有未提交改动"
@@ -1507,6 +1562,7 @@ case "${1:-}" in
   status) shift; cmd_status "$@" ;;
   check)  shift; cmd_check "$@" ;;
   adopt)  shift; cmd_adopt "$@" ;;
+  guard)  shift; cmd_guard "$@" ;;
   doctor) shift; cmd_doctor "$@" ;;
   gate)   shift; cmd_gate "$@" ;;
   clean)  shift; cmd_clean "$@" ;;
@@ -1522,6 +1578,7 @@ dia wt —— worktree 目录形式选型 + 创建（唯一实现）
   dia wt status [repo-path]              # ★ 清理前必查：唯一工作副本 + 改动重叠（只读）
   dia wt check  [<repo>...] [--all] [--deep] [--quiet]
                                                # ★ 依赖体检（R20）：软链/逃逸/悬空；--all 扫全部仓
+  dia wt guard  <pre-commit|pre-push|post-checkout>   # 守卫本体（供 hook manager 调用）
   dia wt adopt  <repo>|--all [--apply|--check|--revert] [--template T] [--default-branch B] [--json]
                                                # 配置路径模板 + 守卫钩子（默认 dry-run；--all 扫仓根）
                                                # 守卫含推送前敏感扫描（不提供关闭开关；误报修规则）

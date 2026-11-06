@@ -21,17 +21,17 @@
   header .sub{color:var(--muted);font-size:12px}
   header .spacer{flex:1}
   .pill{border:1px solid var(--line);border-radius:999px;padding:4px 10px;font-size:12px;color:var(--muted);background:var(--bg)}
-  main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:18px;padding:18px;max-width:1480px;margin:0 auto}
+  main{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:18px;padding:18px;max-width:1480px;margin:0 auto}
   .panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow)}
   .toolbar{display:flex;gap:8px;align-items:center;padding:12px 14px;border-bottom:1px solid var(--line);flex-wrap:wrap}
   .seg{display:flex;border:1px solid var(--line);border-radius:9px;overflow:hidden}
   .seg button{border:0;background:transparent;color:var(--muted);padding:6px 10px;font:inherit;font-size:12px;cursor:pointer}
   .seg button.on{background:var(--blue);color:#fff}
   .toolbar .hint{margin-left:auto;color:var(--muted);font-size:12px}
-  .canvas{position:relative;height:640px;overflow:auto;padding:10px}
+  .canvas{position:relative;height:760px;overflow:auto;padding:10px}
   svg.edges{position:absolute;inset:0;pointer-events:none;overflow:visible}
   svg.edges line{stroke-linecap:round;fill:none}
-  .node{position:absolute;width:206px;border:1px solid var(--line);border-left:4px solid var(--muted);border-radius:10px;background:var(--panel);padding:9px 11px;box-shadow:var(--shadow);cursor:pointer;transition:transform .12s ease,box-shadow .12s ease}
+  .node{position:absolute;width:156px;padding:7px 9px;border:1px solid var(--line);border-left:4px solid var(--muted);border-radius:10px;background:var(--panel);padding:9px 11px;box-shadow:var(--shadow);cursor:pointer;transition:transform .12s ease,box-shadow .12s ease}
   .node:hover{transform:translateY(-1px);box-shadow:0 10px 28px rgba(17,24,39,.12)}
   .node.task.doing{border-left-color:var(--blue)}
   .node.task.blocked{border-left-color:var(--red)}
@@ -39,10 +39,10 @@
   .node.task.done,.node.task.accepted{border-left-color:var(--green)}
   .node.path{border-left-color:var(--violet)}
   .node.session{border-left-color:var(--cyan)}
-  .node b{display:block;font-size:13px;line-height:1.35;margin-bottom:3px}
-  .node .meta{color:var(--muted);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .node b{display:block;font-size:12.5px;line-height:1.3;margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .node .meta{color:var(--muted);font-size:10.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .badge{display:inline-block;font-size:10px;padding:1px 6px;border-radius:999px;border:1px solid var(--line);color:var(--muted);margin-top:4px}
-  .col-label{position:absolute;top:10px;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+  .row-label{position:absolute;left:18px;width:84px;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
   aside{display:flex;flex-direction:column;gap:14px}
   .side-title{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid var(--line)}
   .side-title h2{font-size:13px;margin:0}
@@ -101,11 +101,14 @@
     </div>
     <div class="canvas" id="canvas">
       <svg class="edges" id="edges"></svg>
-      <div class="col-label" style="left:18px">sessions</div>
-      <div class="col-label" style="left:250px">todo / done</div>
-      <div class="col-label" style="left:470px">doing</div>
-      <div class="col-label" style="left:690px">review / blocked</div>
-      <div class="col-label" style="left:910px">paths</div>
+      <div class="row-label" style="top:48px">sessions</div>
+      <div class="row-label" style="top:130px">todo</div>
+      <div class="row-label" style="top:212px">doing</div>
+      <div class="row-label" style="top:294px">review</div>
+      <div class="row-label" style="top:376px">blocked</div>
+      <div class="row-label" style="top:458px">done</div>
+      <div class="row-label" style="top:540px">accepted</div>
+      <div class="row-label" style="top:622px">paths</div>
       <div class="legend-overlay" id="legend">
         <div class="row">
           <svg class="sample" viewBox="0 0 38 10"><defs><marker id="lg-dep" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6" fill="#2563eb"/></marker></defs><line x1="1" y1="5" x2="30" y2="5" stroke="#2563eb" stroke-width="1.6" marker-end="url(#lg-dep)"/></svg>
@@ -158,18 +161,18 @@
 
 <script>
 const nodes = [
-  {id:'session:ses_a', kind:'session', label:'session-a', x:20, y:60},
-  {id:'session:ses_b', kind:'session', label:'session-b', x:20, y:200},
-  {id:'task:t-1', kind:'task', status:'todo', label:'数据根迁移', x:240, y:40, owner:'ses_a'},
-  {id:'task:t-2', kind:'task', status:'doing', label:'install.sh 拆分', x:460, y:40, owner:'ses_a'},
-  {id:'task:t-3', kind:'task', status:'blocked', label:'launchd 安装脚本', x:680, y:40, owner:'ses_b'},
-  {id:'task:t-4', kind:'task', status:'review', label:'graph TUI', x:680, y:190, owner:'ses_b'},
-  {id:'task:t-5', kind:'task', status:'done', label:'dia msg M0', x:240, y:190},
-  {id:'task:t-6', kind:'task', status:'accepted', label:'claim 机制', x:240, y:320},
-  {id:'task:t-7', kind:'task', status:'doing', label:'handoff + claim', x:460, y:320, owner:'ses_a'},
-  {id:'path:install.sh', kind:'path', label:'install.sh', x:900, y:40},
-  {id:'path:src/collab.ts', kind:'path', label:'src/collab.ts', x:900, y:180},
-  {id:'path:docs/msg.md', kind:'path', label:'docs/msg.md', x:900, y:320}
+  {id:'session:ses_a', kind:'session', label:'session-a', x:110, y:40},
+  {id:'session:ses_b', kind:'session', label:'session-b', x:290, y:40},
+  {id:'task:t-1', kind:'task', status:'todo', label:'数据根迁移', x:110, y:122, owner:'ses_a'},
+  {id:'task:t-2', kind:'task', status:'doing', label:'install.sh 拆分', x:110, y:204, owner:'ses_a'},
+  {id:'task:t-3', kind:'task', status:'blocked', label:'launchd 安装脚本', x:110, y:368, owner:'ses_b'},
+  {id:'task:t-4', kind:'task', status:'review', label:'graph TUI', x:110, y:286, owner:'ses_b'},
+  {id:'task:t-5', kind:'task', status:'done', label:'dia msg M0', x:110, y:490},
+  {id:'task:t-6', kind:'task', status:'accepted', label:'claim 机制', x:110, y:580},
+  {id:'task:t-7', kind:'task', status:'doing', label:'handoff + claim', x:290, y:204, owner:'ses_a'},
+  {id:'path:install.sh', kind:'path', label:'install.sh', x:110, y:670},
+  {id:'path:src/collab.ts', kind:'path', label:'src/collab.ts', x:290, y:670},
+  {id:'path:docs/msg.md', kind:'path', label:'docs/msg.md', x:470, y:670}
 ];
 const edges = [
   {from:'task:t-2', to:'task:t-1', kind:'depends_on'},
@@ -210,11 +213,10 @@ function card(n){
   const el=document.createElement('div');
   el.className='node '+n.kind+(n.status?' '+n.status:'');
   el.style.left=n.x+'px'; el.style.top=n.y+'px'; el.dataset.id=n.id;
-  if(state.density==='compact'){ el.style.padding='5px 8px'; el.style.width='180px'; }
+  if(state.density==='compact'){ el.style.padding='5px 8px'; el.style.width='150px'; }
   const meta = n.kind==='task' ? (n.owner?'@'+shortId(n.owner):'unassigned') : n.id.split(':')[0];
-  el.innerHTML='<b>'+esc(n.label)+'</b><div class="meta">'+esc(n.id)+'</div>'+
-    (n.status?'<span class="badge">'+esc(n.status)+'</span>':'')+
-    '<div class="meta" style="margin-top:4px">'+esc(meta)+'</div>';
+  el.innerHTML='<b>'+esc(n.label)+'</b><div class="meta">'+esc(n.id)+(n.status?' · '+esc(n.status):'')+'</div>'+
+    '<div class="meta" style="margin-top:2px">'+esc(meta)+'</div>';
   el.onclick=()=>show(n);
   return el;
 }
@@ -238,7 +240,7 @@ function draw(){
     const s=style[e.kind]; if(!s) return '';
     const dash = s.dash==='0' ? '' : ' stroke-dasharray="'+s.dash+'"';
     const start = s.both ? ' marker-start="url(#ar-'+s.marker+')"' : '';
-    return '<line x1="'+(a.x+103)+'" y1="'+(a.y+30)+'" x2="'+(b.x+103)+'" y2="'+(b.y+30)+'" stroke="'+s.stroke+'" stroke-width="'+s.width+'"'+dash+start+' marker-end="url(#ar-'+s.marker+')" />';
+    return '<line x1="'+(a.x+78)+'" y1="'+(a.y+30)+'" x2="'+(b.x+78)+'" y2="'+(b.y+30)+'" stroke="'+s.stroke+'" stroke-width="'+s.width+'"'+dash+start+' marker-end="url(#ar-'+s.marker+')" />';
   }).join('');
   svg.innerHTML = defs + lines;
   document.getElementById('updated').textContent = 'updated ' + new Date().toLocaleTimeString();

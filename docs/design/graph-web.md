@@ -9,12 +9,12 @@
 ┌ header: dia graph · 只读 · 更新时间 ──────────────────────────┐
 ├ 工具栏：状态过滤 | 密度 | 提示                               │
 ├ 主画布（卡片 + SVG 边 + 右下角图例）       ┌ 右侧 320px ────┐
-│  sessions | todo/doing | review/blocked | paths │ 概览 / 需要人 │
+│  sessions / todo / doing / review / blocked / done / accepted / paths │ 概览 / 需要人 │
 │                                           │ 节点详情        │
 └ footer: 数据来源 / 约束 ───────────────────┴────────────────┘
 ```
 
-- 主画布按状态分列：session → todo/doing → review/blocked → path；边的方向从左到右。
+- 主画布按状态**分行**：sessions → todo → doing → review → blocked → done → accepted → paths；**每个状态独立一行，不做合并**；边的方向自上而下（同层可横向）。
 - 图例不再单独占侧栏，放在画布**右下角**，随画布滚动可见。
 - 右侧固定 320px：概览计数、attention（阻塞/claim/待评审）、节点详情。
 - 节点卡片颜色只表达 **kind + status**，不用于装饰。

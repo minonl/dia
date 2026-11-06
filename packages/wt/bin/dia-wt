@@ -1251,6 +1251,8 @@ if [ "$adopted" = 1 ]; then
 fi
 
 # 链式：仓库自己的钩子（simple-git-hooks 等管理器生成在 <common>/hooks）
+# 若当前就是从管理器钩子里的 RC 进来的，再链回去会自递归 → 直接结束
+if [ "${DIA_WT_IN_MANAGER_HOOK:-0}" = "1" ]; then exit 0; fi
 orig="$common/hooks/$name"
 if [ -x "$orig" ] && [ "$orig" != "$0" ]; then
   if [ "$name" = "pre-push" ] && [ ${#push_lines[@]} -gt 0 ]; then
@@ -1435,6 +1437,7 @@ PYCHK
 # 由 simple-git-hooks 生成的钩子 source 本文件（SIMPLE_GIT_HOOKS_RC）
 # 只对已 adopt 的仓生效；未 adopt → 直接返回
 if command -v dia >/dev/null 2>&1; then
+  export DIA_WT_IN_MANAGER_HOOK=1   # 防止守卫再链回管理器钩子（自递归）
   dia wt guard "$(basename "$0")" || exit $?
 fi
 RC
@@ -1562,6 +1565,7 @@ cmd_doctor() {
       cat > "$rcf" <<'RC'
 # 由 simple-git-hooks 生成的钩子 source 本文件（SIMPLE_GIT_HOOKS_RC）
 if command -v dia >/dev/null 2>&1; then
+  export DIA_WT_IN_MANAGER_HOOK=1   # 防止守卫再链回管理器钩子（自递归）
   dia wt guard "$(basename "$0")" || exit $?
 fi
 RC

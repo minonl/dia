@@ -92,5 +92,5 @@ Agent 入口：[`llms.txt`](https://github.com/minonl/dia/blob/main/llms.txt)（
 
 | 文档 | 一句话 |
 |---|---|
-| [dia graph Web 视觉设计稿（v0.1）](design/graph-web.md) | 静态 mockup：graph-web-mockup.html（直接用浏览器打开，无网络/无依赖） |
+| [dia graph Web 视觉设计稿（v0.2）](design/graph-web.md) | 静态 mockup：graph-web-mockup.html（直接用浏览器打开，无网络/无依赖） |
 

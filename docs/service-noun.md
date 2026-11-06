@@ -1,8 +1,11 @@
 # 服务（service）：可托管的执行体
 
-> 状态：提案（设计，未实现）。只做脚本型服务；healthcheck 按专用退出码域判定，旧结果超新鲜度窗口即报 stale。
+> 状态：**已实现（v0.0.10，脚本型 + agent 型）**。脚本型走 `entry.cmd`，agent 型走 `entry.agent` + `healthcheck.kind="acp"`；
+> healthcheck 按专用码域 `0/20/21` 判定（外加 `124`=timeout、信号=crash），旧结果超新鲜度窗口即报 `unknown (stale …)`。
+> **实现状态逐节对照见 §15。**
 > 日期 2026-11-05（rev.2：按 [设计评审 B1–B5 / C1–C7 / D1–D4](review/service-noun-review-2026-11-05.md) 改稿；
-> **rev.3**：按复核意见改「去抖单一写入方 / health 码域 `0/20/21` / timeout 映射 / 手动检查落台账 / adopted 口径」，见 §13）。
+> **rev.3**：按复核意见改「去抖单一写入方 / health 码域 `0/20/21` / timeout 映射 / 手动检查落台账 / adopted 口径」，见 §13；
+> **rev.4**：回填实现状态（PR #49 / #54 / #60）与 §15 对照表）。
 > 关联：[`cli.md`](cli.md)（名词与动词矩阵 / 退出码）· [`persona-install.md`](persona-install.md)（`dia.json` schema）·
 > [`kit-install.md`](kit-install.md) · [`acp-integration.md`](acp-integration.md)（agent 会话型服务）· `packages/job`（生命周期、状态台账）
 
@@ -243,7 +246,8 @@ unknown（stale）**不单独返回**——`health` 是实时执行，不存在�
 
 - `job` 仍是**唯一调度实现**（不新增第二套）；健康检查任务本身就是一个 `job`（`periodic`）。
 - `service` 只多一层「声明 + 校验 + 健康检查」。
-- `dia job status` 的每行增加 `health=<ok|degraded|fail|unknown|n/a> (Ns ago)`（读 §4.5 缓存，不执行）。
+- `dia job status` 的每行增加 `health=<ok|degraded|fail|unknown|n/a> (Ns ago)`（读 §4.5 缓存，不执行）。**✅ 已实现（PR #54）**：
+  仅对 `local.dia-job-svc-<id>` 行追加，其它行原样（向后兼容）。
 - 对 `service` 型（常驻）任务：Linux 走 systemd `--user`，**常驻需 `loginctl enable-linger`**（`job doctor` 已提示，`dia service add` 一并转述）；
   对 `periodic` 任务，cron 后端**没有进程状态**，health 是唯一判据 → 新鲜度条款（§4.6）尤其关键。
 
@@ -355,7 +359,8 @@ unknown（stale）**不单独返回**——`health` 是实时执行，不存在�
 
 ## 14. P2：agent 型服务（entry = persona 会话）
 
-> 状态：**草案（待实现）**。§0 已定「本版只做脚本型」；本节把 P2 的形状先定下来，避免实现时二次发明语义。
+> 状态：**已实现（PR #60）**。本节定义脚本型之外的 agent 型入口（`entry.agent` + `healthcheck.kind="acp"`）；
+> 实现与本节一致，差异见 §15。
 
 ### 14.1 与脚本型的关系
 
@@ -428,3 +433,31 @@ flowchart LR
 - [ ] 单测：`runAcpHealth` 用 `tests/fixtures/fake-acp.mjs` 覆盖 `initialize` 失败 / `session/new` 失败 / 正常三态
 - [ ] 单测：`healthcheck.kind` 缺省时按脚本型（向后兼容）
 - [ ] e2e：装一个 agent 型 demo（fake ACP）→ `dia job status` 显示 `health=ok…`，杀掉端点后变 `degraded(stale)`
+
+## 15. 实现状态（2026-11-06 回填）
+
+> 规则：**设计先改、代码同批**（R35）。本节是「设计 ↔ 实现」的对照表；后续改动必须同批更新本表。
+
+| 设计小节 | 状态 | 实现落点 |
+|---|---|---|
+| §2 构成（entry/lifecycle/contract/healthcheck） | ✅ | `src/service.ts`：`ServiceManifest` / `validateServiceManifest`（PR #49） |
+| §3 清单与校验（entry 规则、`E_MANIFEST`） | ✅ | `checkEntry` / `checkAgentEntry` / `resolveEntry`（#49、#60） |
+| §4.1 码域 `0/20/21` + `124` + 信号 | ✅ | `judgeHealth` / `judgeSpawnResult`；`124` 与 `137/143` 分流（#49；无 `timeout(1)` 的兜底见 #49 后续修复 `29a4341`） |
+| §4.2 执行环境 / `E_BACKEND` | ✅ | `healthShell`、`checkCronInterval`（#49） |
+| §4.3 去抖 + 单一写入方 + `gen` | ✅ | `transition`（`gen` 不同的行不计数）（#49） |
+| §4.4 崩溃语义（保持上次状态 + `last_error`） | ✅ | `judgeSpawnResult` + `transition`（#49） |
+| §4.5 台账（`state.jsonl` + `kind:"health"`） | ✅ | `appendHealthRecord` / `findLastHealth` / `readHealthLines`（#49、#54） |
+| §4.6 新鲜度（`interval × 1.5` → stale） | ✅ | `healthView` / `staleAfter`（#54） |
+| §5 CLI（add/remove/list/show/verify/health） | ✅ | `packages/cli/src/index.ts`（#49）；`health` 的 agent 分支（#60） |
+| §6 `dia job status` 追列 health | ✅ | `decorateStatus` + `runJobCapture`（#54） |
+| §7 边界（`E_UNSTABLE_ENTRY` / adopted / three-state） | ✅ | `verify` / `healthView`（#49、#54） |
+| §14 agent 型（`entry.agent` + `kind:"acp"`） | ✅ | `acpAgentCommand` / `runAcpHealth` / `recordHealth`（#60） |
+| §6 性能基准（N=50 ≤200ms） | ⏳ 未测 | 实现为「逐行读台账」，复杂度 O(服务数)，风险低；待补 benchmark |
+
+### 15.1 已知与设计的偏差
+
+| 项 | 设计 | 实现 | 处置 |
+|---|---|---|---|
+| `healthcheck.kind` 缺省 | 未写 | 缺省 `script`（向后兼容） | 与 §14.6 一致，已写回 §14 |
+| `dia service health` 的 agent 分支 | §5 未细化 | 先跑 ACP 探测再落 `source:"manual"` 行 | 与 §5/§14 语义一致，无需改设计 |
+| `entry.agent` 与 `healthcheck.kind` 的强绑定 | §14.6 验收项 | 已实现为 `E_MANIFEST`（agent 型必须 acp；acp 只能配 agent 型） | 已写回 §14.2 校验说明 |

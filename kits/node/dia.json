@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "kind": "kit",
+  "id": "node",
+  "version": "0.1.0",
+  "root": ".",
+  "tags": ["node", "pnpm", "hooks"],
+  "knowledge": ["knowledge"],
+  "requires": { "dia": ">=0.0.2" }
+}

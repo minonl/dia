@@ -42,7 +42,8 @@
   .node b{display:block;font-size:12.5px;line-height:1.3;margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .node .meta{color:var(--muted);font-size:10.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .badge{display:inline-block;font-size:10px;padding:1px 6px;border-radius:999px;border:1px solid var(--line);color:var(--muted);margin-top:4px}
-  .row-label{position:absolute;left:18px;width:84px;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+  .row-label{position:absolute;left:190px;width:96px;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+  .rail-label{position:absolute;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
   aside{display:flex;flex-direction:column;gap:14px}
   .side-title{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid var(--line)}
   .side-title h2{font-size:13px;margin:0}
@@ -101,14 +102,14 @@
     </div>
     <div class="canvas" id="canvas">
       <svg class="edges" id="edges"></svg>
-      <div class="row-label" style="top:48px">sessions</div>
-      <div class="row-label" style="top:130px">todo</div>
-      <div class="row-label" style="top:212px">doing</div>
-      <div class="row-label" style="top:294px">review</div>
-      <div class="row-label" style="top:376px">blocked</div>
-      <div class="row-label" style="top:458px">done</div>
-      <div class="row-label" style="top:540px">accepted</div>
-      <div class="row-label" style="top:622px">paths</div>
+      <div class="rail-label" style="left:18px;top:12px">sessions</div>
+      <div class="rail-label" style="left:698px;top:12px">paths</div>
+      <div class="row-label" style="top:48px">todo</div>
+      <div class="row-label" style="top:138px">doing</div>
+      <div class="row-label" style="top:228px">review</div>
+      <div class="row-label" style="top:318px">blocked</div>
+      <div class="row-label" style="top:408px">done</div>
+      <div class="row-label" style="top:498px">accepted</div>
       <div class="legend-overlay" id="legend">
         <div class="row">
           <svg class="sample" viewBox="0 0 38 10"><defs><marker id="lg-dep" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6" fill="#2563eb"/></marker></defs><line x1="1" y1="5" x2="30" y2="5" stroke="#2563eb" stroke-width="1.6" marker-end="url(#lg-dep)"/></svg>
@@ -161,18 +162,18 @@
 
 <script>
 const nodes = [
-  {id:'session:ses_a', kind:'session', label:'session-a', x:110, y:40},
-  {id:'session:ses_b', kind:'session', label:'session-b', x:290, y:40},
-  {id:'task:t-1', kind:'task', status:'todo', label:'数据根迁移', x:110, y:122, owner:'ses_a'},
-  {id:'task:t-2', kind:'task', status:'doing', label:'install.sh 拆分', x:110, y:204, owner:'ses_a'},
-  {id:'task:t-3', kind:'task', status:'blocked', label:'launchd 安装脚本', x:110, y:368, owner:'ses_b'},
-  {id:'task:t-4', kind:'task', status:'review', label:'graph TUI', x:110, y:286, owner:'ses_b'},
-  {id:'task:t-5', kind:'task', status:'done', label:'dia msg M0', x:110, y:490},
-  {id:'task:t-6', kind:'task', status:'accepted', label:'claim 机制', x:110, y:580},
-  {id:'task:t-7', kind:'task', status:'doing', label:'handoff + claim', x:290, y:204, owner:'ses_a'},
-  {id:'path:install.sh', kind:'path', label:'install.sh', x:110, y:670},
-  {id:'path:src/collab.ts', kind:'path', label:'src/collab.ts', x:290, y:670},
-  {id:'path:docs/msg.md', kind:'path', label:'docs/msg.md', x:470, y:670}
+  {id:'session:ses_a', kind:'session', label:'session-a', x:20, y:40},
+  {id:'session:ses_b', kind:'session', label:'session-b', x:20, y:130},
+  {id:'task:t-1', kind:'task', status:'todo', label:'数据根迁移', x:300, y:40, owner:'ses_a'},
+  {id:'task:t-2', kind:'task', status:'doing', label:'install.sh 拆分', x:300, y:130, owner:'ses_a'},
+  {id:'task:t-3', kind:'task', status:'blocked', label:'launchd 安装脚本', x:300, y:310, owner:'ses_b'},
+  {id:'task:t-4', kind:'task', status:'review', label:'graph TUI', x:300, y:220, owner:'ses_b'},
+  {id:'task:t-5', kind:'task', status:'done', label:'dia msg M0', x:300, y:400},
+  {id:'task:t-6', kind:'task', status:'accepted', label:'claim 机制', x:300, y:490},
+  {id:'task:t-7', kind:'task', status:'doing', label:'handoff + claim', x:480, y:130, owner:'ses_a'},
+  {id:'path:install.sh', kind:'path', label:'install.sh', x:700, y:40},
+  {id:'path:src/collab.ts', kind:'path', label:'src/collab.ts', x:700, y:130},
+  {id:'path:docs/msg.md', kind:'path', label:'docs/msg.md', x:700, y:220}
 ];
 const edges = [
   {from:'task:t-2', to:'task:t-1', kind:'depends_on'},

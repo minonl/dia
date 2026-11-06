@@ -8,13 +8,17 @@
 ```
 ┌ header: dia graph · 只读 · 更新时间 ──────────────────────────┐
 ├ 工具栏：状态过滤 | 密度 | 提示                               │
-├ 主画布（卡片 + SVG 边 + 右下角图例）       ┌ 右侧 320px ────┐
-│  sessions / todo / doing / review / blocked / done / accepted / paths │ 概览 / 需要人 │
+├ 主画布（三栏：sessions | task 状态行 | paths）  ┌ 右侧 320px ────┐
+│  sessions rail | TODO / DOING / REVIEW / BLOCKED / DONE / ACCEPTED | paths rail │ 概览 / 需要人 │
 │                                           │ 节点详情        │
 └ footer: 数据来源 / 约束 ───────────────────┴────────────────┘
 ```
 
-- 主画布按状态**分行**：sessions → todo → doing → review → blocked → done → accepted → paths；**每个状态独立一行，不做合并**；边的方向自上而下（同层可横向）。
+- 主画布是**三个维度**，不是一排状态：
+  1. **sessions rail（左）**：谁在做；
+  2. **task 状态行（中）**：todo / doing / review / blocked / done / accepted，每个状态独立一行；
+  3. **paths rail（右）**：改哪些文件/产物。
+  边方向：session → path（claim）、task → task（depends）、task → path（touches）；自上而下或跨栏。
 - 图例不再单独占侧栏，放在画布**右下角**，随画布滚动可见。
 - 右侧固定 320px：概览计数、attention（阻塞/claim/待评审）、节点详情。
 - 节点卡片颜色只表达 **kind + status**，不用于装饰。

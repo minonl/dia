@@ -72,6 +72,16 @@ describe("graph-html 单文件导出", () => {
     expect(b.derived).toBe(true);
   });
 
+  test("未知/扩展状态有图标兜底，不渲染 undefined", () => {
+    const tpl = readFileSync(join(import.meta.dir, "..", "src", "graph-html", "template.html"), "utf8");
+    expect(tpl).toContain("stIconOf");
+    expect(tpl).not.toContain("stIcon[t.status]");
+    const evil = structuredClone(fixture);
+    evil.nodes[0].status = "rejected";
+    const p = buildPayload(evil, { now });
+    expect(p.tasks.find((t) => t.id === "t-fix-a")!.status).toBe("rejected");
+  });
+
   test("模板自身不含网络调用（静态安全）", () => {
     const tpl = readFileSync(join(import.meta.dir, "..", "src", "graph-html", "template.html"), "utf8");
     expect(tpl).not.toMatch(/https?:\/\//i);

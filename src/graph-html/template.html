@@ -292,7 +292,8 @@ const truncated=payload.truncated||null;
 const state={view:'graph', layout:'priority', mode:'simple', zoom:28, window:7, q:'', sel:[], fd:2, from:null, to:null};
 const canvas=document.getElementById('canvas'), layer=document.getElementById('canvas-scroll'), rail=document.getElementById('lane-rail'), svg=document.getElementById('edges');
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-const stIcon={doing:'▶',blocked:'⏸',review:'◐',done:'✓',accepted:'✓',todo:'○'};
+const stIcon={doing:'▶',blocked:'⏸',review:'◐',done:'✓',accepted:'✓',todo:'○',dropped:'⨯',rejected:'✗',escalated:'▲',awaiting_acceptance:'…'};
+const stIconOf=s=>stIcon[s]||'·';
 
 function focusSet(id,depth){
   const by=new Map(tasks.map(t=>[t.id,t]));
@@ -416,7 +417,7 @@ function card(t,x,y,showPrio=false){
   }).slice(0,4).join('');
   const badge=showPrio?'<span class="prio '+esc(t.prio.toLowerCase())+'">'+esc(t.prio)+'</span>':'';
   el.innerHTML='<b>'+esc(t.label)+badge+'</b>'+
-    '<div class="meta">'+esc(t.id)+' · <span class="st '+esc(t.status)+'">'+stIcon[t.status]+' '+esc(t.status)+'</span> · '+t.progress+'%</div>'+
+    '<div class="meta">'+esc(t.id)+' · <span class="st '+esc(t.status)+'">'+stIconOf(t.status)+' '+esc(t.status)+'</span> · '+t.progress+'%</div>'+
     '<div class="progress"><i class="'+esc(t.status)+'" style="width:'+t.progress+'%"></i></div>'+
     (state.mode==='detail'?'<div class="meta" style="margin-top:5px">'+(t.owner?'@'+esc(t.owner):'unassigned')+' · dep '+t.deps.length+'</div>'+rel:'');
   el.dataset.id=t.id;

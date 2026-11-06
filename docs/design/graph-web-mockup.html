@@ -30,6 +30,7 @@
   .seg{display:flex;border:1px solid var(--line);border-radius:9px;overflow:hidden}
   .seg button{border:0;background:transparent;color:var(--muted);padding:6px 10px;font:inherit;font-size:12px;cursor:pointer}
   .seg button.on{background:var(--blue);color:#fff}
+  .seg button:disabled{opacity:.35;cursor:not-allowed}
   .toolbar .hint{margin-left:auto;color:var(--muted);font-size:12px}
   .canvas{position:relative;height:620px;overflow:hidden}
   .canvas-scroll{position:absolute;inset:0;overflow:auto;padding:10px}
@@ -110,18 +111,21 @@
   .kv .k{color:var(--muted)}
   /* timeline */
   .timeline{padding:14px 16px 18px;overflow:hidden;position:relative}
+  .tl-grid{display:grid;grid-template-columns:190px minmax(0,1fr);gap:8px;align-items:start}
+  .tl-labels{overflow:hidden;position:relative}
+  .tl-label-head{height:34px;display:flex;align-items:flex-end;font-size:11px;color:var(--muted);padding-bottom:6px}
+  .tl-labels-body{will-change:transform}
+  .tl-label-row{height:38px;box-sizing:border-box;padding:6px 8px 4px 0;border-top:1px dashed var(--line);font-size:12px;overflow:hidden}
+  .tl-label-row b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tl-label-row span{color:var(--muted);font-size:10px}
   .tl-scroll{overflow:auto;max-height:620px;scrollbar-width:thin}
   .scroll-hint{position:absolute;right:18px;top:10px;z-index:6;background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:3px 9px;font-size:10px;color:var(--muted);box-shadow:var(--shadow)}
-  .tl-head{display:grid;grid-template-columns:190px var(--tlw,900px);gap:8px;align-items:end;color:var(--muted);font-size:11px;margin-bottom:8px;position:sticky;top:0;z-index:4;background:var(--panel)}
+  .tl-head{display:grid;grid-template-columns:var(--tlw,900px);gap:8px;align-items:end;color:var(--muted);font-size:11px;margin-bottom:8px;position:sticky;top:0;z-index:4;background:var(--panel)}
   .tl-axis{position:relative;height:34px;width:var(--tlw,900px)}
   .tl-axis span{position:absolute;transform:translateX(-50%);white-space:nowrap;line-height:1.2}
   .tl-axis span small{display:block;font-size:9px;opacity:.55}
   .tl-body{position:relative}
-  .tl-row{display:grid;grid-template-columns:190px var(--tlw,900px);gap:8px;align-items:start;min-height:38px;border-top:1px dashed var(--line)}
-  .tl-head > div:first-child{position:sticky;left:0;z-index:5;background:var(--panel);padding-right:8px}
-  .tl-id{font-size:12px;min-width:0;position:sticky;left:0;z-index:2;background:var(--panel);padding:6px 8px 4px 0}
-  .tl-id b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .tl-id span{color:var(--muted);font-size:10px}
+  .tl-row{display:grid;grid-template-columns:var(--tlw,900px);gap:8px;align-items:start;min-height:38px;border-top:1px dashed var(--line)}
   .tl-track{position:relative;height:28px;overflow:hidden;width:var(--tlw,900px);margin-top:4px}
   .tl-bar{position:absolute;top:7px;height:14px;border-radius:5px;background:var(--blue);opacity:.9;cursor:pointer}
   .tl-bar .fill{position:absolute;left:0;top:0;bottom:0;border-radius:5px;background:rgba(255,255,255,.45)}
@@ -188,9 +192,15 @@
     <div id="view-time" style="display:none">
       <div class="timeline">
         <div class="scroll-hint">← 左右滚动 →</div>
-        <div class="tl-scroll" id="tl-scroll">
-          <div class="tl-head"><div>任务</div><div class="tl-axis" id="tl-axis"></div></div>
-          <div class="tl-body" id="tl-body"></div>
+        <div class="tl-grid">
+          <div class="tl-labels">
+            <div class="tl-label-head">任务</div>
+            <div class="tl-labels-body" id="tl-labels-body"></div>
+          </div>
+          <div class="tl-scroll" id="tl-scroll">
+            <div class="tl-head"><div class="tl-axis" id="tl-axis"></div></div>
+            <div class="tl-body" id="tl-body"></div>
+          </div>
         </div>
         <div class="tl-caption">橙色描边 = 关键路径（数据根迁移 → install.sh 拆分 → launchd）；红色虚线 = 今天。</div>
       </div>
@@ -285,9 +295,10 @@ function rowsFor(){
     tasks:tasks.filter(t=>t.prio===prio).sort((a,b)=>(d.get(a.id)-d.get(b.id))||a.label.localeCompare(b.label)).slice(0,limit)
   }));
 }
+function cardTop(r){ const bandH=state.mode==='detail'?230:145; return r.y-12+bandH/2-46; }
 function pos(){
   const rows=rowsFor(), p=new Map();
-  rows.forEach(r=>r.tasks.forEach((t,i)=>p.set(t.id,{x:170+i*230,y:r.y})));
+  rows.forEach(r=>r.tasks.forEach((t,i)=>p.set(t.id,{x:170+i*230,y:cardTop(r)})));
   return {p,rows};
 }
 function card(t,x,y){
@@ -304,7 +315,7 @@ function card(t,x,y){
   el.onclick=()=>openDrawer(t.id,'task'); return el;
 }
 function edgePath(a,b){
-  const x1=a.x+190,y1=a.y+30,x2=b.x,y2=b.y+30;
+  const x1=a.x+190,y1=a.y+46,x2=b.x,y2=b.y+46;
   if(x2>=x1) return `M${x1} ${y1} H${x1+Math.max(24,(x2-x1)/2)} V${y2} H${x2}`;
   return `M${x1} ${y1} H${x1-30} V${y2} H${x2}`;
 }
@@ -330,9 +341,9 @@ function drawGraph(){
     label.style.color=i===0?'var(--red)':i===1?'var(--amber)':'var(--muted)';
     label.innerHTML=esc(r.prio)+' · '+r.all.length+(i===0?'<small>紧急</small>':i===1?'<small>高</small>':'<small>常规</small>');
     rail.appendChild(label);
-    r.tasks.forEach((t,j)=>layer.appendChild(card(t,170+j*230,r.y)));
+    r.tasks.forEach((t,j)=>layer.appendChild(card(t,170+j*230,cardTop(r))));
     if(r.all.length>r.tasks.length){
-      const more=document.createElement('div'); more.className='node'; more.style.left=(170+r.tasks.length*230)+'px'; more.style.top=r.y+'px'; more.style.width='150px';
+      const more=document.createElement('div'); more.className='node'; more.style.left=(170+r.tasks.length*230)+'px'; more.style.top=cardTop(r)+'px'; more.style.width='150px';
       more.innerHTML='<b>+ '+(r.all.length-r.tasks.length)+' 个</b><div class="meta">聚合隐藏 · 时间线可看全部</div>';
       layer.appendChild(more);
     }
@@ -432,10 +443,11 @@ function drawTimeline(){
     el.innerHTML=dayDate(d)+'<small>'+(d===0?'今天':(d>0?'+'+d+'d':d+'d'))+'</small>';
     if(d===0)el.style.color='var(--red)'; axis.appendChild(el);
   }
-  const body=document.getElementById('tl-body'); body.innerHTML=''; const critical=new Set(['t-1','t-2','t-3']);
+  const body=document.getElementById('tl-body'); body.innerHTML=''; const labelsBody=document.getElementById('tl-labels-body'); labelsBody.innerHTML=''; const critical=new Set(['t-1','t-2','t-3']);
   tasks.slice().sort((a,b)=>a.start-b.start).forEach(t=>{
     const row=document.createElement('div'); row.className='tl-row';
-    row.innerHTML=`<div class="tl-id"><b>${esc(t.label)}</b><span>${esc(t.id)} · ${esc(t.prio)} · ${esc(t.status)}</span></div><div class="tl-track"></div>`;
+    row.innerHTML='<div class="tl-track"></div>';
+    const label=document.createElement('div'); label.className='tl-label-row'; label.innerHTML='<b>'+esc(t.label)+'</b><span>'+esc(t.id)+' · '+esc(t.prio)+' · '+esc(t.status)+'</span>'; labelsBody.appendChild(label);
     const track=row.querySelector('.tl-track');
     const bar=document.createElement('div'); bar.className='tl-bar '+t.status+(critical.has(t.id)?' critical':'');
     bar.style.left=x(t.start)+'%'; bar.style.width=Math.max(1.5,x(t.end)-x(t.start))+'%';
@@ -455,10 +467,11 @@ function readRoute(){
   const raw=location.hash.replace(/^#\/?/,''); const [path,qs]=raw.split('?');
   const params=new URLSearchParams(qs||location.search);
   const range=(params.get('range')||'30d');
-  const zoom=Math.min(120,Math.max(12,parseInt(params.get('zoom')||'28',10)||28));
+  const zoom=Math.min(84,Math.max(14,parseInt(params.get('zoom')||'28',10)||28));
+  const sx=Number(params.get('sx')||0);
   const fromRaw=params.get('from'), toRaw=params.get('to');
   const toOff=v=>v?Math.round((new Date(v+'T00:00:00').getTime()-new Date('2026-11-06T00:00:00').getTime())/86400000):null;
-  return {view:(path==='timeline'||params.get('view')==='timeline')?'time':'graph', mode:params.get('mode')==='detail'?'detail':'simple', range, zoom, from:toOff(fromRaw), to:toOff(toRaw), task:params.get('task'), tab:params.get('tab')==='intervene'?'intervene':'task'};
+  return {view:(path==='timeline'||params.get('view')==='timeline')?'time':'graph', mode:params.get('mode')==='detail'?'detail':'simple', range, zoom, sx, from:toOff(fromRaw), to:toOff(toRaw), task:params.get('task'), tab:params.get('tab')==='intervene'?'intervene':'task'};
 }
 function routeString(view,mode,range,zoom,from,to){
   const p=view==='time'?'timeline':'graph'; const qs=new URLSearchParams();
@@ -471,7 +484,7 @@ function routeString(view,mode,range,zoom,from,to){
   return '#/'+p+(qs.toString()?'?'+qs.toString():'');
 }
 function applyRoute(){
-  const r=readRoute(); state.view=r.view; state.mode=r.mode; state.range=r.range; state.zoom=r.zoom; state.from=r.from; state.to=r.to;
+  const r=readRoute(); state.view=r.view; state.mode=r.mode; state.range=r.range; state.zoom=r.zoom; state.sx=r.sx||0; state.from=r.from; state.to=r.to;
   document.querySelectorAll('#tabs button').forEach(x=>x.classList.toggle('on',x.dataset.v===r.view));
   document.querySelectorAll('#mode button').forEach(x=>x.classList.toggle('on',x.dataset.m===r.mode));
   document.getElementById('view-graph').style.display=r.view==='graph'?'':'none';
@@ -480,12 +493,13 @@ function applyRoute(){
   document.getElementById('time-tools').style.display=r.view==='time'?'flex':'none';
   document.querySelectorAll('#range button').forEach(x=>x.classList.toggle('on',x.dataset.r===r.range));
   const zbtn=document.querySelector('#zoom button[data-z="reset"]'); if(zbtn) zbtn.textContent=Math.round(r.zoom/28*100)+'%';
+  const dec=document.querySelector('#zoom button[data-z="-"]'), inc=document.querySelector('#zoom button[data-z="+"]'); if(dec) dec.disabled=r.zoom<=14; if(inc) inc.disabled=r.zoom>=84;
   document.getElementById('hint').textContent=r.view==='graph'
     ?'按优先级分行（P0 最高）；行内从左到右 = 依赖顺序'
     :'时间线：左右滚动查看；－/＋缩放；橙框 = 关键路径';
   const rp=document.getElementById('route'); if(rp) rp.textContent=location.hash||routeString(r.view,r.mode,r.range,state.zoom,state.from,state.to);
   document.title='dia graph · '+(r.view==='time'?'时间线':'关系图');
-  if(r.view==='time') drawTimeline(); else drawGraph();
+  if(r.view==='time'){ drawTimeline(); const sc=document.getElementById('tl-scroll'), lb=document.getElementById('tl-labels-body'); sc.scrollTop=0; lb.style.transform='translateY(0px)'; if(state.sx) sc.scrollLeft=state.sx; } else drawGraph();
   if(r.task) openDrawer(r.task,r.tab);
   syncLaneLabels();
 }
@@ -493,8 +507,10 @@ function go(view,mode,range,zoom){ const h=routeString(view,mode,range||state.ra
 document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>go(b.dataset.v==='time'?'time':'graph',state.mode,state.range));
 document.querySelectorAll('#mode button').forEach(b=>b.onclick=()=>go(state.view,b.dataset.m,state.range,state.zoom));
 document.querySelectorAll('#range button').forEach(b=>b.onclick=()=>{state.from=null;state.to=null;go('time',state.mode,b.dataset.r,state.zoom);});
-document.querySelectorAll('#zoom button').forEach(b=>b.onclick=()=>{ const z=b.dataset.z==='+'?state.zoom+8:b.dataset.z==='-'?state.zoom-8:28; go('time',state.mode,state.range,z); });
+document.querySelectorAll('#zoom button').forEach(b=>b.onclick=()=>{ const z=b.dataset.z==='+'?Math.min(84,state.zoom+8):b.dataset.z==='-'?Math.max(14,state.zoom-8):28; go('time',state.mode,state.range,z); });
 layer.addEventListener('scroll',syncLaneLabels,{passive:true});
+const tlScroller=document.getElementById('tl-scroll');
+tlScroller.addEventListener('scroll',()=>{ const lb=document.getElementById('tl-labels-body'); if(lb) lb.style.transform='translateY(-'+tlScroller.scrollTop+'px)'; },{passive:true});
 document.querySelectorAll('.attention .row[data-task]').forEach(r=>r.onclick=()=>openDrawer(r.dataset.task,'intervene'));
 window.addEventListener('hashchange',applyRoute);
 applyRoute();

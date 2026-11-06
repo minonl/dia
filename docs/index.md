@@ -17,6 +17,7 @@ Agent 入口：[`llms.txt`](https://github.com/minonl/dia/blob/main/llms.txt)（
 | [用户入口：人在哪进，agent 叫什么](entrypoints.md) | 一句话：入口仍是 opencode/dsh（和 yan 一样），但 agent 名是 dabo，不是 dia；dia 是控制面命令，不是人格。 |
 | [进化：dia 的第一性定位](evolution-process.md) | 本文不是功能清单，是过程定义。 |
 | [宿主控制面：黑盒边界与内部 seam（2026-10）](host-control-surface.md) | 问题：把 opencode（含 v2）与 dsh 当"黑盒宿主"时，我们能在哪些边界上控制它们？ |
+| [安装防呆：脚本安装不许抢走 npm 全局安装](install-guard-design.md) | 日期：2026-11-06 ｜ 状态：已实现（D0.65） ｜ 触发：同一台 Linux 机器 3 次出现 ~/.local/bin/dia 被指回脚本安装 |
 | [Kit：内容包安装（persona 的第二个半边）](kit-install.md) | 前置：docs/persona-install.md（persona = 人格，kit = 内容）。 |
 | [模型基准与 Sidecar 监控（A+B 一起）](model-baseline-sidecar.md) | A：首次使用先跑基准，用数据决定配置。 |
 | [模型行为调控（客户端侧）](model-behavior.md) | 边界（用户定）：只使用各平台提供的通用模型；不做本地构建/微调；不依赖多数模型不支持的推理与输入输出控制参数； |

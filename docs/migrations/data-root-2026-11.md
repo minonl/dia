@@ -9,7 +9,7 @@
 # 1) 备份（可选但建议）
 mv ~/.local/share/dia ~/.local/share/dia.bak-$(date +%Y%m%d)
 
-# 2) 用新安装器迁（自动 mv 旧根 → ~/.dia 并装新版）
+# 2) 用新安装器迁数据（只 mv 旧数据根 → ~/.dia；不装、不改 bin 链接）
 cd ~/repos/github/dia
 bun run build
 bash install.sh --migrate
@@ -52,9 +52,10 @@ tar czf ~/backups/dia-job-$TS.tgz -C ~ .local/share/dia-job
 crontab -l > ~/backups/crontab-$TS.txt
 # 把所有 `dia-job:` 行注释掉（记下原样，后面恢复）
 
-# 1) 装新版 + 迁数据（只搬数据子目录，不动安装物）
+# 1) 只迁数据（2026-11-06 起 --migrate 不再顺带安装/改 bin 链接，避免抢走 npm 安装）
 #    源码来自 mac 构建产物：tar 传 bin/dist/packages/docs/install.sh/package.json
 bash install.sh --migrate
+# 装新版走 npm（推荐）：npm i -g @minonl/dia@latest
 
 # 2) cache（install.sh 不搬）
 mkdir -p ~/.dia/cache && [ -d ~/.cache/dia/index ] && mv ~/.cache/dia/index ~/.dia/cache/

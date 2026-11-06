@@ -65,6 +65,10 @@ jobs:
       - if: needs.changes.outputs.code == 'true'
         run: bash tests/install-dia.test.sh
       - if: needs.changes.outputs.code == 'true'
+        run: bash tests/install-guard.test.sh
+      - if: needs.changes.outputs.code == 'true'
+        run: bash tests/install-guard-strict.test.sh
+      - if: needs.changes.outputs.code == 'true'
         run: bash tests/smoke.sh
       - if: needs.changes.outputs.code == 'true'
         run: bash tests/e2e.sh

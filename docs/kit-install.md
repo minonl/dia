@@ -30,6 +30,13 @@
 
 结论：**persona 装完是"哑"的**；kit 就是把这些补上，且要能 `verify` / `remove`。
 
+> **install.sh 分发守卫（2026-11-06）**：`~/.local/bin/dia` 当前属于包管理器全局安装
+> （npm/bun 的 `node_modules/@minonl/dia` 软链、pnpm/yarn 的 shim 脚本、volta 的 bin）且正是 `command -v dia`
+> 命中的那条时，`install.sh` **exit 3 且不改动任何文件**（避免脚本安装抢链接后 kit 去旧目录找、
+> `missing-kit` / `E_KIT_EMPTY`）。逃生舱：`DIA_ALLOW_SCRIPT_INSTALL=1`、`--dry-run`，
+> 或**把生效 bin 目录重定向**（`--bin DIR` / `DIA_BIN_DIR=DIR`）。注意：`--home` / `DIA_INSTALL_DIR`
+> 只改安装目录，链接仍写默认 `~/.local/bin`，**不算沙箱**（守卫照旧生效）。包存在但 bin 未被占 → 只 warn 一行。
+
 ---
 
 ## 2. 清单：`dia.json`（kind=kit）

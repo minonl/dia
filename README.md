@@ -78,6 +78,12 @@ dia version && dia doctor
 
 - 依赖：Node ≥ 24 或 Bun ≥ 1.2（见 `package.json` 的 `engines`）。
 - 安装只落盘：**不启停服务、不改宿主默认 agent**。
+- **安装守卫**：`~/.local/bin/dia` 当前属于包管理器全局安装（npm/bun 的 `node_modules/@minonl/dia` 软链，
+  pnpm/yarn 的 shim 脚本，volta 的 bin —— 即会被脚本安装抢走）时，`install.sh` **拒绝并 exit 3，不改动任何文件**；
+  确实想换脚本安装用 `DIA_ALLOW_SCRIPT_INSTALL=1 bash install.sh`，想留在 npm 安装用
+  `ln -sfn "$(npm prefix -g)/bin/dia" ~/.local/bin/dia`。只装到别处（不碰生效链接）用
+  `bash install.sh --home DIR --bin BINDIR`——`--home` 单独用只改安装目录，链接仍写默认 bin，守卫照旧生效。
+  装完会打印 `effective: <实际生效的 dia> (<version>)`，顺带暴露 PATH 顺序问题。
 - 装 persona（示例 dabo）：`dia persona add dabo --from git+https://github.com/minonl/dabo-agent.git`
 - 卸载：`dia persona remove dabo`（只删带 `.dia-managed` 的产物）。
 

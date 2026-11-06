@@ -90,6 +90,7 @@
 | D0.21 | worktree 抽取 `packages/wt` | **完成** | 7 处 python→node；`dia wt`；4 套测试原样迁移全绿 |
 | D0.23 | doctor 平台版本自检 | **完成** | `platform:opencode` / `platform:dsh` 报版本（缺宿主 = warn，不判红）；`tests/active-doctor.test.ts` |
 | D0.44 | 配置迁移走 LLM 任务 | **完成** | `docs/migrations/llm-migration.md`：升级只改声明；迁移=任务+判据+回滚；禁止代码里堆版本分支（安全敏感/原子场景例外） |
+| D0.64 | 复制过滤按相对路径判断 | **完成** | 绝对路径匹配 `node_modules` 会误伤 npm 全局安装（kit 整树被过滤 → `E_KIT_EMPTY`）；改 `copyFilter(base)` 用相对路径，persona/kit 共用 |
 | D0.63 | 运行时数据 `.data/` 不进快照、不参与哈希 | **完成** | `TREE_SKIP`（kit/persona 共用）：安装复制与 `hashTree`/verify 都跳过 `.data`，防运行时写入造成 verify 假漂移 |
 | D0.62 | persona 旧版技能软链视为受管 | **完成** | `linkManaged` 同时认 `~/.dia/kits/**` 与 `~/.dia/personas/**`；`persona update` 升级不再需要 `--force` |
 | D0.61 | kit 空内容拒绝 + doctor 只查引用 kit | **完成** | `kit add` 拒绝空清单/空树（E_MANIFEST/E_KIT_EMPTY）；doctor 按 persona lock 的 kits 校验，孤儿不再拖红 |

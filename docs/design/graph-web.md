@@ -1,5 +1,8 @@
 # dia graph Web 视觉设计稿（v0.3）
 
+> **落地状态（2026-11-06）**：M1 已实现 `dia graph --export-html`（真实账本 → 单文件静态 HTML，无网络）；
+> 数据模型/契约/安全边界见 [graph-web-m1.md](graph-web-m1.md)。live 服务（M2）未做。
+
 > 静态 mockup：[`graph-web-mockup.html`](graph-web-mockup.html)（浏览器直接打开，无网络/无依赖）
 > 数据契约：`dia graph --json`（schema 1）；时间线所需 start/end 为后续扩展字段。
 

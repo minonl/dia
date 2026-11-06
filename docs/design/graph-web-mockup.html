@@ -301,7 +301,25 @@ function rowsFor(){
     tasks:tasks.filter(t=>t.prio===prio).sort((a,b)=>(d.get(a.id)-d.get(b.id))||a.label.localeCompare(b.label)).slice(0,limit)
   }));
 }
-function cardTop(r){ const bandH=state.mode==='detail'?230:145; return r.y-12+bandH/2-46; }
+let cardMetrics={mid:52,h:58};
+function measureCard(){
+  const probe=card(tasks[0],-9999,-9999);
+  probe.style.visibility='hidden';
+  layer.appendChild(probe);
+  const prog=probe.querySelector('.progress');
+  const mid=prog?prog.offsetTop+prog.offsetHeight/2+probe.clientTop:44;
+  const h=probe.offsetHeight||58;
+  probe.remove();
+  return {mid,h};
+}
+function bandCenter(r, bandH){ return r.y-12+bandH/2; }
+function cardTop(r){
+  const bandH=state.mode==='detail'?230:145;
+  const center=bandCenter(r,bandH);
+  // 详细：进度条中心线对齐泳道中心；简约：卡片盒整体垂直居中
+  return state.mode==='detail'?center-cardMetrics.mid:center-cardMetrics.h/2;
+}
+function edgeOffset(){ return state.mode==='detail'?cardMetrics.mid:cardMetrics.h/2; }
 function pos(){
   const rows=rowsFor(), p=new Map();
   rows.forEach(r=>r.tasks.forEach((t,i)=>p.set(t.id,{x:170+i*230,y:cardTop(r)})));
@@ -322,13 +340,14 @@ function card(t,x,y,showPrio=false){
   el.onclick=()=>openDrawer(t.id,'task'); return el;
 }
 function edgePath(a,b){
-  const x1=a.x+190,y1=a.y+46,x2=b.x,y2=b.y+46;
+  const o=edgeOffset(), x1=a.x+190,y1=a.y+o,x2=b.x,y2=b.y+o;
   if(x2>=x1) return `M${x1} ${y1} H${x1+Math.max(24,(x2-x1)/2)} V${y2} H${x2}`;
   return `M${x1} ${y1} H${x1-30} V${y2} H${x2}`;
 }
 function drawGraph(){
   canvas.classList.toggle('simple', state.mode==='simple');
   if(state.layout==='dep'){ drawDepGraph(); return; }
+  cardMetrics=measureCard();
   const {p,rows}=pos();
   [...layer.querySelectorAll('.node,.pgroup')].forEach(e=>e.remove());
   const maxX=Math.max(600, ...rows.map(r=>{
@@ -345,7 +364,7 @@ function drawGraph(){
     g.style.background='color-mix(in srgb, var(--blue) '+Math.round(alpha*100)+'%, transparent)';
     layer.appendChild(g);
     const label=document.createElement('div'); label.className='plane-label '+r.prio.toLowerCase();
-    label.dataset.y=String(r.y+r.h/2-6); label.style.top=(10+r.y+r.h/2-6-layer.scrollTop)+'px';
+    label.dataset.y=String(r.y-12+bandH/2); label.style.top=(r.y-12+bandH/2-layer.scrollTop)+'px';
     label.style.color=i===0?'var(--red)':i===1?'var(--amber)':'var(--muted)';
     label.innerHTML=esc(r.prio)+' · '+r.all.length+(i===0?'<small>紧急</small>':i===1?'<small>高</small>':'<small>常规</small>');
     rail.appendChild(label);
@@ -467,27 +486,38 @@ function drawTimeline(){
 
 }
 function drawDepGraph(){
+  cardMetrics=measureCard();
   const d=depths(), groups=new Map();
   tasks.forEach(t=>{ const k=d.get(t.id)||0; groups.set(k,[...(groups.get(k)||[]),t]); });
   const limit=state.mode==='detail'?8:6;
   const p=new Map(); const rows=[];
-  let maxY=600;
+  const gap=14;
   [...groups.keys()].sort((a,b)=>a-b).forEach((depth,ci)=>{
     const all=groups.get(depth).sort((a,b)=>a.prio.localeCompare(b.prio)||a.label.localeCompare(b.label));
-    const visible=all.slice(0,limit);
-    visible.forEach((t,i)=>{ const x=170+ci*230, y=60+i*96; p.set(t.id,{x,y}); maxY=Math.max(maxY,y+90); });
-    rows.push({depth,all,visible,x:170+ci*230});
+    rows.push({depth,all,visible:all.slice(0,limit),x:170+ci*230});
   });
   [...layer.querySelectorAll('.node,.pgroup')].forEach(e=>e.remove());
   rail.innerHTML='';
+  let maxY=0;
+  // 先渲染卡片，再按实测高度逐列堆叠，避免详细模式卡片相互重叠
   rows.forEach(r=>{
-    r.visible.forEach((t,i)=>layer.appendChild(card(t,r.x,60+i*96,true)));
+    let y=60;
+    r.visible.forEach(t=>{
+      const el=card(t,r.x,y,true);
+      el.style.top=y+'px';
+      layer.appendChild(el);
+      p.set(t.id,{x:r.x,y});
+      y+=el.offsetHeight+gap;
+    });
     if(r.all.length>r.visible.length){
-      const more=document.createElement('div'); more.className='node'; more.style.left=r.x+'px'; more.style.top=(60+r.visible.length*96)+'px'; more.style.width='150px';
+      const more=document.createElement('div'); more.className='node'; more.style.left=r.x+'px'; more.style.top=y+'px'; more.style.width='150px';
       more.innerHTML='<b>+ '+(r.all.length-r.visible.length)+' 个</b><div class="meta">D'+r.depth+' · 聚合隐藏</div>';
       layer.appendChild(more);
+      y+=more.offsetHeight+gap;
     }
+    maxY=Math.max(maxY,y);
   });
+  maxY=Math.max(600,maxY);
   const maxX=Math.max(600,...rows.map(r=>r.x+200));
   svg.setAttribute('width',maxX); svg.setAttribute('height',maxY+40);
   const defs=`<defs>
@@ -504,7 +534,7 @@ function drawDepGraph(){
 }
 function syncLaneLabels(){
   rail.querySelectorAll('.plane-label').forEach(el=>{
-    el.style.top=(10+Number(el.dataset.y||0)-layer.scrollTop)+'px';
+    el.style.top=(Number(el.dataset.y||0)-layer.scrollTop)+'px';
   });
 }
 function readRoute(){
@@ -561,6 +591,7 @@ tlScroller.addEventListener('scroll',()=>{ const lb=document.getElementById('tl-
 document.querySelectorAll('.attention .row[data-task]').forEach(r=>r.onclick=()=>openDrawer(r.dataset.task,'intervene'));
 window.addEventListener('hashchange',applyRoute);
 applyRoute();
+if(document.fonts&&document.fonts.ready){ document.fonts.ready.then(()=>{ if(state.view==='graph'){ if(state.layout==='dep') drawDepGraph(); else drawGraph(); } }); }
 </script>
 </body>
 </html>

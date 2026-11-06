@@ -64,3 +64,17 @@ dia graph --json --task t-xxx
 - `blocked_by` 只在 task 节点里做派生提示，不是边；
 - 任务依赖成环：`cycles` 非空，退出码 **3**（参数错仍是 2）；
 - `--task` 只输出该任务的直接依赖/touches/claim 邻居，不做全图闭包。
+
+---
+
+# 只读 TUI 图（M2 第一步）
+
+```bash
+dia graph --tui                 # 打印一次（有环 exit 3）
+dia graph --watch               # 每 2s 刷新，Ctrl-C 退出
+dia graph --tui --no-color      # 关 ANSI 颜色
+```
+
+- 按状态分组显示 task → deps / touches / blocked_by；claims 单列；
+- 不启 HTTP/daemon，遵守框架“无网络模块”约束；
+- `--task t-...` 只显示该任务的直接邻居。

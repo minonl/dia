@@ -10,6 +10,7 @@ import * as msg from "../../../src/msg.ts";
 import * as collab from "../../../src/collab.ts";
 import * as claims from "../../../src/claims.ts";
 import * as graph from "../../../src/graph.ts";
+import * as graphTui from "../../../src/graph-tui.ts";
 import * as defaultMsg from "../../../src/default-msg.ts";
 import * as paths from "../../../src/paths.ts";
 import * as agents from "../../../src/agents.ts";
@@ -190,7 +191,7 @@ usage:
   dia agents list|register|unregister|discover
   dia msg deliver <agent> <id> [--transport tmux|acp]
   dia task add|list|link|status|done [--owner S] [--depends a,b] [--touches p1,p2]
-  dia graph [--json] [--task t-...]
+  dia graph [--json] [--task t-...] [--tui [--watch] [--no-color]]
   dia claim <path> [--reason R] [--ttl 4h] [--session S] | dia claims [--all] [--mine] | dia unclaim <path|id> [--force]
   dia team run <id> --mock | --acp|--dsh --workspace DIR
   dia team gate|accept|reject|next
@@ -511,6 +512,18 @@ async function taskCli(argv: string[]): Promise<number> {
 
 async function graphCli(argv: string[]): Promise<number> {
   const asJson = has(argv, "--json");
+  if (has(argv, "--tui") || has(argv, "--watch")) {
+    const paint = (g: any) => out(graphTui.render(g, { color: !!process.stdout.isTTY && !has(argv, "--no-color") }));
+    try {
+      if (has(argv, "--watch")) return await graphTui.watch(() => graph.build({ task: flag(argv, "--task") }), { color: !!process.stdout.isTTY && !has(argv, "--no-color") });
+      const g = graph.build({ task: flag(argv, "--task") });
+      paint(g);
+      return g.cycles.length ? 3 : 0;
+    } catch (e: any) {
+      err(e?.message || String(e));
+      return String(e?.message || e).startsWith("E_GRAPH") ? 2 : 31;
+    }
+  }
   try {
     const g = graph.build({ task: flag(argv, "--task") });
     if (asJson) out(JSON.stringify(g, null, 1));

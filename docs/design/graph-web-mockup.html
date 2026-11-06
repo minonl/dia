@@ -53,6 +53,9 @@
   .prio.p0{background:var(--red);border-color:var(--red);color:#fff}
   .prio.p1{border-color:var(--amber);color:var(--amber)}
   .prio.p2{border-color:var(--line);color:var(--muted)}
+  .pgroup{position:absolute;border:1px dashed var(--line);border-radius:12px;pointer-events:none}
+  .pgroup-label{position:absolute;left:10px;top:6px;font-size:10px;letter-spacing:.1em;font-weight:700;color:var(--muted)}
+  .pgroup.p0 .pgroup-label{color:var(--red)} .pgroup.p1 .pgroup-label{color:var(--amber)} .pgroup.p2 .pgroup-label{color:var(--muted)}
   .legend-overlay{position:absolute;right:12px;bottom:12px;z-index:5;background:color-mix(in srgb,var(--panel) 92%,transparent);border:1px solid var(--line);border-radius:10px;padding:8px 10px;box-shadow:var(--shadow);font-size:11px;color:var(--muted);display:grid;gap:5px;min-width:190px}
   .legend-overlay .row{display:flex;align-items:center;gap:8px;white-space:nowrap}
   .legend-overlay .sample{width:38px;height:10px;flex:0 0 38px}
@@ -121,12 +124,8 @@
           <button class="on" data-m="simple">简约</button>
           <button data-m="detail">详细</button>
         </div>
-        <div class="seg" id="sort">
-          <button class="on" data-s="dep">依赖顺序</button>
-          <button data-s="prio">优先级</button>
-        </div>
       </div>
-      <span class="hint" id="hint">简约：只看任务和依赖；详细：显示 owner / session / path / touches / claims</span>
+      <span class="hint" id="hint">按优先级分行（P0 最高）；行内从左到右 = 依赖顺序。简约只看任务和依赖，详细展开具体关联。</span>
     </div>
     <div id="view-graph">
       <div class="canvas" id="canvas">
@@ -198,89 +197,78 @@ const taskEdges = [
   {from:'ses_b', to:'install.sh', kind:'claims'},
   {from:'t-4', to:'t-5', kind:'collaborates_with'}
 ];
-const state={view:'graph', mode:'simple', sort:'dep'};
+const state={view:'graph', mode:'simple'};
 const canvas=document.getElementById('canvas'), svg=document.getElementById('edges');
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-const color={doing:'#2563eb',blocked:'#dc2626',review:'#d97706',done:'#16a34a',accepted:'#16a34a',todo:'#6b7280'};
+const stIcon={doing:'▶',blocked:'⏸',review:'◐',done:'✓',accepted:'✓',todo:'○'};
 
-function layers(){
-  const by=new Map(tasks.map(t=>[t.id,t])); const memo=new Map();
+function depths(){
+  const by=new Map(tasks.map(t=>[t.id,t])), memo=new Map();
   const depth=t=>{ if(memo.has(t.id)) return memo.get(t.id); const d=t.deps.length?Math.max(...t.deps.map(x=>depth(by.get(x))))+1:0; memo.set(t.id,d); return d; };
-  tasks.forEach(depth);
-  const max=Math.max(0,...memo.values());
-  const groups=Array.from({length:max+1},()=>[]);
-  tasks.forEach(t=>groups[memo.get(t.id)].push(t));
-  const cmp=(a,b)=>state.sort==='prio'?a.prio.localeCompare(b.prio)||a.label.localeCompare(b.label):a.label.localeCompare(b.label);
-  return groups.map(g=>g.sort(cmp));
+  tasks.forEach(depth); return memo;
+}
+function rowsFor(){
+  const d=depths();
+  const gap=state.mode==='detail'?230:145;
+  const h=state.mode==='detail'?205:110;
+  return ['P0','P1','P2'].map((prio,i)=>({
+    prio,
+    y:70+i*gap,
+    h,
+    tasks:tasks.filter(t=>t.prio===prio).sort((a,b)=>(d.get(a.id)-d.get(b.id))||a.label.localeCompare(b.label))
+  }));
 }
 function pos(){
-  const groups=layers(); const p=new Map();
-  groups.forEach((g,d)=>g.forEach((t,i)=>p.set('task:'+t.id,{x:190+d*250,y:60+i*(state.mode==='detail'?132:92)})));
-  if(state.mode==='detail'){
-    p.set('session:ses_a',{x:10,y:60}); p.set('session:ses_b',{x:10,y:state.mode==='detail'?192:152});
-    paths.forEach((x,i)=>p.set('path:'+x,{x:190+groups.length*250,y:60+i*(state.mode==='detail'?132:92)}));
-  }
-  return {p,groups};
+  const rows=rowsFor(), p=new Map();
+  rows.forEach(r=>r.tasks.forEach((t,i)=>p.set(t.id,{x:170+i*230,y:r.y})));
+  return {p,rows};
 }
-function cardTask(t,x,y){
+function card(t,x,y){
   const el=document.createElement('div'); el.className='node task '+t.status; el.style.left=x+'px'; el.style.top=y+'px';
-  const cls=t.status==='done'||t.status==='accepted'?'var(--green)':t.status==='blocked'?'var(--red)':t.status==='review'?'var(--amber)':'var(--blue)';
   const rel=taskEdges.filter(e=>e.from===t.id||e.to===t.id).map(e=>{
-    const outgoing=e.from===t.id;
-    const other=outgoing?e.to:e.from;
+    const outgoing=e.from===t.id, other=outgoing?e.to:e.from;
     const kind=e.kind==='depends_on'?(outgoing?'depends_on':'depended_by'):e.kind;
     return '<div class="meta" style="margin-top:2px">↳ '+esc(kind)+': '+esc(other)+'</div>';
   }).slice(0,4).join('');
-  const stIcon={doing:'▶',blocked:'⏸',review:'◐',done:'✓',accepted:'✓',todo:'○'}[t.status]||'•';
-  el.innerHTML='<b>'+esc(t.label)+'<span class="prio '+esc(t.prio.toLowerCase())+'">'+esc(t.prio)+'</span></b>'+
-    '<div class="meta">'+esc(t.id)+' · <span class="st '+esc(t.status)+'">'+stIcon+' '+esc(t.status)+'</span> · '+t.progress+'%</div>'+
+  el.innerHTML='<b>'+esc(t.label)+'</b>'+
+    '<div class="meta">'+esc(t.id)+' · <span class="st '+esc(t.status)+'">'+stIcon[t.status]+' '+esc(t.status)+'</span> · '+t.progress+'%</div>'+
     '<div class="progress"><i class="'+esc(t.status)+'" style="width:'+t.progress+'%"></i></div>'+
     (state.mode==='detail'?'<div class="meta" style="margin-top:5px">'+(t.owner?'@'+esc(t.owner):'unassigned')+' · dep '+t.deps.length+'</div>'+rel:'');
   el.onclick=()=>showTask(t); return el;
 }
-function pill(kind,label,x,y){
-  const el=document.createElement('div'); el.className='node '+kind; el.style.left=x+'px'; el.style.top=y+'px';
-  el.innerHTML='<b>'+esc(label)+'</b><div class="meta">'+esc(kind)+'</div>';
-  return el;
-}
-function edgePath(from,to){
-  const a=from,b=to; const x1=a.x+190,y1=a.y+30,x2=b.x,y2=b.y+30;
-  if(x2>=x1){ const mid=x1+Math.max(24,(x2-x1)/2); return `M${x1} ${y1} H${mid} V${y2} H${x2}`; }
-  const mid=x1-30; return `M${x1} ${y1} H${mid} V${y2} H${x2}`;
+function edgePath(a,b){
+  const x1=a.x+190,y1=a.y+30,x2=b.x,y2=b.y+30;
+  if(x2>=x1) return `M${x1} ${y1} H${x1+Math.max(24,(x2-x1)/2)} V${y2} H${x2}`;
+  return `M${x1} ${y1} H${x1-30} V${y2} H${x2}`;
 }
 function drawGraph(){
   canvas.classList.toggle('simple', state.mode==='simple');
-  const {p,groups}=pos();
-  [...canvas.querySelectorAll('.node')].forEach(e=>e.remove());
-  groups.forEach(g=>g.forEach(t=>{const q=p.get('task:'+t.id);canvas.appendChild(cardTask(t,q.x,q.y));}));
-  if(state.mode==='detail'){
-    p.forEach((q,k)=>{ if(k.startsWith('session:')) canvas.appendChild(pill('session',k.split(':')[1],q.x,q.y)); if(k.startsWith('path:')) canvas.appendChild(pill('path',k.split(':')[1],q.x,q.y)); });
-  }
-  const maxX=Math.max(...[...p.values()].map(q=>q.x))+230, maxY=Math.max(...[...p.values()].map(q=>q.y))+110;
+  const {p,rows}=pos();
+  [...canvas.querySelectorAll('.node,.pgroup')].forEach(e=>e.remove());
+  rows.forEach(r=>{
+    const g=document.createElement('div'); g.className='pgroup '+r.prio.toLowerCase();
+    g.style.left='140px'; g.style.top=(r.y-28)+'px';
+    g.style.width=(Math.max(1,r.tasks.length)*230+60)+'px'; g.style.height=r.h+'px';
+    g.innerHTML='<span class="pgroup-label">'+r.prio+'</span>';
+    canvas.appendChild(g);
+    r.tasks.forEach((t,i)=>canvas.appendChild(card(t,170+i*230,r.y)));
+  });
+  const maxX=Math.max(...rows.map(r=>Math.max(1,r.tasks.length)*230+200), 600);
+  const maxY=Math.max(...rows.map(r=>r.y+r.h))+40;
   svg.setAttribute('width',maxX); svg.setAttribute('height',maxY);
   const defs=`<defs>
     <marker id="ar-dep" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7" fill="#2563eb"/></marker>
-    <marker id="ar-touch" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7" fill="#7c3aed"/></marker>
-    <marker id="ar-claim" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7" fill="#0891b2"/></marker>
     <marker id="ar-collab" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7" fill="#64748b"/></marker>
   </defs>`;
-  const lines=taskEdges.filter(e=>{
-    if(state.mode==='simple' && e.kind!=='depends_on') return false;
-    const isPath=x=>paths.includes(x)||x.includes('/');
-    const f=e.from.startsWith('ses_')?'session:'+e.from:(isPath(e.from)?'path:'+e.from:'task:'+e.from);
-    const t=e.to.startsWith('ses_')?'session:'+e.to:(isPath(e.to)?'path:'+e.to:'task:'+e.to);
-    return p.has(f)&&p.has(t);
-  }).map(e=>{
-    const isPath=x=>paths.includes(x)||x.includes('/');
-    const f=e.from.startsWith('ses_')?'session:'+e.from:(isPath(e.from)?'path:'+e.from:'task:'+e.from);
-    const t=e.to.startsWith('ses_')?'session:'+e.to:(isPath(e.to)?'path:'+e.to:'task:'+e.to);
-    const a=p.get(f),b=p.get(t); if(!a||!b) return '';
-    const style=e.kind==='touches'?'stroke="#7c3aed" stroke-dasharray="6 4" marker-end="url(#ar-touch)"':e.kind==='claims'?'stroke="#0891b2" stroke-dasharray="2 3" marker-end="url(#ar-claim)"':e.kind==='collaborates_with'?'stroke="#64748b" stroke-dasharray="1 3" marker-start="url(#ar-collab)" marker-end="url(#ar-collab)"':'stroke="#2563eb" marker-end="url(#ar-dep)"';
+  const lines=taskEdges.filter(e=>e.kind==='depends_on'||e.kind==='collaborates_with').map(e=>{
+    const a=p.get(e.from), b=p.get(e.to); if(!a||!b) return '';
+    const style=e.kind==='collaborates_with'
+      ? 'stroke="#64748b" stroke-dasharray="1 3" marker-start="url(#ar-collab)" marker-end="url(#ar-collab)"'
+      : 'stroke="#2563eb" marker-end="url(#ar-dep)"';
     return `<path d="${edgePath(a,b)}" fill="none" stroke-width="1.6" ${style}/>`;
   }).join('');
   svg.innerHTML=defs+lines;
   document.getElementById('updated').textContent='updated '+new Date().toLocaleTimeString();
-  if(!groups.flat().length) canvas.insertAdjacentHTML('beforeend','<div style="padding:20px;color:var(--muted)">(no tasks)</div>');
 }
 function showTask(t){
   const d=document.getElementById('detail'), body=document.getElementById('detail-body');
@@ -289,70 +277,47 @@ function showTask(t){
   d.classList.add('show');
 }
 function drawTimeline(){
-  const min=Math.min(...tasks.map(t=>t.start),-1), max=Math.max(...tasks.map(t=>t.end),1);
-  const span=max-min||1;
+  const min=Math.min(...tasks.map(t=>t.start),-1), max=Math.max(...tasks.map(t=>t.end),1), span=max-min||1;
   const x=v=>((v-min)/span)*100;
   const axis=document.getElementById('tl-axis'); axis.innerHTML='';
   for(let d=min;d<=max;d++){ const el=document.createElement('span'); el.style.left=x(d)+'%'; el.textContent=d===0?'今天':(d>0?'+'+d+'d':d+'d'); if(d===0)el.style.color='var(--red)'; axis.appendChild(el); }
-  const body=document.getElementById('tl-body'); body.innerHTML='';
-  const critical=new Set(['t-1','t-2','t-3']);
+  const body=document.getElementById('tl-body'); body.innerHTML=''; const critical=new Set(['t-1','t-2','t-3']);
   tasks.slice().sort((a,b)=>a.start-b.start).forEach(t=>{
     const row=document.createElement('div'); row.className='tl-row';
     row.innerHTML=`<div class="tl-id"><b>${esc(t.label)}</b><span>${esc(t.id)} · ${esc(t.prio)} · ${esc(t.status)}</span></div><div class="tl-track"></div>`;
     const track=row.querySelector('.tl-track');
     const bar=document.createElement('div'); bar.className='tl-bar '+t.status+(critical.has(t.id)?' critical':'');
     bar.style.left=x(t.start)+'%'; bar.style.width=Math.max(4,x(t.end)-x(t.start))+'%';
-    bar.innerHTML='<div class="fill" style="width:'+t.progress+'%"></div>';
-    bar.title=`${t.label} ${t.start}d → ${t.end}d (${t.progress}%)`;
-    bar.onclick=()=>showTask(t); track.appendChild(bar);
+    bar.innerHTML='<div class="fill" style="width:'+t.progress+'%"></div>'; bar.onclick=()=>showTask(t); track.appendChild(bar);
     body.appendChild(row);
   });
   if(min<=0&&max>=0){ const today=document.createElement('div'); today.className='tl-today'; today.style.left=x(0)+'%'; today.textContent='today'; body.appendChild(today); }
 }
 function readRoute(){
-  const raw=location.hash.replace(/^#\/?/,'');
-  const [path,qs]=raw.split('?');
+  const raw=location.hash.replace(/^#\/?/,''); const [path,qs]=raw.split('?');
   const params=new URLSearchParams(qs||location.search);
-  const view=(path==='timeline'||params.get('view')==='timeline')?'time':'graph';
-  const mode=params.get('mode')==='detail'?'detail':'simple';
-  const sort=params.get('sort')==='prio'?'prio':'dep';
-  return {view,mode,sort};
+  return {view:(path==='timeline'||params.get('view')==='timeline')?'time':'graph', mode:params.get('mode')==='detail'?'detail':'simple'};
 }
-function routeString(view,mode,sort){
-  const p=view==='time'?'timeline':'graph';
-  const qs=new URLSearchParams();
-  if(p==='graph'){
-    if(mode==='detail') qs.set('mode','detail');
-    if(sort==='prio') qs.set('sort','prio');
-  }
-  return '#/'+p+(qs.toString()?'?'+qs.toString():'');
-}
+function routeString(view,mode){ return '#/'+(view==='time'?'timeline':'graph')+(view==='graph'&&mode==='detail'?'?mode=detail':''); }
 function applyRoute(){
-  const r=readRoute();
-  state.view=r.view; state.mode=r.mode; state.sort=r.sort;
+  const r=readRoute(); state.view=r.view; state.mode=r.mode;
   document.querySelectorAll('#tabs button').forEach(x=>x.classList.toggle('on',x.dataset.v===r.view));
   document.querySelectorAll('#mode button').forEach(x=>x.classList.toggle('on',x.dataset.m===r.mode));
-  document.querySelectorAll('#sort button').forEach(x=>x.classList.toggle('on',x.dataset.s===r.sort));
   document.getElementById('view-graph').style.display=r.view==='graph'?'':'none';
   document.getElementById('view-time').style.display=r.view==='time'?'':'none';
   document.getElementById('graph-tools').style.display=r.view==='graph'?'flex':'none';
   document.getElementById('hint').textContent=r.view==='graph'
-    ?'简约：只看任务和依赖；详细：显示 owner / session / path / touches / claims'
+    ?'按优先级分行（P0 最高）；行内从左到右 = 依赖顺序'
     :'时间线：按 start/end 看执行；橙框 = 关键路径';
-  const rp=document.getElementById('route'); if(rp) rp.textContent=location.hash||routeString(r.view,r.mode,r.sort);
+  const rp=document.getElementById('route'); if(rp) rp.textContent=location.hash||routeString(r.view,r.mode);
   document.title='dia graph · '+(r.view==='time'?'时间线':'关系图');
   if(r.view==='time') drawTimeline(); else drawGraph();
 }
-function go(view,mode,sort){
-  const h=routeString(view,mode,sort);
-  if(location.hash===h) applyRoute(); else location.hash=h;
-}
-document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>go(b.dataset.v==='time'?'time':'graph',state.mode,state.sort));
-document.querySelectorAll('#mode button').forEach(b=>b.onclick=()=>go(state.view,b.dataset.m,state.sort));
-document.querySelectorAll('#sort button').forEach(b=>b.onclick=()=>go(state.view,state.mode,b.dataset.s));
+function go(view,mode){ const h=routeString(view,mode); if(location.hash===h) applyRoute(); else location.hash=h; }
+document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>go(b.dataset.v==='time'?'time':'graph',state.mode));
+document.querySelectorAll('#mode button').forEach(b=>b.onclick=()=>go(state.view,b.dataset.m));
 window.addEventListener('hashchange',applyRoute);
 applyRoute();
-
 </script>
 </body>
 </html>

@@ -12,9 +12,9 @@
 
 ### 关系图：按依赖深度分层，不按状态分列
 
-- 横轴 = 依赖深度（拓扑层），从左到右；
-- 纵轴 = 层内排序；`依赖顺序` / `优先级` 可切换（P0 优先）；
-- **状态不占布局**：用左边框颜色 + 进度条 + `status` 文本表达；
+- 纵轴 = 优先级，**P0 最高、P1 中间、P2 最下**；同一优先级用虚线框圈成一组；
+- 组内从左到右 = 依赖顺序（按依赖深度排序）；
+- **状态不占布局**：用内联图标/文本 + 进度条表达；
 - `简约`：只显示 task + `depends_on`；
 - `详细`：展开 owner、session、path、touches、claims，并在卡片里列具体关联（`depends_on / depended_by / touches / claims / collaborates_with`）。
 - 图例固定在画布右下角：只显示当前模式会用到的边；`→` 单向、`↔` 双向，线型与图上一致。
@@ -41,7 +41,7 @@
 
 - 依赖顺序是主结构（拓扑层）；
 - 状态是属性（颜色/进度）；
-- 优先级是排序维度（P0/P1/P2 + 层内排序）；
+- 优先级是行分组（P0/P1/P2 各一行，最高在最上，虚线框圈组）；
 - 时间放在独立时间线，不挤在关系图里。
 
 ## 4. 与数据契约的映射
@@ -75,12 +75,12 @@
 ```
 #/graph
 #/graph?mode=simple
-#/graph?mode=detail&sort=prio
+#/graph?mode=detail
 #/timeline
 ```
 
 - `view` 也可用 query 形式：`?view=timeline&mode=detail`；
-- 切换 tab / 简约详细 / 排序会同步更新 hash，便于分享/回链；
+- 切换 tab / 简约详细会同步更新 hash，便于分享/回链；
 - 真正的独立 path（`/graph`、`/timeline`）需要部署层 rewrite 到同一 HTML，或导出时生成
   `graph.html` / `timeline.html`；静态文件本身不能凭空提供两个 path。
 

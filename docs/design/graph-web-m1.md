@@ -1,7 +1,7 @@
 # dia graph Web（M1）设计：真实数据 → 单文件静态导出
 
 > 状态：M1 设计（2026-11-06）｜前置：`graph-web.md`（视觉稿 v0.3）、`graph-web-mockup.html`（交互原型）
-> 交付形态拍板：**先 A 后 B** —— M1 只做 `dia graph --export-html`；M2 再做 loopback 实时服务（独立包 + 独立评审）。
+> 交付形态拍板：**先 A 后 B** —— M1 只做 `dia graph --export-html`；M2 再做 loopback 实时服务（见 [graph-web-m2.md](graph-web-m2.md)）；界面派生量见 [graph-ui-m1.md](graph-ui-m1.md)。
 
 ## 1. 目标 / 非目标
 

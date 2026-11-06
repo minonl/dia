@@ -1,0 +1,42 @@
+{
+  "schema": 1,
+  "capabilities": ["prio", "timeline", "progress"],
+  "nodes": [
+    {
+      "id": "task:t-fix-a",
+      "kind": "task",
+      "label": "fixture 任务",
+      "status": "doing",
+      "owner": "ses_g",
+      "prio": "P1",
+      "start": "2026-11-01",
+      "due": "2026-11-08",
+      "progress": 40,
+      "progress_derived": false,
+      "created_at": "2026-10-30T00:00:00.000Z",
+      "updated_at": "2026-11-02T00:00:00.000Z",
+      "deps": ["t-fix-b"],
+      "touches": ["src/a.ts"],
+      "unknown_future_field": true
+    },
+    {
+      "id": "task:t-fix-b",
+      "kind": "task",
+      "label": "fixture 依赖",
+      "status": "todo",
+      "progress": 0,
+      "progress_derived": true,
+      "created_at": "2026-10-29T00:00:00.000Z",
+      "updated_at": "2026-10-29T00:00:00.000Z",
+      "deps": [],
+      "touches": []
+    },
+    { "id": "session:ses_g", "kind": "session", "label": "ses_g" },
+    { "id": "path:src/a.ts", "kind": "path", "label": "src/a.ts" }
+  ],
+  "edges": [
+    { "from": "task:t-fix-a", "to": "task:t-fix-b", "kind": "depends_on", "source": "declared" },
+    { "from": "task:t-fix-a", "to": "path:src/a.ts", "kind": "touches", "source": "declared" }
+  ],
+  "cycles": []
+}

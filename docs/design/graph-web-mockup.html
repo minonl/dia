@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>dia graph · 视觉设计稿</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --panel:#fff; --ink:#111827; --muted:#6b7280; --line:#e5e7eb;
+    --blue:#2563eb; --violet:#7c3aed; --cyan:#0891b2; --green:#16a34a; --red:#dc2626; --amber:#d97706;
+    --shadow:0 1px 2px rgba(17,24,39,.06),0 8px 24px rgba(17,24,39,.06);
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#0f1115; --panel:#171a21; --ink:#e5e7eb; --muted:#9ca3af; --line:#2a2f3a;
+      --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.25); }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+  header{display:flex;align-items:center;gap:16px;padding:16px 22px;border-bottom:1px solid var(--line);background:var(--panel)}
+  header h1{font-size:17px;margin:0;letter-spacing:.2px}
+  header .sub{color:var(--muted);font-size:12px}
+  header .spacer{flex:1}
+  .pill{border:1px solid var(--line);border-radius:999px;padding:4px 10px;font-size:12px;color:var(--muted);background:var(--bg)}
+  main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:18px;padding:18px;max-width:1480px;margin:0 auto}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow)}
+  .toolbar{display:flex;gap:8px;align-items:center;padding:12px 14px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+  .seg{display:flex;border:1px solid var(--line);border-radius:9px;overflow:hidden}
+  .seg button{border:0;background:transparent;color:var(--muted);padding:6px 10px;font:inherit;font-size:12px;cursor:pointer}
+  .seg button.on{background:var(--blue);color:#fff}
+  .toolbar .hint{margin-left:auto;color:var(--muted);font-size:12px}
+  .canvas{position:relative;height:640px;overflow:auto;padding:10px}
+  svg.edges{position:absolute;inset:0;pointer-events:none}
+  svg.edges line{stroke:#94a3b8;stroke-width:1.2;opacity:.8}
+  svg.edges line.depends_on{stroke:var(--blue)}
+  svg.edges line.touches{stroke:var(--violet);stroke-dasharray:3 4}
+  svg.edges line.claims{stroke:var(--cyan);stroke-dasharray:5 4}
+  .node{position:absolute;width:206px;border:1px solid var(--line);border-left:4px solid var(--muted);border-radius:10px;background:var(--panel);padding:9px 11px;box-shadow:var(--shadow);cursor:pointer;transition:transform .12s ease,box-shadow .12s ease}
+  .node:hover{transform:translateY(-1px);box-shadow:0 10px 28px rgba(17,24,39,.12)}
+  .node.task.doing{border-left-color:var(--blue)}
+  .node.task.blocked{border-left-color:var(--red)}
+  .node.task.review{border-left-color:var(--amber)}
+  .node.task.done,.node.task.accepted{border-left-color:var(--green)}
+  .node.path{border-left-color:var(--violet)}
+  .node.session{border-left-color:var(--cyan)}
+  .node b{display:block;font-size:13px;line-height:1.35;margin-bottom:3px}
+  .node .meta{color:var(--muted);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .badge{display:inline-block;font-size:10px;padding:1px 6px;border-radius:999px;border:1px solid var(--line);color:var(--muted);margin-top:4px}
+  .col-label{position:absolute;top:10px;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+  aside{display:flex;flex-direction:column;gap:14px}
+  .side-title{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid var(--line)}
+  .side-title h2{font-size:13px;margin:0}
+  .side-title span{font-size:11px;color:var(--muted)}
+  .list{padding:6px 14px 12px}
+  .item{display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px dashed var(--line);font-size:12px}
+  .item:last-child{border-bottom:0}
+  .item .k{color:var(--muted)}
+  .dot{display:inline-block;width:7px;height:7px;border-radius:99px;background:var(--muted);margin-right:6px;vertical-align:1px}
+  .dot.blue{background:var(--blue)} .dot.red{background:var(--red)} .dot.green{background:var(--green)} .dot.amber{background:var(--amber)}
+  .legend{padding:10px 14px 14px;color:var(--muted);font-size:12px;display:grid;gap:6px}
+  .legend i{display:inline-block;width:18px;height:2px;margin-right:8px;vertical-align:3px}
+  .attention{padding:8px 14px 14px}
+  .attention .row{display:flex;gap:8px;align-items:flex-start;padding:8px 0;border-bottom:1px dashed var(--line);font-size:12px}
+  .attention .row:last-child{border-bottom:0}
+  .tag{font-size:10px;border-radius:6px;padding:1px 6px;background:rgba(220,38,38,.12);color:var(--red);white-space:nowrap}
+  .tag.amber{background:rgba(217,119,6,.12);color:var(--amber)}
+  .detail{padding:14px;display:none}
+  .detail.show{display:block}
+  .detail h3{font-size:14px;margin:0 0 6px}
+  .detail p{margin:0 0 8px;color:var(--muted);font-size:12px}
+  .kv{display:grid;grid-template-columns:80px 1fr;gap:4px 10px;font-size:12px}
+  .kv .k{color:var(--muted)}
+  footer{padding:0 22px 22px;color:var(--muted);font-size:11px}
+  @media (max-width:980px){ main{grid-template-columns:1fr} .canvas{height:560px} }
+</style>
+</head>
+<body>
+<header>
+  <h1>dia graph</h1>
+  <span class="sub">只读依赖图 · 视觉设计稿 v0.1</span>
+  <span class="pill">静态 mockup · 无网络</span>
+  <span class="spacer"></span>
+  <span class="pill">updated 18:42</span>
+</header>
+
+<main>
+  <section class="panel">
+    <div class="toolbar">
+      <div class="seg" id="filter">
+        <button class="on" data-f="all">全部</button>
+        <button data-f="doing">进行中</button>
+        <button data-f="blocked">阻塞</button>
+        <button data-f="review">待评审</button>
+      </div>
+      <div class="seg" id="density">
+        <button class="on" data-d="comfortable">舒适</button>
+        <button data-d="compact">紧凑</button>
+      </div>
+      <span class="hint">点击节点查看详情 · 边：依赖 / 触碰 / claim</span>
+    </div>
+    <div class="canvas" id="canvas">
+      <svg class="edges" id="edges" width="1200" height="640"></svg>
+      <div class="col-label" style="left:18px">sessions</div>
+      <div class="col-label" style="left:250px">todo</div>
+      <div class="col-label" style="left:470px">doing</div>
+      <div class="col-label" style="left:690px">review</div>
+      <div class="col-label" style="left:910px">paths</div>
+    </div>
+  </section>
+
+  <aside>
+    <div class="panel">
+      <div class="side-title"><h2>概览</h2><span>live data</span></div>
+      <div class="list">
+        <div class="item"><span class="k"><i class="dot blue"></i>任务</span><b>7</b></div>
+        <div class="item"><span class="k"><i class="dot red"></i>阻塞</span><b>1</b></div>
+        <div class="item"><span class="k"><i class="dot amber"></i>待评审</span><b>1</b></div>
+        <div class="item"><span class="k"><i class="dot green"></i>完成</span><b>2</b></div>
+        <div class="item"><span class="k">claims</span><b>3</b></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="side-title"><h2>需要人</h2><span>attention</span></div>
+      <div class="attention">
+        <div class="row"><span class="tag">阻塞</span><div><b>install.sh 迁移</b><br><span class="k">等待数据根切换完成</span></div></div>
+        <div class="row"><span class="tag amber">claim</span><div><b>src/collab.ts</b><br><span class="k">session-a 持有中</span></div></div>
+        <div class="row"><span class="tag amber">评审</span><div><b>graph TUI</b><br><span class="k">等待独立 verifier</span></div></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="side-title"><h2>图例</h2><span>legend</span></div>
+      <div class="legend">
+        <div><i style="background:var(--blue)"></i>depends_on（任务依赖）</div>
+        <div><i style="background:var(--violet)"></i>touches（触碰路径）</div>
+        <div><i style="background:var(--cyan)"></i>claims（会话声明）</div>
+      </div>
+    </div>
+
+    <div class="panel detail" id="detail">
+      <div class="side-title"><h2>节点详情</h2><button onclick="document.getElementById('detail').classList.remove('show')" style="border:0;background:transparent;color:var(--muted);cursor:pointer">关闭</button></div>
+      <div class="detail" style="display:block" id="detail-body"></div>
+    </div>
+  </aside>
+</main>
+<footer>视觉稿：布局 / 信息层级 / 边语义。真实实现需先解除「框架无网络模块」限制并单独评审。</footer>
+
+<script>
+const nodes = [
+  {id:'session:ses_a', kind:'session', label:'session-a', x:20, y:60},
+  {id:'session:ses_b', kind:'session', label:'session-b', x:20, y:200},
+  {id:'task:t-1', kind:'task', status:'todo', label:'数据根迁移', x:240, y:40, owner:'ses_a'},
+  {id:'task:t-2', kind:'task', status:'doing', label:'install.sh 拆分', x:460, y:40, owner:'ses_a'},
+  {id:'task:t-3', kind:'task', status:'blocked', label:'launchd 安装脚本', x:680, y:40, owner:'ses_b'},
+  {id:'task:t-4', kind:'task', status:'review', label:'graph TUI', x:680, y:190, owner:'ses_b'},
+  {id:'task:t-5', kind:'task', status:'done', label:'dia msg M0', x:240, y:190},
+  {id:'task:t-6', kind:'task', status:'accepted', label:'claim 机制', x:240, y:320},
+  {id:'task:t-7', kind:'task', status:'doing', label:'handoff + claim', x:460, y:320, owner:'ses_a'},
+  {id:'path:install.sh', kind:'path', label:'install.sh', x:900, y:40},
+  {id:'path:src/collab.ts', kind:'path', label:'src/collab.ts', x:900, y:180},
+  {id:'path:docs/msg.md', kind:'path', label:'docs/msg.md', x:900, y:320}
+];
+const edges = [
+  {from:'task:t-2', to:'task:t-1', kind:'depends_on'},
+  {from:'task:t-3', to:'task:t-2', kind:'depends_on'},
+  {from:'task:t-7', to:'task:t-6', kind:'depends_on'},
+  {from:'task:t-2', to:'path:install.sh', kind:'touches'},
+  {from:'task:t-4', to:'path:src/collab.ts', kind:'touches'},
+  {from:'task:t-7', to:'path:src/collab.ts', kind:'touches'},
+  {from:'session:ses_a', to:'path:src/collab.ts', kind:'claims'},
+  {from:'session:ses_b', to:'path:install.sh', kind:'claims'}
+];
+const canvas = document.getElementById('canvas');
+const svg = document.getElementById('edges');
+const byId = new Map(nodes.map(n=>[n.id,n]));
+function card(n){
+  const el=document.createElement('div');
+  el.className='node '+n.kind+(n.status?' '+n.status:'');
+  el.style.left=n.x+'px'; el.style.top=n.y+'px'; el.dataset.id=n.id;
+  const meta = n.kind==='task' ? (n.owner?'@'+n.owner:'unassigned') : n.id.split(':')[0];
+  el.innerHTML='<b>'+esc(n.label)+'</b><div class="meta">'+esc(n.id)+'</div>'+
+    (n.status?'<span class="badge">'+esc(n.status)+'</span>':'')+
+    '<div class="meta" style="margin-top:4px">'+esc(meta)+'</div>';
+  el.onclick=()=>show(n);
+  return el;
+}
+function esc(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+function draw(){
+  [...canvas.querySelectorAll('.node')].forEach(e=>e.remove());
+  nodes.forEach(n=>canvas.appendChild(card(n)));
+  const maxX=Math.max(...nodes.map(n=>n.x))+240, maxY=Math.max(...nodes.map(n=>n.y))+120;
+  svg.setAttribute('width',maxX); svg.setAttribute('height',maxY);
+  svg.innerHTML=edges.map(e=>{
+    const a=byId.get(e.from), b=byId.get(e.to); if(!a||!b) return '';
+    return '<line class="'+e.kind+'" x1="'+(a.x+103)+'" y1="'+(a.y+30)+'" x2="'+(b.x+103)+'" y2="'+(b.y+30)+'" />';
+  }).join('');
+}
+function show(n){
+  const d=document.getElementById('detail'), body=document.getElementById('detail-body');
+  const out=edges.filter(e=>e.from===n.id||e.to===n.id).map(e=>{
+    const other=e.from===n.id?e.to:e.from;
+    return '<div class="item"><span class="k">'+e.kind+'</span><span>'+esc(other)+'</span></div>';
+  }).join('') || '<p class="muted">无边</p>';
+  body.innerHTML='<h3>'+esc(n.label)+'</h3><p>'+esc(n.id)+'</p><div class="kv"><div class="k">kind</div><div>'+esc(n.kind)+'</div><div class="k">status</div><div>'+esc(n.status||'-')+'</div><div class="k">owner</div><div>'+esc(n.owner||'-')+'</div></div><h3 style="margin-top:14px">关联</h3>'+out;
+  d.classList.add('show');
+}
+document.querySelectorAll('#filter button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('#filter button').forEach(x=>x.classList.remove('on')); b.classList.add('on');
+  const f=b.dataset.f;
+  nodes.forEach(n=>{ if(n.kind==='task'){ const el=document.querySelector('[data-id="'+n.id+'"]'); if(el) el.style.display=(f==='all'||n.status===f)?'':'none'; }});
+});
+document.querySelectorAll('#density button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('#density button').forEach(x=>x.classList.remove('on')); b.classList.add('on');
+  const compact=b.dataset.d==='compact';
+  document.querySelectorAll('.node').forEach(el=>{el.style.padding=compact?'5px 8px':'9px 11px';el.style.width=compact?'180px':'206px';});
+});
+draw();
+</script>
+</body>
+</html>

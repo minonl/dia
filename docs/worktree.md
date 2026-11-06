@@ -11,27 +11,29 @@ dia wt adopt <repo> --apply    # 写入配置 + 三个守卫钩子
 dia wt adopt --all --apply     # 批量：仓根下所有主 checkout（跳过 *-worktree--*）
 ```
 
-写入内容（幂等）：
+写入内容（幂等，**不改仓内文件、不写全局配置**）：
 
-| 项 | 位置 |
-|---|---|
-| 策略 | `<git-common-dir>/dia/config.json`（`defaultBranch` / `template` / `hooksPath` / `hooksPrevious` / `hooksChain`） |
-| 钩子 | `<git-common-dir>/dia/hooks/{pre-commit,pre-push,post-checkout}` |
-| `core.hooksPath` | 指向上面目录，**必须是绝对路径**（相对路径在 worktree 会静默失效） |
+| 仓类型 | 做法 | 记录 |
+|---|---|---|
+| 普通仓 | 钩子写 `<git-common-dir>/dia/hooks/`，并把**仓库本地** `core.hooksPath` 指过去（绝对路径） | `hooksManager=local` |
+| **simple-git-hooks 仓** | 不碰 `.git/hooks`、不改 `package.json`；守卫写进 `SIMPLE_GIT_HOOKS_RC` 指向的脚本（钩子会 source 它） | `hooksManager=simple-git-hooks` |
+| 已有其它 hooksPath（husky / `.githooks`） | **不抢占**，只报告（建议改用 simple-git-hooks） | `hooksManager=external` |
+
+> 判定：`package.json` 里有 `simple-git-hooks`（配置或 devDependency）→ RC 模式；否则看 `core.hooksPath` 是否已被别人占用。
 
 守卫行为：
 
 | 钩子 | 规则 |
 |---|---|
 | `pre-commit` | 主 checkout 上、分支属于 protected（默认分支 + main/master/develop/dev）→ 拒绝 |
-| `pre-push` | 主 checkout 上**任何 push**（含 tag / feature 分支）→ 拒绝；推 `main/master/develop/dev` → 拒绝 |
+| `pre-push` | 主 checkout 上**任何 push**（含 tag / feature 分支）→ 拒绝；推 `main/master/develop/dev` → 拒绝；并对推送内容做敏感信息扫描 |
 | `post-checkout` | 主 checkout 切到非默认分支 → 黄色提示（不阻断） |
 
-**钩子链**：`hooksChain`（首次 adopt 前的 hooksPath，如 `.husky` / `.githooks`）→ `<common>/hooks` → 默认放行。
-所以 husky / simple-git-hooks / lefthook 的钩子不会被吞。
+**钩子链**：本地钩子先跑守卫，再执行 `<common>/hooks/<name>`（simple-git-hooks 等管理器生成处）；`pre-push` 的 stdin 原样转发。
+`SIMPLE_GIT_HOOKS_RC` 由 adopt 写入 `~/.zshenv`（带 `# dia-wt:` 标记），脚本内容固定为 `dia wt guard <hook>`。
 
-> ⚠️ `simple-git-hooks` 的 `postinstall` 会重写 `core.hooksPath` 下的钩子。install 后若守卫被覆盖：
-> `dia wt doctor --fix`（或重跑 `dia wt adopt --apply`）。
+> ⚠️ husky / `.githooks` 仓：本地 `core.hooksPath` 会覆盖一切，守卫不生效（doctor WARN）。
+> 迁移办法：把钩子迁到 simple-git-hooks（`postinstall: simple-git-hooks` + `simple-git-hooks` 配置），再 `dia wt adopt --apply`。
 
 ## 2. 巡检
 
@@ -53,6 +55,8 @@ dia wt doctor --all --fix   # 无损修复：重装三个钩子 + 校正 hooksPa
 | D06 | 无 prunable / locked |
 | D07 | 同一分支不被多个 worktree 占用 |
 | D11 | 默认分支可解析（config > origin/HEAD（校验仍存在）> main > master） |
+| D20 | 全局 `core.hooksPath` 不得指向 dia 旧钩子目录（防外溢；有则 FAIL + 清理命令） |
+| D21 | 仓库本地 `core.hooksPath` 与模式一致：local=dia 目录；external=只 WARN |
 
 挂成日巡检（mac launchd / linux cron 由 `dia job` 统一）：
 

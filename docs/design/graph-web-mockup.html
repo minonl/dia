@@ -33,18 +33,22 @@
   .toolbar .hint{margin-left:auto;color:var(--muted);font-size:12px}
   .canvas{position:relative;height:620px;overflow:auto;padding:10px}
   svg.edges{position:absolute;inset:0;pointer-events:none;overflow:visible}
-  .node{position:absolute;width:190px;border:1px solid var(--line);border-left:4px solid var(--muted);border-radius:10px;background:var(--panel);padding:8px 10px;box-shadow:var(--shadow);cursor:pointer}
-  .node.task.doing{border-left-color:var(--blue)}
-  .node.task.blocked{border-left-color:var(--red)}
-  .node.task.review{border-left-color:var(--amber)}
-  .node.task.done,.node.task.accepted{border-left-color:var(--green)}
+  .node{position:absolute;width:190px;border:1px solid var(--line);border-left:1px solid var(--line);border-radius:10px;background:var(--panel);padding:8px 10px;box-shadow:var(--shadow);cursor:pointer}
   .node.path{border-left-color:var(--violet)}
   .node.session{border-left-color:var(--cyan)}
   .node b{display:block;font-size:13px;line-height:1.3;margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .node .meta{color:var(--muted);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .progress{height:4px;border-radius:99px;background:var(--line);margin-top:6px;overflow:hidden}
-  .progress i{display:block;height:100%;background:var(--blue)}
-  .prio{float:right;font-size:10px;border:1px solid var(--line);border-radius:5px;padding:0 5px;color:var(--muted);margin-left:4px}
+  .progress i{display:block;height:100%;background:var(--blue);background-image:linear-gradient(45deg,rgba(255,255,255,.28) 25%,transparent 25%,transparent 50%,rgba(255,255,255,.28) 50%,rgba(255,255,255,.28) 75%,transparent 75%);background-size:12px 12px;animation:flow 1s linear infinite}
+  .progress i.blocked{background-color:var(--red);animation-play-state:paused;opacity:.65}
+  .progress i.review{background-color:var(--amber)}
+  .progress i.done,.progress i.accepted{background-color:var(--green);background-image:none;animation:none}
+  @keyframes flow{to{background-position:12px 0}}
+  .st{font-weight:500}
+  .st.doing{color:var(--blue)} .st.blocked{color:var(--red)} .st.review{color:var(--amber)}
+  .st.done,.st.accepted{color:var(--green)} .st.todo{color:var(--muted)}
+  .prio{float:right;font-size:10px;font-weight:600;border-radius:5px;padding:0 6px;color:#fff;margin-left:4px}
+  .prio.p0{background:var(--red)} .prio.p1{background:var(--amber)} .prio.p2{background:#64748b}
   .legend-overlay{position:absolute;right:12px;bottom:12px;z-index:5;background:color-mix(in srgb,var(--panel) 92%,transparent);border:1px solid var(--line);border-radius:10px;padding:8px 10px;box-shadow:var(--shadow);font-size:11px;color:var(--muted);display:grid;gap:5px;min-width:190px}
   .legend-overlay .row{display:flex;align-items:center;gap:8px;white-space:nowrap}
   .legend-overlay .sample{width:38px;height:10px;flex:0 0 38px}
@@ -101,6 +105,7 @@
   </div>
   <span class="spacer"></span>
   <span class="pill">静态 mockup · 无网络</span>
+  <span class="pill" id="route">#/graph</span>
   <span class="pill" id="updated">updated 18:42</span>
 </header>
 
@@ -222,9 +227,10 @@ function cardTask(t,x,y){
     const kind=e.kind==='depends_on'?(outgoing?'depends_on':'depended_by'):e.kind;
     return '<div class="meta" style="margin-top:2px">↳ '+esc(kind)+': '+esc(other)+'</div>';
   }).slice(0,4).join('');
-  el.innerHTML='<b>'+esc(t.label)+'<span class="prio">'+esc(t.prio)+'</span></b>'+
-    '<div class="meta">'+esc(t.id)+' · '+esc(t.status)+' · '+t.progress+'%</div>'+
-    '<div class="progress"><i style="width:'+t.progress+'%;background:'+cls+'"></i></div>'+
+  const stIcon={doing:'▶',blocked:'⏸',review:'◐',done:'✓',accepted:'✓',todo:'○'}[t.status]||'•';
+  el.innerHTML='<b>'+esc(t.label)+'<span class="prio '+esc(t.prio.toLowerCase())+'">'+esc(t.prio)+'</span></b>'+
+    '<div class="meta">'+esc(t.id)+' · <span class="st '+esc(t.status)+'">'+stIcon+' '+esc(t.status)+'</span> · '+t.progress+'%</div>'+
+    '<div class="progress"><i class="'+esc(t.status)+'" style="width:'+t.progress+'%"></i></div>'+
     (state.mode==='detail'?'<div class="meta" style="margin-top:5px">'+(t.owner?'@'+esc(t.owner):'unassigned')+' · dep '+t.deps.length+'</div>'+rel:'');
   el.onclick=()=>showTask(t); return el;
 }
@@ -299,26 +305,50 @@ function drawTimeline(){
   });
   if(min<=0&&max>=0){ const today=document.createElement('div'); today.className='tl-today'; today.style.left=x(0)+'%'; today.textContent='today'; body.appendChild(today); }
 }
-document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>{
-  document.querySelectorAll('#tabs button').forEach(x=>x.classList.remove('on')); b.classList.add('on');
-  state.view=b.dataset.v;
-  document.getElementById('view-graph').style.display=state.view==='graph'?'':'none';
-  document.getElementById('view-time').style.display=state.view==='time'?'':'none';
-  document.getElementById('graph-tools').style.display=state.view==='graph'?'flex':'none';
-  document.getElementById('hint').textContent=state.view==='graph'?'简约：只看任务和依赖；详细：显示 owner / session / path / touches / claims':'时间线：按 start/end 看执行；橙框 = 关键路径';
-  if(state.view==='time') drawTimeline(); else drawGraph();
-});
-document.querySelectorAll('#mode button').forEach(b=>b.onclick=()=>{
-  document.querySelectorAll('#mode button').forEach(x=>x.classList.remove('on')); b.classList.add('on');
-  state.mode=b.dataset.m; drawGraph();
-});
-document.querySelectorAll('#sort button').forEach(b=>b.onclick=()=>{
-  document.querySelectorAll('#sort button').forEach(x=>x.classList.remove('on')); b.classList.add('on');
-  state.sort=b.dataset.s; drawGraph();
-});
-drawGraph(); drawTimeline();
-if(location.hash==='#time') document.querySelector('#tabs button[data-v="time"]').click();
-if(location.hash==='#detail') document.querySelector('#mode button[data-m="detail"]').click();
+function readRoute(){
+  const raw=location.hash.replace(/^#\/?/,'');
+  const [path,qs]=raw.split('?');
+  const params=new URLSearchParams(qs||location.search);
+  const view=(path==='timeline'||params.get('view')==='timeline')?'time':'graph';
+  const mode=params.get('mode')==='detail'?'detail':'simple';
+  const sort=params.get('sort')==='prio'?'prio':'dep';
+  return {view,mode,sort};
+}
+function routeString(view,mode,sort){
+  const p=view==='time'?'timeline':'graph';
+  const qs=new URLSearchParams();
+  if(p==='graph'){
+    if(mode==='detail') qs.set('mode','detail');
+    if(sort==='prio') qs.set('sort','prio');
+  }
+  return '#/'+p+(qs.toString()?'?'+qs.toString():'');
+}
+function applyRoute(){
+  const r=readRoute();
+  state.view=r.view; state.mode=r.mode; state.sort=r.sort;
+  document.querySelectorAll('#tabs button').forEach(x=>x.classList.toggle('on',x.dataset.v===r.view));
+  document.querySelectorAll('#mode button').forEach(x=>x.classList.toggle('on',x.dataset.m===r.mode));
+  document.querySelectorAll('#sort button').forEach(x=>x.classList.toggle('on',x.dataset.s===r.sort));
+  document.getElementById('view-graph').style.display=r.view==='graph'?'':'none';
+  document.getElementById('view-time').style.display=r.view==='time'?'':'none';
+  document.getElementById('graph-tools').style.display=r.view==='graph'?'flex':'none';
+  document.getElementById('hint').textContent=r.view==='graph'
+    ?'简约：只看任务和依赖；详细：显示 owner / session / path / touches / claims'
+    :'时间线：按 start/end 看执行；橙框 = 关键路径';
+  const rp=document.getElementById('route'); if(rp) rp.textContent=location.hash||routeString(r.view,r.mode,r.sort);
+  document.title='dia graph · '+(r.view==='time'?'时间线':'关系图');
+  if(r.view==='time') drawTimeline(); else drawGraph();
+}
+function go(view,mode,sort){
+  const h=routeString(view,mode,sort);
+  if(location.hash===h) applyRoute(); else location.hash=h;
+}
+document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>go(b.dataset.v==='time'?'time':'graph',state.mode,state.sort));
+document.querySelectorAll('#mode button').forEach(b=>b.onclick=()=>go(state.view,b.dataset.m,state.sort));
+document.querySelectorAll('#sort button').forEach(b=>b.onclick=()=>go(state.view,state.mode,b.dataset.s));
+window.addEventListener('hashchange',applyRoute);
+applyRoute();
+
 </script>
 </body>
 </html>

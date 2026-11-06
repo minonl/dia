@@ -310,12 +310,16 @@ function drawGraph(){
   canvas.classList.toggle('simple', state.mode==='simple');
   const {p,rows}=pos();
   [...layer.querySelectorAll('.node,.pgroup')].forEach(e=>e.remove());
-  const maxX=Math.max(...rows.map(r=>Math.max(1,r.tasks.length)*230+200), 600);
+  const maxX=Math.max(600, ...rows.map(r=>{
+    const n=r.tasks.length;
+    const right=n?170+(n-1)*230+190:170;
+    return (r.all.length>n?170+n*230+150:right)+10;
+  }));
   const maxY=Math.max(...rows.map(r=>r.y+r.h))+40;
   const bandH=state.mode==='detail'?230:145;
   rows.forEach((r,i)=>{
     const g=document.createElement('div'); g.className='pgroup '+r.prio.toLowerCase();
-    g.style.top=(r.y-24)+'px'; g.style.width=maxX+'px'; g.style.height=bandH+'px';
+    g.style.top=(r.y-12)+'px'; g.style.width=maxX+'px'; g.style.height=bandH+'px';
     const alpha=Math.max(0.02, 0.075-i*0.012);
     g.style.background='color-mix(in srgb, var(--blue) '+Math.round(alpha*100)+'%, transparent)';
     layer.appendChild(g);

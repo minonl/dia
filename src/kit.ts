@@ -109,6 +109,15 @@ function assertInside(base: string, p: string): string {
 /** 不算「内容」的目录：版本库、依赖、运行时数据（`.data` 是人格的数据根，运行时写入会污染内容哈希） */
 export const TREE_SKIP = new Set([".git", "node_modules", ".data"]);
 
+/**
+ * 复制过滤：只按**相对源目录**的路径判断。
+ * 用绝对路径判断会误伤——npm 全局装的 kit 路径自带 `<prefix>/lib/node_modules/…`，
+ * 按绝对路径匹配 `node_modules` 会把整棵树过滤掉（实测：dia-msg 装成空 kit → E_KIT_EMPTY）。
+ */
+export function copyFilter(base: string): (p: string) => boolean {
+  return (p: string) => !relative(base, p).split(sep).some((s) => TREE_SKIP.has(s));
+}
+
 function walkFiles(root: string): string[] {
   const out: string[] = [];
   (function rec(dir: string) {
@@ -291,7 +300,7 @@ export function install(from: string, opts: { ref?: string; dryRun?: boolean; js
   if (!alreadyInstalled || hashTree(src.dir) !== hashTree(target)) {
     rmSync(target, { recursive: true, force: true });
     mkdirSync(target, { recursive: true });
-    cpSync(src.dir, target, { recursive: true, dereference: true, filter: (p: string) => !p.split(sep).some((s) => TREE_SKIP.has(s)) });
+    cpSync(src.dir, target, { recursive: true, dereference: true, filter: copyFilter(src.dir) });
   }
   const rendered = renderContent(src.dir, target, m) ?? planned;
   const appliedConfig = config.apply(m.config ?? []);

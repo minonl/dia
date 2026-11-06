@@ -65,6 +65,18 @@ describe("kit install", () => {
     rmSync(stale, { force: true });
   });
 
+  test("源路径含 node_modules（npm 全局包）也能正常安装", () => {
+    const root = join(mkdtempSync(join(tmpdir(), "dia-nm-")), "node_modules", "@minonl", "dia", "kits", "x");
+    mkdirSync(join(root, "core", "knowledge"), { recursive: true });
+    writeFileSync(join(root, "core", "knowledge", "a.md"), "# a\n");
+    writeFileSync(join(root, "dia.json"), JSON.stringify({
+      schema: 1, kind: "kit", id: "nm-kit", version: "0.1.0", knowledge: ["core/knowledge"],
+    }));
+    const r = kit.install(root);
+    expect(existsSync(join(r.dir, "core/knowledge/a.md"))).toBe(true);
+    kit.remove("nm-kit"); // 不影响后续 kit.list() 断言
+  });
+
   test("dry-run 不写任何东西", () => {
     const r = kit.install(src, { dryRun: true });
     expect(r.hash).toBeNull();

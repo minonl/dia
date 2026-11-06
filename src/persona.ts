@@ -230,7 +230,7 @@ export function install(from: string, opts: { ref?: string; host?: string; home?
     const staging = join(idDir, `.staging-${process.pid}-${Date.now().toString(36)}`);
     rmSync(staging, { recursive: true, force: true });
     mkdirSync(staging, { recursive: true });
-    cpSync(src.dir, staging, { recursive: true, dereference: true, filter: (p: string) => !p.split(sep).some((s) => kit.TREE_SKIP.has(s)) });
+    cpSync(src.dir, staging, { recursive: true, dereference: true, filter: kit.copyFilter(src.dir) });
     const stagingHash = hashTree(staging);
     let reuseTarget = false;
     if (existsSync(target)) {

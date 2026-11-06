@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeAll } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -66,5 +66,31 @@ describe("persona 级内容：knowledge / data_root / bash 命令", () => {
     expect(r.stdout).toContain("ARGS:a b");
     expect(r.stdout).toContain("DATA:" + join(home, ".x-data"));
     expect(r.status).toBe(3);
+  });
+});
+
+describe("运行时数据 .data 不进快照", () => {
+  test("安装跳过 .data，且不影响 persona verify", () => {
+    const src2 = mkdtempSync(join(tmpdir(), "dia-pc-src2-"));
+    mkdirSync(join(src2, "agents"), { recursive: true });
+    mkdirSync(join(src2, "kb"), { recursive: true });
+    mkdirSync(join(src2, ".data", "observability"), { recursive: true });
+    writeFileSync(join(src2, ".data", "observability", "kb-calls-2026-10.jsonl"), '{"q":"x"}\n');
+    writeFileSync(join(src2, "agents", "y.md"), "---\ndescription: y\nmode: primary\n---\ny\n");
+    writeFileSync(join(src2, "kb", "a.md"), "# a\n");
+    writeFileSync(join(src2, "dia.json"), JSON.stringify({
+      schema: 1, kind: "persona", id: "y", version: "0.1.0",
+      hosts: ["opencode"], entry: { opencode: "agents/y.md" }, knowledge: ["kb"],
+    }));
+    const add = run(["persona", "add", "--from", src2]);
+    expect(add.status).toBe(0);
+    const slot = join(data, "personas", "y", "0.1.0");
+    expect(existsSync(join(slot, ".data"))).toBe(false);
+    // 运行时再往数据根写，不应让内容哈希漂移
+    mkdirSync(join(slot, ".data", "observability"), { recursive: true });
+    writeFileSync(join(slot, ".data", "observability", "kb-calls-2026-10.jsonl"), '{"q":"late"}\n');
+    const v = run(["persona", "verify", "y"]);
+    expect(v.status).toBe(0);
+    expect(v.stdout).toContain("ok");
   });
 });

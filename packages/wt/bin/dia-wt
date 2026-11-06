@@ -1368,7 +1368,9 @@ cmd_adopt() {
       [ -n "$cfgDef" ] && def="$cfgDef"
     fi
     local mgr2; mgr2="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("hooksManager") or "")' "$cfg" 2>/dev/null || true)"
-    if [ "$mgr2" = "simple-git-hooks" ]; then
+    if [ "$mgr2" = "external" ]; then
+      echo "WARN D02 $repo 由其它 hook manager 接管（core.hooksPath=$prev），守卫未生效；建议改用 simple-git-hooks"
+    elif [ "$mgr2" = "simple-git-hooks" ]; then
       local rcf; rcf="$(wt_hooks_rc_dir)/simple-git-hooks-rc.sh"
       [ -f "$rcf" ] || { echo "FAIL D02 缺 simple-git-hooks RC：$rcf"; bad=1; }
       grep -rqs "SIMPLE_GIT_HOOKS_RC" "$HOME/.zshenv" || { echo "FAIL D02 shell 未 export SIMPLE_GIT_HOOKS_RC"; bad=1; }
@@ -1577,7 +1579,9 @@ RC
       bad=1
     fi
     mgr2="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("hooksManager") or "")' "$cfg" 2>/dev/null || true)"
-    if [ "$mgr2" = "simple-git-hooks" ]; then
+    if [ "$mgr2" = "external" ]; then
+      echo "WARN D02 $repo 由其它 hook manager 接管（core.hooksPath=$prev），守卫未生效；建议改用 simple-git-hooks"
+    elif [ "$mgr2" = "simple-git-hooks" ]; then
       local rcf; rcf="$(wt_hooks_rc_dir)/simple-git-hooks-rc.sh"
       [ -f "$rcf" ] || { echo "FAIL D02 $repo 缺 simple-git-hooks RC：$rcf"; bad=1; }
       grep -rqs "SIMPLE_GIT_HOOKS_RC" "$HOME/.zshenv" || echo "WARN D02 $repo shell 未 export SIMPLE_GIT_HOOKS_RC（守卫不会执行）"

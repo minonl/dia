@@ -32,14 +32,18 @@
   .seg button.on{background:var(--blue);color:#fff}
   .seg button:disabled{opacity:.35;cursor:not-allowed}
   .win-select{border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:8px;padding:6px 8px;font:inherit;font-size:12px}
-  .search{position:relative}
-  .search input{border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:8px;padding:6px 10px;font:inherit;font-size:12px;width:210px}
-  .search .q-list{position:absolute;left:0;top:34px;z-index:20;width:280px;max-height:250px;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow);display:none}
+  .search{position:relative;display:flex;align-items:center;gap:4px;flex-wrap:wrap;border:1px solid var(--line);background:var(--bg);border-radius:8px;padding:4px 8px;min-width:240px;max-width:420px;cursor:text}
+  .search input{border:0;background:transparent;color:var(--ink);padding:2px 0;font:inherit;font-size:12px;flex:1;min-width:80px;outline:none}
+  .token{display:inline-flex;align-items:center;gap:4px;background:color-mix(in srgb,var(--blue) 22%,transparent);color:var(--blue);border-radius:999px;padding:2px 4px 2px 8px;font-size:11px;white-space:nowrap}
+  .token button{border:0;background:transparent;color:inherit;cursor:pointer;font:inherit;font-size:12px;line-height:1;padding:0 2px}
+  .search .q-list{position:absolute;left:0;top:calc(100% + 4px);z-index:20;width:300px;max-height:250px;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow);display:none}
   .search .q-list.open{display:block}
   .q-item{padding:6px 10px;font-size:12px;cursor:pointer;display:flex;justify-content:space-between;gap:10px}
   .q-item:hover,.q-item.active{background:color-mix(in srgb,var(--blue) 18%,transparent)}
   .q-item .k{color:var(--muted)}
   .q-item .q-prio{font-style:normal;font-size:10px;color:var(--muted);margin-left:6px}
+  .q-item.sel{color:var(--blue)}
+  .q-item.sel .k{color:var(--blue)}
   .q-head{padding:6px 10px;font-size:10px;color:var(--muted);border-bottom:1px solid var(--line)}
   .q-empty{padding:10px;font-size:12px;color:var(--muted)}
   .node.hit{outline:2px solid var(--blue);outline-offset:1px}
@@ -181,11 +185,12 @@
           <button class="on" data-m="simple">简约</button>
           <button data-m="detail">详细</button>
         </div>
-        <div class="search">
-          <input id="q" type="search" placeholder="搜索 ID / 名称 / owner" autocomplete="off">
+        <div class="search" id="search-box">
+          <span id="tokens" style="display:contents"></span>
+          <input id="q" type="search" placeholder="搜索任务，选中后变成 tag" autocomplete="off">
           <div class="q-list" id="q-list"></div>
         </div>
-        <span class="focus-chip" id="focus-chip"><span id="focus-text"></span><select id="focus-fd" class="fd"><option value="1">1 层</option><option value="2" selected>2 层</option><option value="all">全链路</option></select><button id="focus-exit">退出</button></span>
+        <span class="focus-chip" id="focus-chip"><select id="focus-fd" class="fd"><option value="1">1 层</option><option value="2" selected>2 层</option><option value="all">全链路</option></select><button id="focus-exit">清空</button></span>
       </div>
       <div id="time-tools" style="display:none;gap:8px;align-items:center">
         <div class="seg" id="zoom">
@@ -281,7 +286,7 @@ for (let i=0;i<100;i++){
   const startD = -15 + ((i*7)%24);
   const endD = Math.min(15, startD + 1 + ((i*3)%8));
   const id = 't-'+String(i+1).padStart(3,'0');
-  const deps = i===0 ? [] : ['t-'+String(i-((i%5)+1)).padStart(3,'0')];
+  const back=(i%5)+1, deps = i-back>=0 ? ['t-'+String(i-back).padStart(3,'0')] : [];
   tasks.push({id, label:modules[i%modules.length]+' '+String(i+1).padStart(3,'0'), status, prio, progress, start:startD, end:endD, owner:i%3===0?null:(i%2?'ses_a':'ses_b'), deps});
 }
 const pad=n=>'t-'+String(n+1).padStart(3,'0');
@@ -292,7 +297,7 @@ for(let i=0;i<20;i++) taskEdges.push({from:tasks[i*5].id,to:paths[i%paths.length
 for(let i=0;i<12;i++) taskEdges.push({from:i%2?'ses_a':'ses_b',to:paths[i%paths.length],kind:'claims'});
 taskEdges.push({from:'t-001',to:'t-002',kind:'collaborates_with'});
 
-const state={view:'graph', layout:'priority', mode:'simple', range:'30d', zoom:28, window:7, q:'', focus:null, fd:2, from:null, to:null};
+const state={view:'graph', layout:'priority', mode:'simple', range:'30d', zoom:28, window:7, q:'', sel:[], fd:2, from:null, to:null};
 const canvas=document.getElementById('canvas'), layer=document.getElementById('canvas-scroll'), rail=document.getElementById('lane-rail'), svg=document.getElementById('edges');
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const stIcon={doing:'▶',blocked:'⏸',review:'◐',done:'✓',accepted:'✓',todo:'○'};
@@ -313,7 +318,11 @@ function focusSet(id,depth){
   return out;
 }
 function visibleTasks(){
-  if(state.focus){ const keep=focusSet(state.focus,state.fd); return tasks.filter(t=>keep.has(t.id)); }
+  if(state.sel.length){
+    const keep=new Set();
+    state.sel.forEach(id=>focusSet(id,state.fd).forEach(x=>keep.add(x)));
+    return tasks.filter(t=>keep.has(t.id));
+  }
   return tasks.filter(t=>state.window<=0 || t.start>=-state.window);
 }
 function searchMatches(){
@@ -332,7 +341,7 @@ function syncStats(){
 function updateHint(){
   const h=document.getElementById('hint'); if(!h||state.view!=='graph') return;
   const n=visibleTasks().length;
-  if(state.focus){
+  if(state.sel.length){
     h.textContent='显示 '+n+' 个任务 · '+(state.fd==='all'?'全链路':state.fd+' 层');
     return;
   }
@@ -403,7 +412,7 @@ function card(t,x,y,showPrio=false){
     (state.mode==='detail'?'<div class="meta" style="margin-top:5px">'+(t.owner?'@'+esc(t.owner):'unassigned')+' · dep '+t.deps.length+'</div>'+rel:'');
   el.dataset.id=t.id;
   el.onclick=()=>{ clearTimeout(clickTimer); clickTimer=setTimeout(()=>openDrawer(t.id,'task'),180); };
-  el.ondblclick=e=>{ e.preventDefault(); clearTimeout(clickTimer); focusOn(t.id); };
+  el.ondblclick=e=>{ e.preventDefault(); clearTimeout(clickTimer); toggleSel(t.id); };
   return el;
 }
 function edgePath(a,b){
@@ -609,16 +618,19 @@ function renderSearchList(ms){
   const box=document.getElementById('q-list'); if(!box) return;
   const q=(state.q||'').trim();
   const browse=!q;
-  const pool=browse?visibleTasks().slice().sort((a,b)=>a.prio.localeCompare(b.prio)||a.start-b.start):ms;
+  const pool=browse?tasks.filter(t=>state.window<=0||t.start>=-state.window).slice().sort((a,b)=>a.prio.localeCompare(b.prio)||a.start-b.start):ms;
   if(!pool||!pool.length){
     box.innerHTML='<div class="q-empty">'+(browse?'当前时间窗内没有任务':'没有匹配的任务')+'</div>';
     box.classList.add('open'); return;
   }
-  const head=browse?('<div class="q-head">可见 '+pool.length+' 个 · ↑↓ 选择，Enter 聚焦</div>')
-                   :('<div class="q-head">匹配 '+pool.length+' 个 · ↑↓ 选择，Enter 聚焦</div>');
-  box.innerHTML=head+pool.slice(0,20).map(t=>'<div class="q-item" data-id="'+esc(t.id)+'"><span>'+esc(t.label)+'<i class="q-prio">'+esc(t.prio)+'</i></span><span class="k">'+esc(t.id)+'</span></div>').join('');
+  const head=browse?('<div class="q-head">'+pool.length+' 个任务 · ↑↓ 选择，Enter 加入</div>')
+                   :('<div class="q-head">匹配 '+pool.length+' 个 · ↑↓ 选择，Enter 加入</div>');
+  box.innerHTML=head+pool.slice(0,20).map(t=>{
+    const on=state.sel.includes(t.id);
+    return '<div class="q-item'+(on?' sel':'')+'" data-id="'+esc(t.id)+'"><span>'+esc(t.label)+'<i class="q-prio">'+esc(t.prio)+'</i></span><span class="k">'+(on?'✓ ':'')+esc(t.id)+'</span></div>';
+  }).join('');
   box.classList.add('open');
-  box.querySelectorAll('.q-item').forEach(el=>el.onclick=()=>focusOn(el.dataset.id));
+  box.querySelectorAll('.q-item').forEach(el=>el.onclick=e=>{ e.stopPropagation(); toggleSel(el.dataset.id); });
 }
 function searchListItems(){
   const box=document.getElementById('q-list');
@@ -632,10 +644,17 @@ function moveSearchCursor(delta){
   items.forEach((el,i)=>el.classList.toggle('active',i===idx));
   items[idx].scrollIntoView({block:'nearest'});
 }
-function focusOn(id){
-  state.focus=id; state.fd=state.fd||2; state.q='';
+function toggleSel(id){
+  const i=state.sel.indexOf(id);
+  if(i>=0) state.sel.splice(i,1); else state.sel.push(id);
+  state.fd=state.fd||2; state.q='';
   const qi=document.getElementById('q'); if(qi) qi.value='';
   go(state.view,state.mode,state.range,state.zoom);
+}
+function renderTokens(){
+  const box=document.getElementById('tokens'); if(!box) return;
+  box.innerHTML=state.sel.map(id=>'<span class="token">'+esc(id)+'<button data-id="'+esc(id)+'" title="移除">×</button></span>').join('');
+  box.querySelectorAll('button').forEach(b=>b.onclick=e=>{ e.stopPropagation(); toggleSel(b.dataset.id); });
 }
 function readRoute(){
   const raw=location.hash.replace(/^#\/?/,''); const [path,qs]=raw.split('?');
@@ -650,7 +669,7 @@ function readRoute(){
   const win=winRaw!==null?Math.max(0,parseInt(winRaw,10)||0):(rangeRaw?Math.max(0,parseInt(rangeRaw,10)||0):7);
   const fdRaw=params.get('fd');
   const fd=fdRaw==='all'?'all':Math.min(9,Math.max(1,parseInt(fdRaw||'2',10)||2));
-  return {view:(path==='timeline'||params.get('view')==='timeline')?'time':'graph', layout:params.get('layout')==='dep'?'dep':'priority', mode:params.get('mode')==='detail'?'detail':'simple', range, zoom, sx, window:win, q:params.get('q')||'', focus:params.get('focus')||null, fd, from:toOff(fromRaw), to:toOff(toRaw), task:params.get('task'), tab:params.get('tab')==='intervene'?'intervene':'task'};
+  return {view:(path==='timeline'||params.get('view')==='timeline')?'time':'graph', layout:params.get('layout')==='dep'?'dep':'priority', mode:params.get('mode')==='detail'?'detail':'simple', range, zoom, sx, window:win, q:params.get('q')||'', sel:(params.get('sel')||params.get('focus')||'').split(',').map(x=>x.trim()).filter(x=>x&&tasks.some(t=>t.id===x)), fd, from:toOff(fromRaw), to:toOff(toRaw), task:params.get('task'), tab:params.get('tab')==='intervene'?'intervene':'task'};
 }
 function routeString(view,mode,range,zoom,from,to){
   const p=view==='time'?'timeline':'graph'; const qs=new URLSearchParams();
@@ -659,7 +678,7 @@ function routeString(view,mode,range,zoom,from,to){
   if(view==='graph'){
     if(state.window!==7) qs.set('w',String(state.window));
     if(state.q&&state.q.trim()) qs.set('q',state.q.trim());
-    if(state.focus){ qs.set('focus',state.focus); if(state.fd!==2) qs.set('fd',String(state.fd)); }
+    if(state.sel.length){ qs.set('sel',state.sel.join(',')); if(state.fd!==2) qs.set('fd',String(state.fd)); }
   }
   if(view==='time'){
     if(from!==null&&to!==null){ qs.set('from',isoDate(from)); qs.set('to',isoDate(to)); }
@@ -669,7 +688,7 @@ function routeString(view,mode,range,zoom,from,to){
   return '#/'+p+(qs.toString()?'?'+qs.toString():'');
 }
 function applyRoute(){
-  const r=readRoute(); state.view=r.view; state.layout=r.layout; state.mode=r.mode; state.range=r.range; state.zoom=r.zoom; state.sx=r.sx||0; state.window=r.window; state.q=r.q; state.focus=r.focus; state.fd=r.fd; state.from=r.from; state.to=r.to;
+  const r=readRoute(); state.view=r.view; state.layout=r.layout; state.mode=r.mode; state.range=r.range; state.zoom=r.zoom; state.sx=r.sx||0; state.window=r.window; state.q=r.q; state.sel=r.sel; state.fd=r.fd; state.from=r.from; state.to=r.to;
   document.querySelectorAll('#tabs button').forEach(x=>x.classList.toggle('on',x.dataset.v===r.view));
   document.querySelectorAll('#mode button').forEach(x=>x.classList.toggle('on',x.dataset.m===r.mode));
   document.querySelectorAll('#layout button').forEach(x=>x.classList.toggle('on',x.dataset.l===r.layout));
@@ -683,8 +702,10 @@ function applyRoute(){
   const winSel=document.getElementById('win'); if(winSel) winSel.value=String(r.window);
   const qIn=document.getElementById('q'); if(qIn && qIn.value!==r.q) qIn.value=r.q;
   const chip=document.getElementById('focus-chip');
-  if(chip){ chip.classList.toggle('on',!!r.focus); if(r.focus) document.getElementById('focus-text').textContent='聚焦 '+r.focus+' ·'; }
+  if(chip) chip.classList.toggle('on',r.sel.length>0);
+  if(chip) chip.title='按依赖邻域聚焦；清空即回全量';
   const fdEl=document.getElementById('focus-fd'); if(fdEl) fdEl.value=String(r.fd);
+  renderTokens();
   const rp=document.getElementById('route'); if(rp) rp.textContent=location.hash||routeString(r.view,r.mode,r.range,state.zoom,state.from,state.to);
   document.title='dia graph · '+(r.view==='time'?'时间线':'关系图');
   if(r.view==='time'){ drawTimeline(); const sc=document.getElementById('tl-scroll'), lb=document.getElementById('tl-labels-body'); sc.scrollTop=0; lb.style.transform='translateY(0px)'; if(state.sx) sc.scrollLeft=state.sx; } else drawGraph();
@@ -705,17 +726,20 @@ if(qInput){
     else if(e.key==='Enter'){
       const items=searchListItems();
       const active=items.find(el=>el.classList.contains('active'))||items[0];
-      if(active) focusOn(active.dataset.id);
+      if(active) toggleSel(active.dataset.id);
     } else if(e.key==='Escape'){ state.q=''; qInput.value=''; applySearch(); qInput.blur(); }
+    else if(e.key==='Backspace' && !qInput.value && state.sel.length){ e.preventDefault(); toggleSel(state.sel[state.sel.length-1]); }
   };
   qInput.onfocus=()=>{ renderSearchList(searchMatches()); };
   qInput.onclick=()=>{ renderSearchList(searchMatches()); };
-  qInput.onblur=()=>{ setTimeout(()=>{ const box=document.getElementById('q-list'); if(box) box.classList.remove('open'); },160); };
+  const sbox=document.getElementById('search-box');
+  if(sbox) sbox.onclick=e=>{ if(e.target.closest('.q-item')||e.target.closest('.token')) return; qInput.focus(); };
+  qInput.onblur=()=>{ setTimeout(()=>{ const box=document.getElementById('q-list'); if(box && !document.getElementById('search-box').contains(document.activeElement)) box.classList.remove('open'); },160); };
 }
 const fdSel=document.getElementById('focus-fd');
 if(fdSel) fdSel.onchange=()=>{ state.fd=fdSel.value==='all'?'all':Number(fdSel.value); go(state.view,state.mode,state.range,state.zoom); };
 const fxBtn=document.getElementById('focus-exit');
-if(fxBtn) fxBtn.onclick=()=>{ state.focus=null; go(state.view,state.mode,state.range,state.zoom); };
+if(fxBtn) fxBtn.onclick=()=>{ state.sel=[]; go(state.view,state.mode,state.range,state.zoom); };
 document.querySelectorAll('#mode button').forEach(b=>b.onclick=()=>go(state.view,b.dataset.m,state.range,state.zoom));
 document.querySelectorAll('#zoom button').forEach(b=>b.onclick=()=>{ const z=b.dataset.z==='+'?Math.min(84,state.zoom+8):b.dataset.z==='-'?Math.max(14,state.zoom-8):28; go('time',state.mode,state.range,z); });
 layer.addEventListener('scroll',syncLaneLabels,{passive:true});

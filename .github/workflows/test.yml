@@ -23,7 +23,8 @@ jobs:
           files="$(git diff --name-only "$base" HEAD || true)"
           if [ -z "$files" ]; then echo "code=true" >> "$GITHUB_OUTPUT"; exit 0; fi
           # 只要有一行不是 docs/ 或 llms*.txt，就算代码改动
-          if printf '%s\n' "$files" | grep -qvE '^(docs/|llms(-full)?\.txt$)'; then
+          # 「文档」= docs/**、llms*.txt，以及仓库根目录的 *.md（README/CHANGELOG 等）
+          if printf '%s\n' "$files" | grep -qvE '^(docs/|llms(-full)?\.txt$|[A-Za-z0-9._-]+\.md$)'; then
             echo "code=true" >> "$GITHUB_OUTPUT"
           else
             echo "code=false" >> "$GITHUB_OUTPUT"

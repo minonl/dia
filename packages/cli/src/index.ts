@@ -237,13 +237,36 @@ async function kb(argv: string[]): Promise<number> {
         throw e;
       }
     }
+    // ── kit 聚合：已装 kit 的知识也参与检索（design: docs/kit-layer.md §3）──
+    // --tag 过滤 kit（按 kit 清单 tags）；persona 自带 KB 始终参与
+    const tagFilter = flag(args, "--tag");
+    const rootsByPath = new Map<string, string>();
+    let kitHits = 0;
+    for (const k of kit.installed()) {
+      if (tagFilter && !k.tags.includes(tagFilter)) continue;
+      let kr: any[] = [];
+      try {
+        kr = await search(k.dir, q, undefined, limit);
+      } catch {
+        try { await buildIndex(k.dir); kr = await search(k.dir, q, undefined, limit); } catch { kr = []; }
+      }
+      for (const h of kr) {
+        rootsByPath.set(`${k.id}:${h.path}`, k.dir);
+        rows.push({ ...h, path: `${k.id}:${h.path}`, source: `kit:${k.id}@${k.version}` } as any);
+        kitHits++;
+      }
+    }
+    if (kitHits) rows.sort((a: any, b: any) => (b.score ?? 0) - (a.score ?? 0)).splice(limit);
+
     const full = sub === "query" && has(args, "--full");
     const bytes = sub === "query" && has(args, "--bytes");
-    const enrich = rows.map((r) => {
+    const enrich = rows.map((r: any) => {
       const item: any = { ...r };
+      const rowRoot = rootsByPath.get(r.path) ?? root;
+      const rowPath = r.source ? r.path.split(":").slice(1).join(":") : r.path;
       try {
-        if (bytes) item.bytes = Buffer.byteLength(getDoc(root, r.path), "utf8");
-        if (full) item.text = getDoc(root, r.path);
+        if (bytes) item.bytes = Buffer.byteLength(getDoc(rowRoot, rowPath), "utf8");
+        if (full) item.text = getDoc(rowRoot, rowPath);
       } catch {
         item.stale_index = true;
         item.text = null;
@@ -253,7 +276,7 @@ async function kb(argv: string[]): Promise<number> {
     });
     if (has(args, "--json")) out(JSON.stringify(enrich));
     else for (const r of enrich) {
-      out(`${r.path}\t${r.title}\n  ${r.snippet}`);
+      out(`${r.source ? `[${r.source}] ` : ""}${r.path}\t${r.title}\n  ${r.snippet}`);
       if (r.bytes !== undefined) out(`  bytes ${r.bytes}`);
       if (r.text !== undefined) out(r.text);
     }

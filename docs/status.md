@@ -91,6 +91,7 @@
 | D0.21 | worktree 抽取 `packages/wt` | **完成** | 7 处 python→node；`dia wt`；4 套测试原样迁移全绿 |
 | D0.23 | doctor 平台版本自检 | **完成** | `platform:opencode` / `platform:dsh` 报版本（缺宿主 = warn，不判红）；`tests/active-doctor.test.ts` |
 | D0.44 | 配置迁移走 LLM 任务 | **完成** | `docs/migrations/llm-migration.md`：升级只改声明；迁移=任务+判据+回滚；禁止代码里堆版本分支（安全敏感/原子场景例外） |
+| D0.75 | job 根双份收敛 | **完成** | `jobRootResolved` 沙箱永不回退 legacy；`dia-job` 目录缺失不再静默换根；`job install` 拒绝临时根注册（`E_JOB_ROOT_EPHEMERAL`）；uninstall 校验 plist 归属（防误删另一根）；`dia job migrate --from … [--dry-run]` 逐条重建+校验+清旧；doctor 新增 `job.root`（split-brain fail / 旧根残留 warn） |
 | D0.74 | collab enable 顺带首刷 board | **完成** | enable 在注册/校正定时后立即 `observe` 一次，board.interval_s 当场对齐 job（否则要等 300s，doctor 先报不一致）；测试覆盖 |
 | D0.73 | observer interval 单一事实源 = job registry | **完成** | `observe`/`board --refresh` 按 job 注册值写 board；`collab enable` 校正（缺则装、不对则重装，绝对路径 + DIA_ROOT/DIA_HOME 固化）；`disable` 对称卸载并清派生 board；`doctor` 修复命令统一 `dia collab enable`、非 60 倍数报「不可调度」；`collab status` 显示 observer |
 | D0.72 | 内置 kit 升级不再卡冲突 / 切版本自动重渲染 | **完成** | `kit.install({force})` 透传到 dry-run 规划（否则 `E_CONFLICT` 提前抛）；内置 kit 装配强制覆盖并备份；`persona use` 后自动 `render`；`render` 覆盖 skills/bin 软链（按真实指向判 drift，内容相同也能修） |

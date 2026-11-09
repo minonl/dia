@@ -40,7 +40,7 @@ import * as task from "../../../src/task.ts";
 import * as team from "../../../src/team.ts";
 import { loadPrices } from "../../../src/pricing.ts";
 import { propose } from "../../../src/proposal.ts";
-import { runJob, runJobCapture } from "../../../src/job.ts";
+import { runJob, runJobCapture, jobRootResolved } from "../../../src/job.ts";
 import * as service from "../../../src/service.ts";
 
 function out(s: string) { process.stdout.write(s + "\n"); }
@@ -209,6 +209,7 @@ usage:
   dia team gate|accept|reject|next
   dia team accept <id> [--note ...] [--pr N [--repo R] [--merge]]   # --pr：先验 CI，绿才接受/合并
   dia job <list|status|install|...>   # 调度适配器
+  dia job migrate --from <旧 job 根> [--to DIR] [--dry-run]   # 逐条重建到当前根，校验后清旧（处理双根）
   dia price list|--json
   dia postinstall [--quiet]             # 装配内置能力（npm 拦截脚本 / ignore-scripts 时的兜底；幂等）
   dia migrate data [--from DIR] [--dry-run]   # 旧数据根 → 数据根（只搬数据子目录，合并同名目录）
@@ -1053,6 +1054,46 @@ async function autoIndexPersona(id: string) {
   } catch (e: any) {
     err(`warn: 知识索引未建（${e?.message || e}）；可稍后运行 dia kb index --persona ${id}`);
   }
+}
+
+/** dia job migrate --from <legacy 根> [--to DIR] [--dry-run]：逐条重建到当前根，校验后清旧根。 */
+function jobMigrate(argv: string[]): number {
+  const from = flag(argv, "--from");
+  const to = flag(argv, "--to") || jobRootResolved();
+  const dry = has(argv, "--dry-run");
+  if (!from) { err("usage: dia job migrate --from <legacy job root> [--to DIR] [--dry-run]"); return 2; }
+  if (resolvePath(from) === resolvePath(to)) { err("E_USAGE: --from 与 --to 相同"); return 2; }
+  const regFile = join(from, "tasks", "registry.json");
+  if (!existsSync(regFile)) { err(`E_NOT_FOUND: ${regFile}`); return 2; }
+  let tasks: Record<string, any> = {};
+  try { tasks = JSON.parse(readFileSync(regFile, "utf8")).tasks || {}; } catch (e: any) { err(`E_MANIFEST: 读不了 ${regFile}（${e?.message || e}）`); return 2; }
+  let ok = 0, skipped = 0, failed = 0;
+  const ephemeral = /\/(var\/folders|tmp|private\/var\/folders|run\/user|dev\/shm)\//;
+  for (const [name, t] of Object.entries<any>(tasks)) {
+    const cmd = String(t?.cmd || "");
+    if (!cmd) { skipped++; out(`- ${name}: 跳过（无 cmd）`); continue; }
+    if (ephemeral.test(cmd)) { skipped++; out(`- ${name}: 跳过（cmd 含临时路径，疑似测试污染）`); continue; }
+    if (cmd.includes(`${from}/tasks/`)) { skipped++; out(`- ${name}: 跳过（cmd 指向旧根脚本）`); continue; }
+    if (dry) { ok++; out(`- ${name}: 将迁移（${t.type || "periodic"} ${t.interval && t.interval !== "-" ? t.interval + "s" : t.calendar || "-"}）`); continue; }
+
+    const args = ["install", name, "--desc", String(t.desc || "migrated from legacy root"), "--cmd", cmd, "--type", String(t.type || "periodic")];
+    if (t.interval && String(t.interval) !== "-") args.push("--interval", String(t.interval));
+    if (t.calendar && String(t.calendar) !== "-") args.push("--calendar", String(t.calendar));
+    if (t.weekdays && String(t.weekdays) !== "-") args.push("--weekdays", String(t.weekdays));
+    if (t.label && String(t.label).startsWith("local.dia-job-")) args.push("--label", String(t.label));
+    let r = runJobCapture(args, { root: to });
+    if (r.status === 4) r = runJobCapture([...args, "--allow-unstable"], { root: to });
+    if (r.status !== 0) { failed++; out(`- ${name}: 新根安装失败（${(r.stderr || r.stdout || "").trim().split("\n")[0] || `exit ${r.status}`}）`); continue; }
+    // 校验：新根 registry 里确实有这条，再清旧根（uninstall 自带 plist 归属校验）
+    let inNew = false;
+    try { inNew = Boolean(JSON.parse(readFileSync(join(to, "tasks", "registry.json"), "utf8")).tasks?.[name]); } catch { /* ignore */ }
+    if (!inNew) { failed++; out(`- ${name}: 新根校验失败（registry 无该条）`); continue; }
+    const u = runJobCapture(["uninstall", name], { root: from });
+    if (u.status !== 0) { failed++; out(`- ${name}: 旧根清理失败（${(u.stderr || u.stdout || "").trim().split("\n")[0]}）`); continue; }
+    ok++; out(`- ${name}: 已迁移`);
+  }
+  out(`migrate: ok=${ok} skipped=${skipped} failed=${failed}（${from} → ${to}${dry ? " [dry-run]" : ""}）`);
+  return failed ? 1 : 0;
 }
 
 async function collabCli(argv: string[]): Promise<number> {
@@ -2101,6 +2142,7 @@ export async function main(rawArgv: string[]): Promise<number> {
   if (cmd === "team") return teamCli(argv.slice(1));
   if (cmd === "job") {
     const rest = argv.slice(1);
+    if (rest[0] === "migrate") return jobMigrate(rest.slice(1));
     // `dia job status|list`：追一列 health（只读缓存，不执行检查；见 docs/service-noun.md §6）
     if (rest[0] === "status" || rest[0] === "list") {
       const r = runJobCapture(rest);

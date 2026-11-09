@@ -215,6 +215,7 @@ bun src/cli.ts version  # 直接跑源码
 | `team` | `dia team gate|accept|reject|next` |  |
 | `team` | `dia team accept <id> [--note ...] [--pr N [--repo R] [--merge]]` | --pr：先验 CI，绿才接受/合并 |
 | `job` | `dia job <list|status|install|...>` | 调度适配器 |
+| `job` | `dia job migrate --from <旧 job 根> [--to DIR] [--dry-run]` | 逐条重建到当前根，校验后清旧（处理双根） |
 | `price` | `dia price list|--json` |  |
 | `postinstall` | `dia postinstall [--quiet]` | 装配内置能力（npm 拦截脚本 / ignore-scripts 时的兜底；幂等） |
 | `migrate` | `dia migrate data [--from DIR] [--dry-run]` | 旧数据根 → 数据根（只搬数据子目录，合并同名目录） |

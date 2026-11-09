@@ -129,3 +129,13 @@ describe("观察器定时：注册与 doctor 自检", () => {
     expect(c.detail).toContain("权限");
   });
 });
+
+describe("ensureJob 临时根保护", () => {
+  test("DIA_ROOT 在临时目录且未显式 NO_LAUNCHD → 不注册", () => {
+    const prev = process.env.DIA_JOB_NO_LAUNCHD;
+    delete process.env.DIA_JOB_NO_LAUNCHD;
+    const msg = ensureJob();
+    expect(msg).toContain("临时数据根");
+    if (prev === undefined) delete process.env.DIA_JOB_NO_LAUNCHD; else process.env.DIA_JOB_NO_LAUNCHD = prev;
+  });
+});

@@ -46,7 +46,8 @@ describe("dia update 按安装方式分流", () => {
     const r = run(["update"], { DIA_INSTALL_DIR: dir, FAKE_NPM_MARK: mark });
     expect(r.status).toBe(0);
     expect(r.stdout).toContain("脚本安装");
-    expect(r.stdout).toContain("bash install.sh");
+    expect(r.stdout).toContain("npm i -g @minonl/dia@latest");
+    expect(r.stdout).toContain("已降级为开发/离线通道");
     expect(existsSync(mark)).toBe(false);
   });
 

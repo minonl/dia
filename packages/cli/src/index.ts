@@ -1440,7 +1440,7 @@ function wtCli(argv: string[]): number {
     resolvePath(fileURLToPath(new URL("../", import.meta.url)), "packages/wt/bin/dia-wt"),
   ].filter(Boolean) as string[];
   const bin = candidates.find((c) => existsSync(c));
-  if (!bin) { err("E_WT: dia-wt 未安装（先跑 dia install.sh，或设 DIA_WT_BIN）"); return 33; }
+  if (!bin) { err("E_WT: dia-wt 未安装（npm 包不完整？`npm i -g @minonl/dia@latest` 重装；或设 DIA_WT_BIN）"); return 33; }
   const r = spawnSync("bash", [bin, ...argv], { stdio: "inherit", env: process.env });
   return r.status ?? 1;
 }
@@ -1640,9 +1640,10 @@ export async function main(rawArgv: string[]): Promise<number> {
       // 脚本安装（install.sh）→ npm 装到全局 prefix 可能不在 PATH 上，别做无效升级
       let source = "";
       try { source = String(JSON.parse(readFileSync(join(install, "install.json"), "utf8")).source || ""); } catch {}
-      out(`这是脚本安装，不走 npm 升级。升级方式：`);
-      out(`  cd ${source || "<dia 仓库>"} && git pull && bun run build && bash install.sh`);
-      out(`（或改用 npm 全局安装：npm i -g @minonl/dia@latest）`);
+      out(`当前是脚本安装（${install}）。推荐切到 npm 全局安装，之后升级都走 npm：`);
+      out(`  npm i -g @minonl/dia@latest`);
+      out(`  ln -sfn "$(npm prefix -g)/bin/dia" ~/.local/bin/dia   # 让稳定路径指向 npm 安装`);
+      out(`（仍要脚本安装：cd ${source || "<dia 仓库>"} && git pull && bun run build && bash install.sh —— 已降级为开发/离线通道）`);
       return 0;
     }
     const r = spawnSync("npm", ["i", "-g", "@minonl/dia@latest"], { stdio: "inherit" });

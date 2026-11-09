@@ -129,9 +129,7 @@ function installShadowCheck(): Check {
     return { name, status: "ok", detail: `一致（${kind(installNpm)}）：install=${install}；PATH dia=${binReal}` };
   }
   // 修复方向跟着「谁是预期安装」走；npm 方向给一条可直接复制的命令（不真的调 npm，确定性优先）
-  const fix = installNpm
-    ? `ln -sfn "$(npm prefix -g)/bin/dia" ${quoteArg(bin)}`
-    : `ln -sfn ${quoteArg(join(install, "bin/dia.js"))} ${quoteArg(bin)}`;
+  const fix = `npm i -g @minonl/dia@latest && ln -sfn "$(npm prefix -g)/bin/dia" ${quoteArg(bin)}`;
   return {
     name,
     status: "warn", // 脚本安装已降级为「开发/离线通道」，遮蔽只提示不判红
@@ -319,7 +317,7 @@ export async function run(opts: { persona?: string } = {}): Promise<{
   checks.push(bootstrapCheck());
 
   const wt = join(install, "packages/wt/bin/dia-wt");
-  checks.push({ name: "wt", status: existsSync(wt) ? "ok" : "warn", detail: existsSync(wt) ? wt : "dia wt 未安装（dia install.sh）" });
+  checks.push({ name: "wt", status: existsSync(wt) ? "ok" : "warn", detail: existsSync(wt) ? wt : "dia wt 未安装（npm 包不完整？npm i -g @minonl/dia@latest 重装）" });
 
   const jobRoot = job.jobRootResolved();
   checks.push({

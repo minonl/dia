@@ -62,7 +62,10 @@ describe("观察器定时：注册与 doctor 自检", () => {
     const key = Object.keys(reg).find((k) => k === "collab-observe" || k.endsWith(".collab-observe"));
     expect(key).toBeTruthy();
     expect(String(reg[key!].interval)).toBe("300");
-    expect(String(reg[key!].cmd)).toContain("dia collab observe");
+    const cmd = String(reg[key!].cmd);
+    expect(cmd).toContain("collab observe");
+    // 有 dia 的机器写绝对路径（launchd PATH 不含 ~/.local/bin）；CI 无安装时退化为 'dia'
+    expect(cmd).toMatch(/collab observe$/);
     expect(ensureJob()).toBeNull(); // 第二次不再写
   });
 

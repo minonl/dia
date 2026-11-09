@@ -98,7 +98,7 @@ describe("运行时数据 .data 不进快照", () => {
     }));
     const add = run(["persona", "add", "--from", src2]);
     expect(add.status).toBe(0);
-    const slot = join(data, "personas", "y", "0.1.0");
+    const slot = join(data, "personas", "y", readdirSync(join(data, "personas", "y"))[0]);
     expect(existsSync(join(slot, ".data"))).toBe(false);
     // 运行时再往数据根写，不应让内容哈希漂移
     mkdirSync(join(slot, ".data", "observability"), { recursive: true });

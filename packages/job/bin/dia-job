@@ -51,8 +51,11 @@ json() { [ -n "$NODE_BIN" ] || { echo "dia-job: 找不到 node/bun（JSON 适配
 . "$SELF_DIR/../lib/config.sh"
 dia_job_load_config
 # 数据根：DIA_JOB_ROOT 优先；未显式设置时兼容旧 YAN_DATA_ROOT；最后才用新默认。
+DIA_JOB_ROOT_GIVEN="${DIA_JOB_ROOT:-}"
 DIA_JOB_ROOT="${DIA_JOB_ROOT:-${YAN_DATA_ROOT:-${XDG_DATA_HOME:-$HOME/.local/share}/dia-job}}"
-if [ ! -d "$DIA_JOB_ROOT" ]; then DIA_JOB_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/dia-job"; fi
+# ⚠️ 2026-11-09：此前「目录不存在 → 静默回退旧根」会让临时根/新机器的注册写进 ~/.local/share/dia-job，
+#    与 doctor/`dia job list` 读的根分叉（实测产生 split-brain）。改为建目录，失败即报错，绝不换根。
+mkdir -p "$DIA_JOB_ROOT/tasks" 2>/dev/null || { echo "dia-job: 无法创建 job 根 $DIA_JOB_ROOT（设 DIA_JOB_ROOT 或用可写目录）" >&2; exit 9; }
 YAN_DATA_ROOT="$DIA_JOB_ROOT"  # 内部兼容：旧函数/旧任务仍读这个变量
 TASKS_DIR="$DIA_JOB_ROOT/tasks"
 DIA_JOB_LABEL_PREFIX="${DIA_JOB_LABEL_PREFIX:-local.dia-job-}"
@@ -654,6 +657,7 @@ WRAP
 write_plist() {  # write_plist <name> <cmd> <interval|-> <calendar|-> <log> [<weekdays|- >]
   local name="$1" cmd="$2" interval="$3" calendar="$4" log="$5" weekdays="${6:--}"
   local f; f="$(plist_path "$name")"
+  local f_tmp="${f}.tmp.$$"
   mkdir -p "$(dirname "$f")" "$(dirname "$log")"
   {
     printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' \
@@ -685,8 +689,9 @@ write_plist() {  # write_plist <name> <cmd> <interval|-> <calendar|-> <log> [<we
     printf '  <key>StandardErrorPath</key><string>%s</string>\n' "$log"
     printf '  <key>EnvironmentVariables</key><dict><key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:%s/.bun/bin</string></dict>\n' "$HOME"
     printf '%s\n' '</dict></plist>'
-  } > "$f"
-  plutil -lint "$f" >/dev/null 2>&1 || { echo "  ✗ 生成的 plist 语法错误：$f" >&2; return 1; }
+  } > "$f_tmp"
+  plutil -lint "$f_tmp" >/dev/null 2>&1 || { rm -f "$f_tmp"; echo "  ✗ 生成的 plist 语法错误：$f" >&2; return 1; }
+  mv -f "$f_tmp" "$f"   # 原子落位：并发/中断不会留下半截 plist
   echo "$f"
 }
 
@@ -882,6 +887,14 @@ cmd_own_tasks() {  case "${1:-}" in
 
 cmd_install() {
   local name="${1:-}" cmd="" interval="-" calendar="-" weekdays="-" desc="" type="periodic" allow_unstable=0 takeover=0
+  # 临时根绝不允许注册真调度（测试/沙箱请设 DIA_JOB_NO_LAUNCHD=1 或 DIA_JOB_ALLOW_EPHEMERAL=1）
+  case "$DIA_JOB_ROOT" in
+    /tmp/*|/var/folders/*|/private/var/folders/*|/run/user/*|/dev/shm/*)
+      if [ -z "${DIA_JOB_ROOT_GIVEN:-}" ] && [ "${DIA_JOB_NO_LAUNCHD:-0}" != "1" ] && [ "${DIA_JOB_ALLOW_EPHEMERAL:-0}" != "1" ]; then
+        echo "  ✗ E_JOB_ROOT_EPHEMERAL: job 根在临时目录（$DIA_JOB_ROOT），拒绝注册真定时" >&2
+        return 9
+      fi ;;
+  esac
   shift || true
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -1056,8 +1069,21 @@ cmd_uninstall() {
   [ -f "$REG" ] && backend="$(json field "$REG" "$name" backend 2>/dev/null || true)"
   if [ "$PLATFORM" = macos ] || [ "$backend" = launchd ]; then
     local f; f="$(plist_path "$name")"
-    _launchd_off || launchctl bootout "gui/$UID_NUM/$(label_for "$name")" 2>/dev/null || true   # ⚠️ 守卫必须在**这一行**（先前误命中 install 的同名行 ⇒ uninstall 未隔离，实测踩到）
-    [ -f "$f" ] && rm -f "$f" && echo "  · 已删 plist"
+    # 归属校验（2026-11-09）：同名 label 的新旧根共用同一个 plist 路径 → 旧根 uninstall 会删掉新根刚装的 plist。
+    # 只有 ProgramArguments[1] 指向本根 tasks/ 时才允许下线并删除。
+    local _prog="" _own=0
+    if [ -f "$f" ]; then
+      _prog="$(plutil -extract ProgramArguments.1 raw -o - "$f" 2>/dev/null || true)"
+      case "$_prog" in "$YAN_DATA_ROOT"/tasks/*) _own=1 ;; esac
+    else
+      _own=1
+    fi
+    if [ "$_own" = 1 ]; then
+      _launchd_off || launchctl bootout "gui/$UID_NUM/$(label_for "$name")" 2>/dev/null || true   # ⚠️ 守卫必须在**这一行**（先前误命中 install 的同名行 ⇒ uninstall 未隔离，实测踩到）
+      [ -f "$f" ] && rm -f "$f" && echo "  · 已删 plist"
+    else
+      echo "  ! plist 属于其它 job 根（${_prog}），跳过下线/删除（避免误删新根注册）"
+    fi
   elif [ "$backend" = systemd ]; then
     [ "$DIA_JOB_NO_LAUNCHD" = 1 ] || systemd_remove "$name"
     [ "$DIA_JOB_NO_LAUNCHD" = 1 ] && echo "  · 已跳过 systemd 卸载（测试隔离）"

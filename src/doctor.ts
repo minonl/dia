@@ -177,6 +177,40 @@ function installShadowCheck(): Check {
 }
 
 /** bootstrap：内置能力是否跟随当前包版本（升级 dia 后提示刷新，不需要用户手装）。 */
+/** job.root：根一致性 + launchd 是否在跑旧根脚本（split-brain）+ 临时根。 */
+function jobRootCheck(): Check {
+  const name = "job.root";
+  const source = job.jobRootSource();
+  const cur = job.jobRootResolved();
+  const sandbox = Boolean(process.env.DIA_ROOT || process.env.DIA_DATA_DIR || process.env.DIA_HOME || process.env.DIA_JOB_ROOT);
+  if (job.isEphemeralPath(cur)) {
+    // 显式覆盖了数据根/任务根 = 测试或沙箱：不判红（写入门控已挡住真调度注册）
+    if (sandbox || process.env.DIA_JOB_NO_LAUNCHD === "1") return { name, status: "ok", detail: `沙箱/临时根 ${cur}（跳过一致性判定）` };
+    return { name, status: "fail", detail: `job 根在临时目录：${cur}（设 DIA_JOB_ROOT 到稳定目录）` };
+  }
+  const legacy = job.legacyJobRoot();
+  // split-brain：当前注册的任务，其 plist 却指向旧根脚本 → 注册与实跑分叉
+  try {
+    const tasks = JSON.parse(readFileSync(join(cur, "tasks", "registry.json"), "utf8")).tasks || {};
+    for (const [n, t] of Object.entries<any>(tasks)) {
+      const label = String(t?.label || `local.dia-job-${n}`);
+      const plist = join(homedir(), "Library", "LaunchAgents", `${label}.plist`);
+      if (!existsSync(plist)) continue;
+      const xml = readFileSync(plist, "utf8");
+      const m = xml.match(/<key>ProgramArguments<\/key><array><string>[^<]*<\/string><string>([^<]*)<\/string>/);
+      if (m && m[1].startsWith(join(legacy, "tasks") + "/")) {
+        return { name, status: "fail", detail: `launchd 正在跑旧根脚本（${n} → ${m[1]}）；修复：dia job migrate --from ${legacy}` };
+      }
+    }
+  } catch { /* 无 registry / 非 mac 忽略 */ }
+  let legacyCount = 0;
+  try { legacyCount = Object.keys(JSON.parse(readFileSync(join(legacy, "tasks", "registry.json"), "utf8")).tasks || {}).length; } catch { /* none */ }
+  if (legacyCount && resolve(legacy) !== resolve(cur)) {
+    return { name, status: "warn", detail: `旧 job 根仍有 ${legacyCount} 个注册：${legacy}（迁移：dia job migrate --from ${legacy} --dry-run）` };
+  }
+  return { name, status: "ok", detail: `根 ${cur}（source=${source}）` };
+}
+
 function bootstrapCheck(): Check {
   const stamp = defaultMsg.readStamp();
   const pkg = defaultMsg.pkgVersion();
@@ -358,6 +392,7 @@ export async function run(opts: { persona?: string } = {}): Promise<{
   });
   checks.push(installShadowCheck());
   checks.push(bootstrapCheck());
+  checks.push(jobRootCheck());
 
   const wt = join(install, "packages/wt/bin/dia-wt");
   checks.push({ name: "wt", status: existsSync(wt) ? "ok" : "warn", detail: existsSync(wt) ? wt : "dia wt 未安装（npm 包不完整？npm i -g @minonl/dia@latest 重装）" });

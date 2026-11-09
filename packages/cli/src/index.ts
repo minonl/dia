@@ -1580,7 +1580,18 @@ async function personaCli(argv: string[]): Promise<number> {
       return 31;
     }
   }
-  if (sub === "remove") {
+  if (sub === "gc") {
+      const keep = Number(flag(args, "--keep") || 1);
+      const dry = has(args, "--dry-run");
+      const r = kit.gc({ keep, dryRun: dry });
+      if (asJson) out(JSON.stringify({ ...r, dry_run: dry }));
+      else {
+        out(`${dry ? "[dry-run] " : ""}removed ${r.removed.length} · kept ${r.kept.length}`);
+        for (const x of r.removed) out(`  - ${x.id}@${x.version}`);
+      }
+      return 0;
+    }
+    if (sub === "remove") {
     const id = positional(args)[0];
     if (!id) { err("missing id"); return 2; }
     try {

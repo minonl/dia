@@ -464,6 +464,57 @@ export function installed(): { id: string; version: string; dir: string; tags: s
   return out;
 }
 
+/** 版本回收：每个 kit 保留最近 keep 个版本 + 所有 persona lock 引用到的版本 */
+export function gc(opts: { keep?: number; dryRun?: boolean } = {}): {
+  removed: { id: string; version: string }[];
+  kept: { id: string; version: string }[];
+} {
+  const keep = Math.max(1, opts.keep ?? 1);
+  const root = join(dataDir(), "kits");
+  const removed: { id: string; version: string }[] = [];
+  const kept: { id: string; version: string }[] = [];
+  if (!existsSync(root)) return { removed, kept };
+
+  // persona 引用（兼容 <persona>/<ver>/dia.lock 与 <persona>/versions/<ver>/dia.lock）
+  const refs = new Set<string>();
+  const pdir = join(dataDir(), "personas");
+  if (existsSync(pdir)) {
+    const locksOf = (verRoot: string) => {
+      if (!existsSync(verRoot)) return;
+      for (const v of readdirSync(verRoot)) {
+        const lock = join(verRoot, v, "dia.lock");
+        if (!existsSync(lock)) continue;
+        try {
+          const l = JSON.parse(readFileSync(lock, "utf8"));
+          for (const k of l.kits ?? []) refs.add(`${k.id}@${k.version}`);
+        } catch { /* 坏 lock 不阻塞回收 */ }
+      }
+    };
+    for (const p of readdirSync(pdir)) {
+      const dir = join(pdir, p);
+      if (!statSync(dir).isDirectory()) continue;
+      locksOf(dir);
+      locksOf(join(dir, "versions"));
+    }
+  }
+
+  for (const e of readdirSync(root, { withFileTypes: true })) {
+    if (!e.isDirectory() || e.name.startsWith(".")) continue;
+    const versions = versionDirs(join(root, e.name));
+    const keepSet = new Set([...versions.slice(-keep), ...versions.filter((v) => refs.has(`${e.name}@${v}`))]);
+    for (const v of versions) {
+      if (keepSet.has(v)) { kept.push({ id: e.name, version: v }); continue; }
+      removed.push({ id: e.name, version: v });
+      if (!opts.dryRun) rmSync(join(root, e.name, v), { recursive: true, force: true });
+    }
+    if (!opts.dryRun) {
+      const left = versionDirs(join(root, e.name));
+      if (!left.length) rmSync(join(root, e.name), { recursive: true, force: true });
+    }
+  }
+  return { removed, kept };
+}
+
 export function list(): { id: string; versions: string[]; tags: string[] }[] {
   const root = join(dataDir(), "kits");
   if (!existsSync(root)) return [];

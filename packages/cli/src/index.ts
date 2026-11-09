@@ -1125,6 +1125,10 @@ async function collabCli(argv: string[]): Promise<number> {
       }
       const kitInfo = sub === "enable" ? defaultMsg.ensure(personaId, { force: true }) : null;
       const jobWarn = sub === "enable" ? observer.ensureJob() : null;
+      // enable 顺手跑一次 tick：board.interval_s 立即对齐 job（否则要等下一个调度周期，doctor 会先报「不一致」）
+      if (sub === "enable" && !jobWarn) {
+        try { observer.observe({}); } catch (e: any) { err(`warn: 观察器首刷失败（${e?.message || e}）；稍后 dia collab observe`); }
+      }
       if (sub === "disable" && !personaId) observer.removeJob();
       out(asJson ? JSON.stringify({ ...c, removed, kit: kitInfo, job: jobWarn ? { ok: false, reason: jobWarn } : { ok: true } }, null, 1)
         : `${sub}d: enabled=${c.enabled}${c.disabled_personas.length ? ` disabled_personas=${c.disabled_personas.join(",")}` : ""}` +

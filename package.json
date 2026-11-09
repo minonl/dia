@@ -1,8 +1,8 @@
 {
   "name": "@minonl/dia",
-  "version": "0.0.18",
+  "version": "0.0.19",
   "type": "module",
-  "description": "dia (\u55f2) \u2014 lightweight agent framework: knowledge index, audit, session ingest",
+  "description": "dia (嗲) — lightweight agent framework: knowledge index, audit, session ingest",
   "bin": {
     "dia": "bin/dia.js"
   },

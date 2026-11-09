@@ -79,8 +79,14 @@ dia version && dia doctor
 - 依赖：Node ≥ 24 或 Bun ≥ 1.2（见 `package.json` 的 `engines`）。
 - 安装只落盘：**不启停服务、不改宿主默认 agent**。
 - **升级只有一条路**：`npm i -g @minonl/dia@latest`（`dia update` 会走这条）。
-- `bash install.sh` 仅用于**开发 / 离线**：它把包内容拷到 `~/.local/share/dia` 并改 `~/.local/bin/dia`；
-  当那条链接已属于包管理器安装时会被守卫拒绝（exit 3，零改动）。细节见 [install-guard-design.md](docs/install-guard-design.md)。
+- **装完即用**：npm 全局安装会自动跑 `postinstall`（装配内置能力 `dia-msg`）。
+  若用了 `--ignore-scripts` / `npm config set ignore-scripts true`，补一条即可：
+
+  ```bash
+  dia postinstall        # 幂等；等价于 dia collab enable，但不会改你的启用开关
+  ```
+
+  `dia doctor` 的 `bootstrap` 项会显示是否已装配。
 - 内置能力（`dia-msg`）无需手动安装：首次 `persona add/render` 或 `dia collab enable` 自动装配，`dia doctor` 的 `bootstrap` 项会显示是否跟随包版本。
 - 装 persona（示例 dabo）：`dia persona add dabo --from git+https://github.com/minonl/dabo-agent.git`
 - 卸载：`dia persona remove dabo`（只删带 `.dia-managed` 的产物）。

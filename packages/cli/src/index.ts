@@ -27,7 +27,7 @@ import * as envx from "../../../src/env.ts";
 import * as bw from "../../../src/bw.ts";
 import * as deps from "../../../src/deps.ts";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { mkdirSync, openSync } from "node:fs";
+import { cpSync, mkdirSync, openSync, renameSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -966,6 +966,34 @@ async function claimsCli(argv: string[]): Promise<number> {
   }
   err("usage: dia claim|claims|unclaim ...");
   return 2;
+}
+
+/** 数据根迁移（取代 install.sh --migrate）：只搬数据子目录，合并同名目录，失败计数退 1。 */
+function migrateCli(argv: string[]): number {
+  const sub = positional(argv)[0];
+  if (sub !== "data") { err("usage: dia migrate data [--from DIR] [--dry-run]"); return 2; }
+  const from = flag(argv, "--from") || join(homedir(), ".local", "share", "dia");
+  const to = paths.diaHome();
+  const dry = has(argv, "--dry-run");
+  const subs = ["personas", "msg", "agents", "state", "cache", "job", "runs", "audit", "tasks", "ingest", "runtime", "eval", "backups"];
+  if (!existsSync(from)) { out(`无需迁移：${from} 不存在`); return 0; }
+  let moved = 0, failed = 0;
+  for (const d of subs) {
+    const src = join(from, d);
+    if (!existsSync(src)) continue;
+    const dest = join(to, d);
+    if (existsSync(dest)) {
+      if (dry) { out(`[dry-run] merge ${src} → ${dest}`); moved++; continue; }
+      try { cpSync(src, dest, { recursive: true, force: true }); rmSync(src, { recursive: true, force: true }); moved++; }
+      catch (e: any) { failed++; err(`! 合并失败 ${src} → ${dest}：${e?.message || e}`); }
+    } else {
+      if (dry) { out(`[dry-run] mv ${src} → ${dest}`); moved++; continue; }
+      try { mkdirSync(to, { recursive: true }); renameSync(src, dest); moved++; }
+      catch (e: any) { failed++; err(`! 迁移失败 ${src}：${e?.message || e}`); }
+    }
+  }
+  out(`migrate data：处理 ${moved} 个子目录，失败 ${failed}（${from} → ${to}）`);
+  return failed ? 1 : 0;
 }
 
 async function collabCli(argv: string[]): Promise<number> {
@@ -1914,6 +1942,18 @@ export async function main(rawArgv: string[]): Promise<number> {
   if (cmd === "graph") return graphCli(argv.slice(1));
   if (cmd === "msg") return msgCli(argv.slice(1));
   if (cmd === "claim" || cmd === "claims" || cmd === "unclaim") return claimsCli(argv);
+  if (cmd === "postinstall") {
+    // npm/bun 全局安装后自动跑一次（见 scripts/postinstall.mjs）；也可手动补跑
+    const quiet = has(argv.slice(1), "--quiet");
+    try {
+      const r = defaultMsg.ensure(undefined, { force: true });
+      if (!quiet) out(r.ok ? `postinstall: kit=${r.kit}` : `postinstall: skipped（${r.reason}）`);
+    } catch (e: any) {
+      if (!quiet) err(`postinstall: 跳过（${e?.message || e}）`);
+    }
+    return 0; // 绝不因为自举失败让 npm install 失败
+  }
+  if (cmd === "migrate") return migrateCli(argv.slice(1));
   if (cmd === "collab") return collabCli(argv.slice(1));
   if (["whoami", "in", "out", "ack", "reply", "close", "show"].includes(cmd)) return collabCli(argv);
   if (cmd === "agents") return agentsCli(argv.slice(1));

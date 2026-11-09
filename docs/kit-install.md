@@ -30,7 +30,9 @@
 
 结论：**persona 装完是"哑"的**；kit 就是把这些补上，且要能 `verify` / `remove`。
 
-> **install.sh 分发守卫（2026-11-06）**：`~/.local/bin/dia` 当前属于包管理器全局安装
+> **2026-11-09 更新**：`install.sh` 已删除，安装/升级只走 `npm i -g @minonl/dia`；内置 `dia-msg` 由 `postinstall`（或 `dia postinstall`）自动装配。以下守卫描述仅作历史记录。
+>
+> **install.sh 分发守卫（2026-11-06，已退役）**：`~/.local/bin/dia` 当前属于包管理器全局安装
 > （npm/bun 的 `node_modules/@minonl/dia` 软链、pnpm/yarn 的 shim 脚本、volta 的 bin）且正是 `command -v dia`
 > 命中的那条时，`install.sh` **exit 3 且不改动任何文件**（避免脚本安装抢链接后 kit 去旧目录找、
 > `missing-kit` / `E_KIT_EMPTY`）。逃生舱：`DIA_ALLOW_SCRIPT_INSTALL=1`、`--dry-run`，

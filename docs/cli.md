@@ -97,6 +97,8 @@ dia persona remove dabo
 | `persona create / render` | **已实现** | `create` 出骨架；`render --check` 只比对不写盘（跳过宿主自写文件，如 dsh `cordis.yml` / `package.json` / 锁文件）；`render` 只覆盖 persona 产物，不整树重建宿主 profile |
 | `kit add / list / verify / remove` | **已实现** | 复制/软链/记账；冲突写盘前全量检查（`E_CONFLICT`）；**空清单/空内容拒绝**（`E_MANIFEST`/`E_KIT_EMPTY`）；`src/kit.ts` + `tests/kit.test.ts` |
 | `env list / check / run` | **已实现** | 白名单注入、不回显值、`--redact`、密钥不进 argv；清单由 persona 声明（`src/env.ts` + `tests/env.test.ts`） |
+| `postinstall` | **已实现** | 全局安装后自举：装配内置 `dia-msg` kit + 写自举戳；幂等、永不失败（供 npm `postinstall` 与 `--ignore-scripts` 用户手动补跑） |
+| `migrate data [--from DIR] [--dry-run]` | **已实现** | 旧数据根 → `~/.dia`：只搬数据子目录，目标已存在则合并，失败计数退 1（取代已删除的 `install.sh --migrate`） |
 | `update [--check]` | **已实现** | 查 npm `dist-tags`；`--check` 有新版 exit 1、领先/最新 exit 0；**按安装方式分流**：npm 全局包 → `npm i -g`；脚本安装 → **统一引导切到 npm**（`npm i -g` + 回链），`bash install.sh` 只作为「开发/离线通道」备选 |
 | `deps list / record` | **已实现** | `list` = 登记 + 实测派生视图（required 缺失 exit 2）；`record` = 只追加一行（`--id/--kind/--version` 必填）；`src/deps.ts` + `tests/deps*.test.ts` |
 | `doctor` | **已实现** | 组合自检：persona verify / **persona.render（宿主产物只读漂移，warn + 修复命令）** / default_agent / kit（**只查该 persona 引用的**，孤儿 kit 不拖红）/ knowledge（**索引新鲜度三态**，过期给重建命令）/ dsh preset / **deps 登记校验** / **platform 版本（读 `docs/platforms/registry.json`）** / wt / **install_shadow（遮蔽提示，warn）** / **bootstrap（内置能力是否跟随包版本）**（脚本安装 vs 包管理器全局安装互相遮挡：双向一致判定，不一致 fail + 一行修复命令；shim 形态按内容识别）**；exit 0/1/2。不指定 persona 且装了多个 → **逐个自检**（条目加 `<id>.` 前缀），不再整体 `E_SCOPE` |

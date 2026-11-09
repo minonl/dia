@@ -1,6 +1,6 @@
 # 关系图界面：派生量上屏（M1 UI）
 
-> 状态：设计定稿（2026-11-06）｜实现：`src/graph-html/*`（待接）｜上游：`graph-prio-dag.md`
+> 状态：已实现（2026-11-09）｜实现：`src/graph-html/{render,template}`｜上游：`graph-prio-dag.md`
 > 原则：**排序只在 TS 算一次**（`src/plan.ts`），前端只渲染；导出件仍无网络。
 
 ## 1. 目标 / 非目标

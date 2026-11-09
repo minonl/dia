@@ -58,6 +58,14 @@
   .lane-rail{position:absolute;left:0;top:0;bottom:0;width:110px;z-index:6;pointer-events:none;background:linear-gradient(90deg,var(--panel) 86%,transparent)}
   svg.edges{position:absolute;inset:0;pointer-events:none;overflow:visible}
   .node{position:absolute;width:190px;border:1px solid var(--line);border-left:1px solid var(--line);border-radius:10px;background:var(--panel);padding:8px 10px;box-shadow:var(--shadow);cursor:pointer}
+  .node.critical{outline:2px solid var(--violet);outline-offset:1px}
+  .badges{display:flex;gap:4px;flex-wrap:wrap;margin-top:4px}
+  .badge{font-size:10px;border-radius:999px;padding:1px 6px;background:var(--line);color:var(--muted);white-space:nowrap}
+  .badge.inh{background:color-mix(in srgb,var(--blue) 20%,transparent);color:var(--blue)}
+  .badge.lock{color:var(--red)}
+  .badge.slice{color:var(--violet)}
+  .badge.rank{color:var(--ink)}
+  .efftag{color:var(--blue);font-size:11px}
   .node.path{border-left-color:var(--violet)}
   .node.session{border-left-color:var(--cyan)}
   .node b{display:block;font-size:13px;line-height:1.3;margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -187,6 +195,10 @@
           <button class="on" data-m="simple">简约</button>
           <button data-m="detail">详细</button>
         </div>
+        <div class="seg" id="pl">
+          <button class="on" data-pl="eff">有效</button>
+          <button data-pl="declared">声明</button>
+        </div>
         <div class="search" id="search-box">
           <span id="tokens" style="display:contents"></span>
           <input id="q" type="search" placeholder="搜索任务，选中后变成 tag" autocomplete="off">
@@ -250,6 +262,10 @@
       </div>
     </div>
     <div class="panel">
+      <div class="side-title"><h2>下一步</h2><span id="next-policy">kahn-v1</span></div>
+      <div class="list" id="next-list"></div>
+    </div>
+    <div class="panel">
       <div class="side-title"><h2>需要人</h2><span>attention</span></div>
       <div class="attention" id="attention-list"></div>
     </div>
@@ -274,12 +290,29 @@
 const payload=(()=>{ try{ const el=document.getElementById('dia-graph'); return JSON.parse(el?el.textContent:'{}')||{}; }catch{ return {}; } })();
 const TODAY=payload.today||'1970-01-01';
 const STATUSES=new Set(['todo','doing','review','blocked','done','accepted','dropped','awaiting_acceptance','rejected','escalated']);
+const normPrio=v=>{ const s=String(v||'').toUpperCase(); return /^P\d{1,2}$/.test(s)&&s!=='P99'?s:'P?'; };
 const tasks=(payload.tasks||[]).map(t=>{
   const status=STATUSES.has(t.status)?t.status:'todo';
   const progress=Number.isFinite(t.progress)?Math.max(0,Math.min(100,Math.round(t.progress))):0;
   return {
     id:String(t.id), label:String(t.label||t.id), status,
-    prio:String(t.prio||'P?'), progress, derived:!!t.derived,
+    prio:normPrio(t.eff||t.prio),
+    declared:normPrio(t.declared),
+    eff:normPrio(t.eff||t.declared||t.prio),
+    inherited:!!t.inherited,
+    source:t.source&&t.source.id?{id:String(t.source.id),declared:String(t.source.declared||''),distance:Number(t.source.distance||0)}:null,
+    rank:Number.isFinite(t.rank)?t.rank:null,
+    rank_key:Array.isArray(t.rank_key)?t.rank_key:null,
+    rank_reason:t.rank_reason?String(t.rank_reason):null,
+    critical:!!t.critical,
+    ready:t.ready!==false,
+    startable:!!t.startable,
+    blocked_by:Array.isArray(t.blocked_by)?t.blocked_by.map(String):[],
+    released_by:Array.isArray(t.released_by)?t.released_by.map(String):[],
+    dangling:Array.isArray(t.dangling)?t.dangling.map(String):[],
+    unblocks:Number.isFinite(t.unblocks)?t.unblocks:0,
+    slice:!!t.slice,
+    progress, derived:!!t.derived,
     start:Number.isFinite(t.start)?t.start:null,
     end:Number.isFinite(t.end)?t.end:null,
     owner:t.owner?String(t.owner):null,
@@ -289,7 +322,7 @@ const tasks=(payload.tasks||[]).map(t=>{
 });
 const taskEdges=(payload.edges||[]).filter(e=>e&&e.kind==='depends_on').map(e=>({from:String(e.from),to:String(e.to),kind:'depends_on'}));
 const truncated=payload.truncated||null;
-const state={view:'graph', layout:'priority', mode:'simple', zoom:28, window:7, q:'', sel:[], fd:2, from:null, to:null};
+const state={view:'graph', layout:'priority', mode:'simple', zoom:28, window:7, q:'', sel:[], fd:2, pl:'eff', from:null, to:null};
 const canvas=document.getElementById('canvas'), layer=document.getElementById('canvas-scroll'), rail=document.getElementById('lane-rail'), svg=document.getElementById('edges');
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const stIcon={doing:'▶',blocked:'⏸',review:'◐',done:'✓',accepted:'✓',todo:'○',dropped:'⨯',rejected:'✗',escalated:'▲',awaiting_acceptance:'…'};
@@ -331,6 +364,7 @@ function syncStats(){
   st('stat-done').textContent=String(list.filter(t=>t.status==='done'||t.status==='accepted').length);
   if(st('stat-claims')) st('stat-claims').textContent=String((payload.claims||[]).length);
   renderAttention(list);
+  renderNext();
   const tp=document.getElementById('trunc-pill');
   if(tp){ if(truncated&&truncated.shown<truncated.total){ tp.style.display=''; tp.textContent='已截断 '+truncated.shown+' / '+truncated.total+'（--all 全量）'; } else tp.style.display='none'; }
 }
@@ -342,6 +376,14 @@ function renderAttention(list){
   box.innerHTML=rows.length?rows.map(r=>'<div class="row" data-task="'+esc(r.t.id)+'"><span class="tag'+r.cls+'">'+r.tag+'</span><div><b>'+esc(r.t.label)+'</b><br><span class="k">'+esc(r.t.id)+' · '+esc(r.note)+'</span><div class="quick"><button class="primary" onclick="event.stopPropagation();openDrawer(\''+esc(r.t.id)+'\',\'intervene\')">命令</button><button onclick="event.stopPropagation();openDrawer(\''+esc(r.t.id)+'\',\'task\')">查看</button></div></div></div>').join('')
     :'<p class="k" style="padding:8px 0">当前没有阻塞或待评审任务。</p>';
   box.querySelectorAll('.row[data-task]').forEach(el=>el.onclick=()=>openDrawer(el.dataset.task,'task'));
+}
+function renderNext(){
+  const box=document.getElementById('next-list'); if(!box) return;
+  const items=(payload.next&&payload.next.items)||[];
+  if(!items.length){ box.innerHTML='<p class="k" style="padding:8px 0">没有可开工任务。</p>'; return; }
+  const cut=(v,n)=>{ const x=String(v||''); return x.length>n?x.slice(0,n-1)+'…':x; };
+  box.innerHTML=items.map(it=>'<div class="item" data-task="'+esc(it.id)+'"><span class="k">#'+esc(String(it.rank??'-'))+' <b class="efftag">'+esc(normPrio(it.eff))+'</b> '+esc(cut(it.title,48))+'<br><span class="k">'+esc(cut(it.why||'',40))+'</span></span><span class="k">'+esc(it.status)+'</span></div>').join('');
+  box.querySelectorAll('[data-task]').forEach(el=>el.onclick=()=>openDrawer(el.dataset.task,'task'));
 }
 function renderEmpty(){
   if(tasks.length) return;
@@ -355,7 +397,7 @@ function updateHint(){
     h.textContent='显示 '+n+' 个任务 · '+(state.fd==='all'?'全链路':state.fd+' 层');
     return;
   }
-  h.textContent='显示 '+n+' / '+tasks.length+' 个任务 · '+(state.layout==='dep'?'从左到右 = 依赖深度':'按优先级分行（P0 最高）');
+  h.textContent='显示 '+n+' / '+tasks.length+' 个任务 · '+(state.layout==='dep'?'从左到右 = 依赖深度':('按'+(state.pl==='declared'?'声明':'有效')+'优先级分行'));
 }
 function depths(){
   const list=visibleTasks();
@@ -369,8 +411,9 @@ function depths(){
   };
   list.forEach(depth); return memo;
 }
+const laneOf=t=>state.pl==='declared'?(t.declared||'P?'):(t.eff||'P?');
 function levels(){
-  return [...new Set(visibleTasks().map(t=>t.prio))].sort((a,b)=>{
+  return [...new Set(visibleTasks().map(laneOf))].sort((a,b)=>{
     const na=parseInt(String(a).replace(/^P/i,''),10), nb=parseInt(String(b).replace(/^P/i,''),10);
     return (Number.isFinite(na)?na:99)-(Number.isFinite(nb)?nb:99)||String(a).localeCompare(String(b));
   });
@@ -380,7 +423,7 @@ function rowsFor(){
   const gap=state.mode==='detail'?230:145;
   const h=state.mode==='detail'?205:110;
   return levels().map((prio,i)=>{
-    const rowTasks=list.filter(t=>t.prio===prio).sort((a,b)=>(d.get(a.id)-d.get(b.id))||a.label.localeCompare(b.label));
+    const rowTasks=list.filter(t=>laneOf(t)===prio).sort((a,b)=>(a.rank??1e9)-(b.rank??1e9)||(d.get(a.id)-d.get(b.id))||a.label.localeCompare(b.label));
     return {prio,y:36+i*gap,h,tasks:rowTasks};
   }).filter(r=>r.tasks.length);
 }
@@ -415,10 +458,17 @@ function card(t,x,y,showPrio=false){
     const kind=e.kind==='depends_on'?(outgoing?'depends_on':'depended_by'):e.kind;
     return '<div class="meta" style="margin-top:2px">↳ '+esc(kind)+': '+esc(other)+'</div>';
   }).slice(0,4).join('');
-  const badge=showPrio?'<span class="prio '+esc(t.prio.toLowerCase())+'">'+esc(t.prio)+'</span>':'';
+  const badge=showPrio?'<span class="prio '+esc(t.eff.toLowerCase())+'">'+esc(t.eff)+'</span>':'';
+  const bits=[];
+  if(t.inherited) bits.push('<span class="badge inh" title="有效 '+esc(t.eff)+' ← '+esc(t.source?t.source.declared+'@'+t.source.id:'')+'（'+esc(String(t.source?t.source.distance:0))+' 跳）">↑'+esc(t.eff)+'</span>');
+  if(t.blocked_by.length) bits.push('<span class="badge lock" title="等 '+esc(t.blocked_by.join(', '))+'">🔒'+t.blocked_by.length+'</span>');
+  if(t.slice) bits.push('<span class="badge slice">slice</span>');
+  if(t.rank!=null) bits.push('<span class="badge rank">#'+t.rank+'</span>');
+  if(t.critical) el.classList.add('critical');
   el.innerHTML='<b>'+esc(t.label)+badge+'</b>'+
     '<div class="meta">'+esc(t.id)+' · <span class="st '+esc(t.status)+'">'+stIconOf(t.status)+' '+esc(t.status)+'</span> · '+t.progress+'%</div>'+
     '<div class="progress"><i class="'+esc(t.status)+'" style="width:'+t.progress+'%"></i></div>'+
+    (bits.length?'<div class="badges">'+bits.join('')+'</div>':'')+
     (state.mode==='detail'?'<div class="meta" style="margin-top:5px">'+(t.owner?'@'+esc(t.owner):'unassigned')+' · dep '+t.deps.length+'</div>'+rel:'');
   el.dataset.id=t.id;
   el.onclick=()=>{ clearTimeout(clickTimer); clickTimer=setTimeout(()=>openDrawer(t.id,'task'),180); };
@@ -441,12 +491,13 @@ function drawGraph(){
   const maxY=rows.length?Math.max(...rows.map(r=>r.y+r.h))+40:600;
   const bandH=state.mode==='detail'?230:145;
   rows.forEach((r,i)=>{
-    const g=document.createElement('div'); g.className='pgroup '+r.prio.toLowerCase();
+    const laneClass=String(r.prio).toLowerCase().replace(/[^a-z0-9]/g,'x');
+    const g=document.createElement('div'); g.className='pgroup '+laneClass;
     g.style.top=(r.y-12)+'px'; g.style.width=maxX+'px'; g.style.height=bandH+'px';
     const alpha=Math.max(0.02, 0.075-i*0.012);
     g.style.background='color-mix(in srgb, var(--blue) '+Math.round(alpha*100)+'%, transparent)';
     layer.appendChild(g);
-    const label=document.createElement('div'); label.className='plane-label '+r.prio.toLowerCase();
+    const label=document.createElement('div'); label.className='plane-label '+laneClass;
     label.dataset.y=String(r.y-12+bandH/2); label.style.top=(r.y-12+bandH/2-layer.scrollTop)+'px';
     const meta=r.prio==='P0'?['var(--red)','紧急']:r.prio==='P1'?['var(--amber)','高']:r.prio==='P?'?['var(--muted)','未排期']:['var(--muted)','常规'];
     label.style.color=meta[0];
@@ -476,12 +527,18 @@ function relations(t){
   }).join('') || '<p class="k">无边</p>';
 }
 function taskHtml(t){
+  const wait=(t.blocked_by||[]).map(id=>{const o=tasks.find(x=>x.id===id); return id+(o?'('+o.status+')':'(missing)');}).join(', ')||'-';
+  const src=t.inherited&&t.source?('有效 '+t.eff+' ← '+t.source.declared+'@'+t.source.id+'（'+t.source.distance+' 跳）'):('声明 '+t.declared);
+  const rk=(t.rank_key||[]).map(v=>String(v)).join(' / ')||'-';
   return '<div class="kv"><div class="k">status</div><div>'+esc(t.status)+'</div>'+
-    '<div class="k">priority</div><div>'+esc(t.prio)+'</div>'+
+    '<div class="k">优先级</div><div>'+esc(src)+'<br><span class="k">声明 '+esc(t.declared)+' · 有效 '+esc(t.eff)+'</span></div>'+
     '<div class="k">owner</div><div>'+esc(t.owner||'-')+'</div>'+
     '<div class="k">start</div><div>'+(t.start===null?'-（按创建时间）':esc(isoDate(t.start)))+'</div>'+
     '<div class="k">due</div><div>'+(Number.isFinite(t.end)?esc(isoDate(t.end)):'开放')+'</div>'+
     '<div class="k">progress</div><div>'+t.progress+'%'+(t.derived?'（估算）':'')+'</div>'+
+    '<div class="k">等谁</div><div>'+esc(wait)+'</div>'+
+    '<div class="k">解锁谁</div><div>'+esc(String(t.unblocks))+' 个下游'+(t.critical?' · 关键闭包':'')+'</div>'+
+    '<div class="k">为什么这个序</div><div>#'+esc(String(t.rank??'-'))+' · '+esc(t.rank_reason||'-')+'<br><span class="k">key '+esc(rk)+'</span></div>'+
     '<div class="k">deps</div><div>'+esc(t.deps.join(', ')||'-')+'</div>'+
     '<div class="k">touches</div><div>'+esc(t.touches.join(', ')||'-')+'</div></div>'+
     '<h4>关联</h4><div class="rel-list">'+relations(t)+'</div>';
@@ -679,12 +736,13 @@ function readRoute(){
   const win=winRaw!==null?Math.max(0,parseInt(winRaw,10)||0):(rangeRaw?Math.max(0,parseInt(rangeRaw,10)||0):7);
   const fdRaw=params.get('fd');
   const fd=fdRaw==='all'?'all':Math.min(9,Math.max(1,parseInt(fdRaw||'2',10)||2));
-  return {view:(path==='timeline'||params.get('view')==='timeline')?'time':'graph', layout:params.get('layout')==='dep'?'dep':'priority', mode:params.get('mode')==='detail'?'detail':'simple', range, zoom, sx, window:win, q:params.get('q')||'', sel:(params.get('sel')||params.get('focus')||'').split(',').map(x=>x.trim()).filter(x=>x&&tasks.some(t=>t.id===x)), fd, from:toOff(fromRaw), to:toOff(toRaw), task:params.get('task'), tab:params.get('tab')==='intervene'?'intervene':'task'};
+  return {view:(path==='timeline'||params.get('view')==='timeline')?'time':'graph', layout:params.get('layout')==='dep'?'dep':'priority', mode:params.get('mode')==='detail'?'detail':'simple', range, zoom, sx, window:win, pl:params.get('pl')==='declared'?'declared':'eff', q:params.get('q')||'', sel:(params.get('sel')||params.get('focus')||'').split(',').map(x=>x.trim()).filter(x=>x&&tasks.some(t=>t.id===x)), fd, from:toOff(fromRaw), to:toOff(toRaw), task:params.get('task'), tab:params.get('tab')==='intervene'?'intervene':'task'};
 }
 function routeString(view,mode,range,zoom,from,to){
   const p=view==='time'?'timeline':'graph'; const qs=new URLSearchParams();
   if(view==='graph'&&mode==='detail') qs.set('mode','detail');
   if(view==='graph'&&state.layout==='dep') qs.set('layout','dep');
+  if(view==='graph'&&state.pl==='declared') qs.set('pl','declared');
   if(view==='graph'){
     if(state.window!==7) qs.set('w',String(state.window));
     if(state.q&&state.q.trim()) qs.set('q',state.q.trim());
@@ -700,10 +758,11 @@ function routeString(view,mode,range,zoom,from,to){
 function applyRoute(){
   const stampEl=document.getElementById('updated');
   if(stampEl) stampEl.textContent='快照 '+(payload.generated_at||'-');
-  const r=readRoute(); state.view=r.view; state.layout=r.layout; state.mode=r.mode; state.range=r.range; state.zoom=r.zoom; state.sx=r.sx||0; state.window=r.window; state.q=r.q; state.sel=r.sel; state.fd=r.fd; state.from=r.from; state.to=r.to;
+  const r=readRoute(); state.view=r.view; state.layout=r.layout; state.mode=r.mode; state.range=r.range; state.zoom=r.zoom; state.sx=r.sx||0; state.window=r.window; state.q=r.q; state.sel=r.sel; state.fd=r.fd; state.pl=r.pl; state.from=r.from; state.to=r.to;
   document.querySelectorAll('#tabs button').forEach(x=>x.classList.toggle('on',x.dataset.v===r.view));
   document.querySelectorAll('#mode button').forEach(x=>x.classList.toggle('on',x.dataset.m===r.mode));
   document.querySelectorAll('#layout button').forEach(x=>x.classList.toggle('on',x.dataset.l===r.layout));
+  document.querySelectorAll('#pl button').forEach(x=>x.classList.toggle('on',x.dataset.pl===r.pl));
   document.getElementById('view-graph').style.display=r.view==='graph'?'':'none';
   document.getElementById('view-time').style.display=r.view==='time'?'':'none';
   document.getElementById('graph-tools').style.display=r.view==='graph'?'flex':'none';
@@ -754,6 +813,7 @@ if(fdSel) fdSel.onchange=()=>{ state.fd=fdSel.value==='all'?'all':Number(fdSel.v
 const fxBtn=document.getElementById('focus-exit');
 if(fxBtn) fxBtn.onclick=()=>{ state.sel=[]; go(state.view,state.mode,state.range,state.zoom); };
 document.querySelectorAll('#mode button').forEach(b=>b.onclick=()=>go(state.view,b.dataset.m,state.range,state.zoom));
+document.querySelectorAll('#pl button').forEach(b=>b.onclick=()=>{ state.pl=b.dataset.pl; go(state.view,state.mode,state.range,state.zoom); });
 document.querySelectorAll('#zoom button').forEach(b=>b.onclick=()=>{ const z=b.dataset.z==='+'?Math.min(84,state.zoom+8):b.dataset.z==='-'?Math.max(14,state.zoom-8):28; go('time',state.mode,state.range,z); });
 layer.addEventListener('scroll',syncLaneLabels,{passive:true});
 const tlScroller=document.getElementById('tl-scroll');

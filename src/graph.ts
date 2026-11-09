@@ -41,6 +41,8 @@ export interface GraphNode {
   depth?: number;
   unblocks?: number;
   rank?: number | null;
+  rank_key?: (string | number)[];
+  rank_reason?: string;
   split_from?: string;
   split_children?: string[];
   slice?: boolean;
@@ -130,6 +132,8 @@ export function build(opts: { task?: string } = {}): Graph {
       depth: d.depth,
       unblocks: d.unblocks,
       rank: d.rank,
+      ...(d.rank_key ? { rank_key: d.rank_key } : {}),
+      ...(d.rank_reason ? { rank_reason: d.rank_reason } : {}),
       ...(d.split_from ? { split_from: d.split_from } : {}),
       ...(d.split_children ? { split_children: d.split_children } : {}),
       ...(d.slice ? { slice: true } : {}),

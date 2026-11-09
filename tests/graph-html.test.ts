@@ -14,7 +14,8 @@ describe("graph-html 单文件导出", () => {
     expect(payload.today).toBe("2026-11-06");
     expect(payload.tasks.length).toBe(2);
     const a = payload.tasks.find((t) => t.id === "t-fix-a")!;
-    expect(a.prio).toBe("P1");
+    expect(a.declared).toBe("P1");
+    expect(a.eff).toBe("P1");
     expect(a.start).toBe(dayDiff("2026-11-06", "2026-11-01"));
     expect(a.end).toBe(dayDiff("2026-11-06", "2026-11-08"));
     expect(a.progress).toBe(40);
@@ -87,5 +88,36 @@ describe("graph-html 单文件导出", () => {
     expect(tpl).not.toMatch(/https?:\/\//i);
     expect(tpl).not.toMatch(/\bfetch\s*\(/);
     expect(tpl).not.toMatch(/node:http/);
+  });
+});
+
+describe("graph-html 派生量（D1）", () => {
+  const g: any = {
+    schema: 1,
+    capabilities: ["prio", "timeline", "progress", "eff-prio", "ready", "rank", "split"],
+    ranking: { policy: "kahn-v1" },
+    nodes: [
+      { id: "task:t-a", kind: "task", label: "上游", status: "todo", prio: "P3", eff_prio: "P0", prio_inherited: true, prio_source: { id: "t-b", declared: "P0", distance: 1 }, rank: 1, rank_key: [0, "9999-12-31", 1, 1, -1, 0, "2026-11-01", "t-a"], rank_reason: "eff=P0 · 解锁1", critical: true, ready: true, startable: true, blocked_by: [], released_by: [], dangling_deps: [], depth: 0, unblocks: 1, deps: [], touches: [], progress: 0, progress_derived: true, created_at: "2026-11-01T00:00:00Z" },
+      { id: "task:t-b", kind: "task", label: "下游", status: "todo", prio: "P0", eff_prio: "P0", prio_inherited: false, rank: 2, rank_key: [0, "9999-12-31", 0, 1, 0, 1, "2026-11-01", "t-b"], rank_reason: "eff=P0 · 关键闭包", critical: false, ready: false, startable: false, blocked_by: ["t-a"], released_by: [], dangling_deps: [], depth: 1, unblocks: 0, deps: ["t-a"], touches: [], progress: 0, progress_derived: true, created_at: "2026-11-01T00:00:00Z" },
+    ],
+    edges: [{ from: "task:t-b", to: "task:t-a", kind: "depends_on", source: "declared" }],
+    cycles: [],
+  };
+  test("payload 带 eff/rank/next，且 next 与 rank 一致", () => {
+    const p = buildPayload(g, { now });
+    const a = p.tasks.find((t) => t.id === "t-a")!;
+    expect(a.eff).toBe("P0");
+    expect(a.inherited).toBe(true);
+    expect(a.rank).toBe(1);
+    expect(a.source).toEqual({ id: "t-b", declared: "P0", distance: 1 });
+    expect(p.next.items[0].id).toBe("t-a");
+    expect(p.next.items[0].rank).toBe(1);
+  });
+
+  test("截断后 deps 只保留实际渲染的任务（与边同口径）", () => {
+    const p = buildPayload(g, { now, limit: 1 });
+    const a = p.tasks[0];
+    expect(a.deps).toEqual([]);
+    expect(p.edges).toEqual([]);
   });
 });

@@ -2,7 +2,7 @@
   "schema": 1,
   "kind": "kit",
   "id": "dia-msg",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "root": ".",
   "skills": [
     {
@@ -29,5 +29,14 @@
   ],
   "requires": {
     "dia": ">=0.0.2"
-  }
+  },
+  "files": [
+    {
+      "from": "opencode/dia-inbox/server.ts",
+      "to": "~/.config/opencode/plugins/dia-inbox/server.ts"
+    }
+  ],
+  "dirs": [
+    "~/.config/opencode/plugins/dia-inbox"
+  ]
 }

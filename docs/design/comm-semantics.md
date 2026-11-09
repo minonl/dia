@@ -70,7 +70,10 @@ dia collab stats [--since 7d] [--by session|pair|class] [--now ISO] [--json]
 - **M3a 已实现**：`dia collab observe --once`（建议用 `dia job` 60s 周期跑）产出
   `collab/state/board.json`（0600）/ `metrics/<day>.json` / `escalations.jsonl`（只含 id/class/age，无正文）；
   `dia collab board` 读缓存（hook 用，缺失/过期现算）；
-- **M3b 未实现**：per-turn hook 读 `dia collab board`（目标 ≤50ms）；dsh 侧无 hook 时退化为 turn 首条提示；
+- **M3b 已提供**：`kits/dia-msg` 安装 OpenCode 插件 `dia-inbox`（`ctx.session.hook("context")`），
+  每个 model context 前读 board，只在「本会话有未读」时注入一行计数提示（5 分钟节流、10 分钟 board 过期）；
+  **不调 `dia in`、不标 delivered/exposed**；dsh 无 hook 时退化为 SKILL 规则；
+- hook 与指标的关系：提示只是计数，不算 exposed；要记 exposed 需 hook 显式调 `dia in --expose`；
 - 唤醒优先级：per-turn hook（读 `dia collab board` 缓存）> wake 文件 > 钉钉升级；
 - 红线：不代答、不自动 ack、不写消息状态、不联网（`src/**` 零网络不变）。
 

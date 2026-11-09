@@ -207,6 +207,7 @@ bun src/cli.ts version  # 直接跑源码
 | `task` | `dia task add|list|link|plan|split|status|done [--owner S] [--depends a,b] [--touches p1,p2] [--prio P1] [--start D] [--due D] [--progress 0-100]` |  |
 | `task` | `dia task split <id> --into "切片A,切片B" [--slice 切片A] [--role R] [--judge J] [--touches p] [--force]` |  |
 | `graph` | `dia graph [--json] [--task t-...] [--tui [--watch] [--status S] [--owner S] [--width N] [--no-color]]` |  |
+| `graph` | `dia graph --serve [--port N] [--no-open]` | 本机只读 web（需 packages/graph-web） |
 | `graph` | `dia graph --export-html [path] [--out path] [--now ISO] [--redact] [--all] [--limit N] [--force]` |  |
 | `graph` | `dia graph --next [n] [--seats N] | --explain <id> | --lint` | 只读编排建议（Kahn-v1 / seats-v1） |
 | `claim` | `dia claim <path> [--reason R] [--ttl 4h] [--session S] | dia claims [--all] [--mine] [--gc [--days 7]] | dia unclaim <path|id> [--force]` |  |

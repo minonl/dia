@@ -1,0 +1,9 @@
+{
+  "name": "@dia/graph-web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "dia graph 本机只读 web 服务（可选包）",
+  "bin": { "dia-graph-web": "./bin/dia-graph-web" },
+  "files": ["bin", "src"]
+}

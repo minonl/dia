@@ -1,0 +1,32 @@
+#!/usr/bin/env bun
+// dia-graph-web —— 本机只读 graph 服务（M2a）
+// 设计：docs/design/graph-web-m2.md；只绑 127.0.0.1，前台进程，Ctrl-C 退出。
+import { spawn } from "node:child_process";
+import { startDiaServer } from "../src/server.ts";
+
+function flag(argv: string[], name: string): string | undefined {
+  const i = argv.indexOf(name);
+  return i >= 0 ? argv[i + 1] : undefined;
+}
+const has = (argv: string[], name: string) => argv.includes(name);
+
+const portRaw = flag(process.argv.slice(2), "--port");
+const port = portRaw ? Number(portRaw) : 0;
+if (!Number.isInteger(port) || port < 0) { console.error("E_USAGE: --port 必须是 >=0 的整数"); process.exit(2); }
+const nowRaw = flag(process.argv.slice(2), "--now");
+const now = nowRaw ? new Date(nowRaw) : undefined;
+if (now && Number.isNaN(now.getTime())) { console.error("E_USAGE: 非法 --now"); process.exit(2); }
+
+const { url, close } = await startDiaServer({ port, now });
+console.log(`dia graph web: ${url}`);
+console.log("只读 · 仅本机 · 关闭：Ctrl-C");
+
+if (!has(process.argv.slice(2), "--no-open")) {
+  const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
+  const args = process.platform === "win32" ? ["/c", "start", "", url] : [url];
+  try { spawn(opener, args, { stdio: "ignore", detached: true }).unref(); } catch { /* 打印 URL 手开 */ }
+}
+
+const stop = async () => { try { await close(); } catch { /* ignore */ } process.exit(0); };
+process.on("SIGINT", stop);
+process.on("SIGTERM", stop);

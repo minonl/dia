@@ -14,7 +14,8 @@
     "docs",
     "kits",
     "README.md",
-    "scripts/postinstall.mjs"
+    "scripts/postinstall.mjs",
+    "packages/graph-web"
   ],
   "engines": {
     "node": ">=24",

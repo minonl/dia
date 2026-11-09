@@ -200,6 +200,7 @@ usage:
   dia task add|list|link|plan|split|status|done [--owner S] [--depends a,b] [--touches p1,p2] [--prio P1] [--start D] [--due D] [--progress 0-100]
   dia task split <id> --into "切片A,切片B" [--slice 切片A] [--role R] [--judge J] [--touches p] [--force]
   dia graph [--json] [--task t-...] [--tui [--watch] [--status S] [--owner S] [--width N] [--no-color]]
+  dia graph --serve [--port N] [--no-open]   # 本机只读 web（需 packages/graph-web）
   dia graph --export-html [path] [--out path] [--now ISO] [--redact] [--all] [--limit N] [--force]
   dia graph --next [n] [--seats N] | --explain <id> | --lint   # 只读编排建议（Kahn-v1 / seats-v1）
   dia claim <path> [--reason R] [--ttl 4h] [--session S] | dia claims [--all] [--mine] [--gc [--days 7]] | dia unclaim <path|id> [--force]
@@ -585,6 +586,23 @@ async function taskCli(argv: string[]): Promise<number> {
 
 async function graphCli(argv: string[]): Promise<number> {
   const asJson = has(argv, "--json");
+  if (has(argv, "--serve")) {
+    const cands = [
+      process.env.DIA_GRAPH_WEB_BIN,
+      join(paths.installDir(), "packages", "graph-web", "bin", "dia-graph-web"),
+      join(process.cwd(), "packages", "graph-web", "bin", "dia-graph-web"),
+    ].filter(Boolean) as string[];
+    const bin = cands.find((p) => { try { return existsSync(p); } catch { return false; } });
+    if (!bin) { err("E_WEB: 未找到 graph-web 可选包（重装 @minonl/dia 或设 DIA_GRAPH_WEB_BIN）"); return 2; }
+    const args = [bin];
+    for (const k of ["--port", "--now"]) if (flag(argv, k) !== undefined) args.push(k, flag(argv, k)!);
+    if (has(argv, "--no-open")) args.push("--no-open");
+    return await new Promise<number>((resolve) => {
+      const child = spawn(bin, args.slice(1), { stdio: "inherit" });
+      child.on("exit", (code) => resolve(code ?? 0));
+      child.on("error", (e) => { err(`E_WEB: ${e.message}`); resolve(2); });
+    });
+  }
   if (has(argv, "--next") || has(argv, "--explain") || has(argv, "--lint")) {
     const tasks = task.list();
     const dr = plan.derive(tasks);

@@ -230,6 +230,10 @@ export function readBoard(opts: ObserveOptions = {}): Board {
 export function ensureJob(desired = DEFAULT_INTERVAL_S): string | null {
   const NAME = "collab-observe";
   try {
+    // 临时数据根（测试/CI）不注册持久定时，避免把 launchd/cron 指向 /tmp 的脏任务
+    const dataRoot = paths.diaHome();
+    const ephemeral = dataRoot.startsWith("/tmp") || dataRoot.includes("/var/folders/");
+    if (ephemeral && process.env.DIA_JOB_NO_LAUNCHD !== "1") return "临时数据根，跳过定时注册";
     const bin = diaBin();
     // 定时器跑在 launchd/cron 里，PATH 不含 ~/.local/bin：裸 "dia" 必然 127 → 宁可注册失败
     if (!bin.startsWith("/")) return "E_NO_DIA_BIN: 找不到 dia 的绝对路径（设 DIA_BIN）";

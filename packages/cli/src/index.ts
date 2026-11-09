@@ -1037,6 +1037,8 @@ async function collabCli(argv: string[]): Promise<number> {
         : `${sub}d: enabled=${c.enabled}${c.disabled_personas.length ? ` disabled_personas=${c.disabled_personas.join(",")}` : ""}` +
           (removed.length ? `  removed=${removed.length}` : "") +
           (kitInfo ? (kitInfo.ok ? `  kit=${kitInfo.kit}` : `  ⚠ ${kitInfo.reason}`) : ""));
+      // enable 装不上内置 kit 时必须非 0：否则 CI/脚本无法判断「消息能力是否真的可用」
+      if (kitInfo && !kitInfo.ok) return 32;
       return 0;
     }
     if (sub === "whoami") {

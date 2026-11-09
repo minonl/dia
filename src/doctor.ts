@@ -7,6 +7,7 @@ import { closeSync, existsSync, openSync, readFileSync, readSync, realpathSync, 
 import { homedir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import * as persona from "./persona.ts";
+import * as defaultMsg from "./default-msg.ts";
 import * as kit from "./kit.ts";
 import * as scope from "./scope.ts";
 import * as active from "./active.ts";
@@ -133,9 +134,20 @@ function installShadowCheck(): Check {
     : `ln -sfn ${quoteArg(join(install, "bin/dia.js"))} ${quoteArg(bin)}`;
   return {
     name,
-    status: "fail",
+    status: "warn", // 脚本安装已降级为「开发/离线通道」，遮蔽只提示不判红
     detail: `安装类型不一致：install=${install}（${kind(installNpm)}）但 PATH dia=${binReal}（${kind(binNpm)}）；修复：${fix}`,
   };
+}
+
+/** bootstrap：内置能力是否跟随当前包版本（升级 dia 后提示刷新，不需要用户手装）。 */
+function bootstrapCheck(): Check {
+  const stamp = defaultMsg.readStamp();
+  const pkg = defaultMsg.pkgVersion();
+  if (!stamp) return { name: "bootstrap", status: "warn", detail: "内置能力尚未装配（首次 persona add/render 或 dia collab enable 会自动装）" };
+  if (stamp.pkg !== pkg) {
+    return { name: "bootstrap", status: "warn", detail: `内置能力可能过期：自举戳 pkg=${stamp.pkg}，当前 ${pkg}；修复：dia collab enable` };
+  }
+  return { name: "bootstrap", status: "ok", detail: `内置能力已装配（pkg=${pkg}，kit=${stamp.kit ?? "-"}）` };
 }
 
 function describeStale(st: IndexStatus): string {
@@ -304,6 +316,7 @@ export async function run(opts: { persona?: string } = {}): Promise<{
     detail: `install=${install} data=${paths.diaHome()}${install === paths.diaHome() ? "（安装物与数据同根）" : ""}`,
   });
   checks.push(installShadowCheck());
+  checks.push(bootstrapCheck());
 
   const wt = join(install, "packages/wt/bin/dia-wt");
   checks.push({ name: "wt", status: existsSync(wt) ? "ok" : "warn", detail: existsSync(wt) ? wt : "dia wt 未安装（dia install.sh）" });

@@ -131,7 +131,7 @@ if dia_doctor >/dev/null 2>&1 || [ $? -ne 127 ]; then
 
   # ④-b 不一致（事故形态）：install 是 npm 包，PATH 的 dia 却是脚本安装 → fail，且给 npm 回链命令
   out="$(DIA_ROOT="$DROOT" DIA_INSTALL_DIR="$NPM_PKG" PATH="$H2/.local/bin:$PATH" dia_doctor 2>&1)"
-  printf '%s' "$out" | grep -qE '^✗ install_shadow' && ok "不一致（脚本 bin 遮挡 npm 包）→ fail" || bad "事故形态未判 fail"
+  printf '%s' "$out" | grep -qE '^! install_shadow' && ok "不一致（脚本 bin 遮挡 npm 包）→ warn" || bad "事故形态未判 warn"
   printf '%s' "$out" | grep -q 'npm prefix -g' && ok "给出 npm 修复命令" || bad "缺 npm prefix -g 修复命令"
 
   # ④-c 一致（脚本安装）：PATH 里的 dia 也指向脚本安装 → 不 fail
@@ -147,7 +147,7 @@ if dia_doctor >/dev/null 2>&1 || [ $? -ne 127 ]; then
   printf '#!/bin/sh\nexit 0\n' > "$VOLTA_BIN/dia"; chmod +x "$VOLTA_BIN/dia"
   printf '{"tool":"dia","source":"%s"}\n' "$TD/inst-v" > "$TD/inst-v/install.json"
   out="$(DIA_ROOT="$DROOT" DIA_INSTALL_DIR="$TD/inst-v" VOLTA_HOME="$TD/volta" PATH="$VOLTA_BIN:$PATH" dia_doctor 2>&1)"
-  printf '%s' "$out" | grep -qE '^✗ install_shadow' && ok "volta bin 目录归属 → fail（不漏判）" || bad "volta 形态未判 fail"
+  printf '%s' "$out" | grep -qE '^! install_shadow' && ok "volta bin 目录归属 → warn（不漏判）" || bad "volta 形态未判 warn"
 else
   bad "缺少 bun/node，无法运行 dia doctor（install_shadow 未验证）"
 fi

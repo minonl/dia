@@ -84,6 +84,8 @@ dia version && dia doctor
   `ln -sfn "$(npm prefix -g)/bin/dia" ~/.local/bin/dia`。只装到别处（不碰生效链接）用
   `bash install.sh --home DIR --bin BINDIR`——`--home` 单独用只改安装目录，链接仍写默认 bin，守卫照旧生效。
   装完会打印 `effective: <实际生效的 dia> (<version>)`，顺带暴露 PATH 顺序问题。
+- `install.sh` = **开发 / 离线通道**（从仓库构建时用）；日常安装/升级一律 `npm i -g @minonl/dia@latest`。
+- 内置能力（`dia-msg`）无需手动安装：首次 `persona add/render` 或 `dia collab enable` 自动装配，`dia doctor` 的 `bootstrap` 项会显示是否跟随包版本。
 - 装 persona（示例 dabo）：`dia persona add dabo --from git+https://github.com/minonl/dabo-agent.git`
 - 卸载：`dia persona remove dabo`（只删带 `.dia-managed` 的产物）。
 

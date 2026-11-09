@@ -10,6 +10,7 @@ Agent 入口：[`llms.txt`](https://github.com/minonl/dia/blob/main/llms.txt)（
 |---|---|
 | [ACP 集成与降级设计（2026-10）](acp-integration.md) | 问题：通过 ACP 是否更好？fallback 怎么做？配置失败如何降级、体验如何？ |
 | [架构：框架 / 场景入口 / kit](architecture.md) | 本文回答一个问题：什么该留在 dabo-agent，什么该抽到独立框架。 |
+| [内置能力的分层：dia-msg 不该让用户「装」](builtin-kit-design.md) | 日期：2026-11-09 ｜ 状态：实现中（P0 已合，P1 本文档） ｜ 触发：用户质疑「dia 是命令入口，为什么内置的还要单独装？dia-msg 都算内置」 |
 | [dia CLI 词表（动作规范）](cli.md) | 原则：动作成对、名词分层、不混轴。 |
 | [外部依赖索引与原始记录维护（2026-10）](dependency-registry.md) | 回答两件事：依赖怎么登记/验证/淘汰，原始记录怎么保留/重建/删除。 |
 | [生态与组合：可复用性调研（2026-10）](ecosystem-integration.md) | 问题：dia 的包和集成面应该长什么样，才能同时服务 opencode / dsh（未来 OpenClaw/Hermes/Pi）？ |

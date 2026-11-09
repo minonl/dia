@@ -15,6 +15,7 @@ import * as graphHtml from "../../../src/graph-html/render.ts";
 import * as plan from "../../../src/plan.ts";
 import * as msgPriority from "../../../src/msg-priority.ts";
 import * as observer from "../../../src/observer.ts";
+import * as seats from "../../../src/seats.ts";
 import * as defaultMsg from "../../../src/default-msg.ts";
 import * as paths from "../../../src/paths.ts";
 import * as agents from "../../../src/agents.ts";
@@ -200,7 +201,7 @@ usage:
   dia task split <id> --into "切片A,切片B" [--slice 切片A] [--role R] [--judge J] [--touches p] [--force]
   dia graph [--json] [--task t-...] [--tui [--watch] [--status S] [--owner S] [--width N] [--no-color]]
   dia graph --export-html [path] [--out path] [--now ISO] [--redact] [--all] [--limit N] [--force]
-  dia graph --next [n] | --explain <id> | --lint   # 只读编排建议（Kahn-v1）
+  dia graph --next [n] [--seats N] | --explain <id> | --lint   # 只读编排建议（Kahn-v1 / seats-v1）
   dia claim <path> [--reason R] [--ttl 4h] [--session S] | dia claims [--all] [--mine] [--gc [--days 7]] | dia unclaim <path|id> [--force]
   dia team run <id> --mock | --acp|--dsh --workspace DIR
   dia team gate|accept|reject|next
@@ -611,6 +612,34 @@ async function graphCli(argv: string[]): Promise<number> {
     if (has(argv, "--lint")) {
       const findings = dr.lint;
       out(asJson ? JSON.stringify({ findings, cycles: dr.cycles }) : (findings.length ? findings.map((f) => `${f.kind}\t${f.id}\t${f.detail}`).join("\n") : "(clean)"));
+      return dr.cycles.length ? 3 : 0;
+    }
+    if (has(argv, "--seats")) {
+      const nRaw = flag(argv, "--seats");
+      const n = Number(nRaw);
+      if (!Number.isInteger(n) || n < 0) { err("E_USAGE: --seats 必须是 >=0 的整数"); return 2; }
+      const ttlRaw = flag(argv, "--presence-ttl");
+      let ttlMs: number | undefined;
+      if (ttlRaw) {
+        const m = /^(\d+)([mhd])$/.exec(ttlRaw.trim());
+        if (!m) { err("E_USAGE: --presence-ttl 形如 30m / 4h"); return 2; }
+        ttlMs = Number(m[1]) * ({ m: 60_000, h: 3_600_000, d: 86_400_000 }[m[2] as "m" | "h" | "d"]);
+      }
+      const nowRaw = flag(argv, "--now");
+      const now = nowRaw ? new Date(nowRaw) : undefined;
+      if (now && Number.isNaN(now.getTime())) { err("E_USAGE: 非法 --now"); return 2; }
+      // 任一 dia 命令都刷新 presence：先把发起会话登记为在线（无会话标识时跳过）
+      try { collab.whoami({ session }); } catch { /* no session */ }
+      const res = seats.assignSeats(tasks, { seats: n, now, presenceTtlMs: ttlMs });
+      if (asJson) out(JSON.stringify(res, null, 1));
+      else {
+        if (!res.seats.length) out("(没有在线席位；先跑 dia whoami 注册会话)");
+        else for (const s of res.seats) out(`seat ${s.seat}\t${s.state}\t${s.focus || "-"}\tpresence=${s.presence_at}`);
+        for (const a of res.assignments) out(`  → ${a.seat}\t${a.task}\trank=${a.rank}\t${a.eff}\tcost=${a.cost}\t${a.why}`);
+        for (const u of res.unassigned) out(`  · 未分配 ${u.task}\trank=${u.rank}\t${u.reason}`);
+        for (const c of res.conflicts) out(`  ⚠ ${c.kind}\t${c.task}\t${c.detail}`);
+        out(`metrics: assignments=${res.metrics.assignments} idle=${res.metrics.idle_slots} online=${res.metrics.online}`);
+      }
       return dr.cycles.length ? 3 : 0;
     }
     // --next [n]

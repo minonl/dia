@@ -1,6 +1,7 @@
 # 固定席位 + 上下文亲和（M2 设计）
 
-> 状态：设计定稿（2026-11-06，未实现）｜依赖：`graph-prio-dag.md`（eff/rank）、`graph-ui-m1.md`（面板）
+> 状态：M2a 已实现（2026-11-09）：`dia graph --next --seats N`｜`src/seats.ts`
+> 未实现：handoff 自动建议、metrics 落盘、HTML 席位视图；依赖：`graph-prio-dag.md`、`graph-ui-m1.md`
 > 红线：**只读建议；不写 tasks 账本、不常驻守护、不抢占、不自动 force 接管**。
 
 ## 1. 目标 / 非目标
@@ -75,6 +76,7 @@ cost(t, seat) = 1 - aff/8            # ∈ [0,1]，越小越省
 ```
 
 - 复杂度 `O(N·S)`（N 候选、S 席位），500×3 < 1ms；
+- **presence 刷新**：执行 `--seats` 的会话会先 `whoami` 一次（任一 dia 命令都算在线）；无会话标识时跳过；
 - 确定性 tiebreak：`(cost, declared prio index, task.id, seat.id)`；
 - **不做**「全局最优分配」：席位小、账本变动频繁，贪心 + 可解释优先；
 - 显式反例（写入文档，防止误读）：rank 1 但亲和极差的任务仍会被先分配——这是「价值优先」的代价；若需要「上下文优先」模式，M3 再加 `--by=affinity`。

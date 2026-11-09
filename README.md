@@ -208,7 +208,7 @@ bun src/cli.ts version  # 直接跑源码
 | `task` | `dia task split <id> --into "切片A,切片B" [--slice 切片A] [--role R] [--judge J] [--touches p] [--force]` |  |
 | `graph` | `dia graph [--json] [--task t-...] [--tui [--watch] [--status S] [--owner S] [--width N] [--no-color]]` |  |
 | `graph` | `dia graph --export-html [path] [--out path] [--now ISO] [--redact] [--all] [--limit N] [--force]` |  |
-| `graph` | `dia graph --next [n] | --explain <id> | --lint` | 只读编排建议（Kahn-v1） |
+| `graph` | `dia graph --next [n] [--seats N] | --explain <id> | --lint` | 只读编排建议（Kahn-v1 / seats-v1） |
 | `claim` | `dia claim <path> [--reason R] [--ttl 4h] [--session S] | dia claims [--all] [--mine] [--gc [--days 7]] | dia unclaim <path|id> [--force]` |  |
 | `team` | `dia team run <id> --mock | --acp|--dsh --workspace DIR` |  |
 | `team` | `dia team gate|accept|reject|next` |  |

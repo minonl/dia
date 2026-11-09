@@ -196,6 +196,19 @@ function defaultDisplayName(id: string, host: string): string {
 
 export function sessionFile(id: string): string { return join(sessionsDir(), `${normalizeSessionId(id)}.json`); }
 
+/** 全部会话记录（坐席/在线判定用；脏文件容错跳过） */
+export function listSessions(): SessionRecord[] {
+  const dir = sessionsDir();
+  if (!existsSync(dir)) return [];
+  const out: SessionRecord[] = [];
+  for (const f of readdirSync(dir)) {
+    if (!f.endsWith(".json")) continue;
+    const rec = readJson<SessionRecord>(join(dir, f));
+    if (rec && SESSION_RE.test(rec.session_id)) out.push(rec);
+  }
+  return out.sort((a, b) => a.session_id.localeCompare(b.session_id));
+}
+
 export function readSession(id: string): SessionRecord | null {
   return readJson<SessionRecord>(sessionFile(id));
 }

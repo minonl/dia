@@ -140,7 +140,7 @@ rm -rf ~/.dia
 | `task` | `dia task split <id> --into "切片A,切片B" [--slice 切片A] [--role R] [--judge J] [--touches p] [--force]` |  |
 | `graph` | `dia graph [--json] [--task t-...] [--tui [--watch] [--status S] [--owner S] [--width N] [--no-color]]` |  |
 | `graph` | `dia graph --export-html [path] [--out path] [--now ISO] [--redact] [--all] [--limit N] [--force]` |  |
-| `graph` | `dia graph --next [n] | --explain <id> | --lint` | 只读编排建议（Kahn-v1） |
+| `graph` | `dia graph --next [n] [--seats N] | --explain <id> | --lint` | 只读编排建议（Kahn-v1 / seats-v1） |
 | `claim` | `dia claim <path> [--reason R] [--ttl 4h] [--session S] | dia claims [--all] [--mine] [--gc [--days 7]] | dia unclaim <path|id> [--force]` |  |
 | `team` | `dia team run <id> --mock | --acp|--dsh --workspace DIR` |  |
 | `team` | `dia team gate|accept|reject|next` |  |
@@ -255,5 +255,5 @@ Agent 入口：[`llms.txt`](https://github.com/minonl/dia/blob/main/llms.txt)（
 | [dia graph Web（M1）设计：真实数据 → 单文件静态导出](design/graph-web-m1.md) | 状态：M1 设计（2026-11-06）｜前置：graph-web.md（视觉稿 v0.3）、graph-web-mockup.html（交互原型） |
 | [graph live 服务（M2 设计，可选包）](design/graph-web-m2.md) | 状态：设计定稿（2026-11-06，未实现）｜前置：graph-web-m1.md（静态导出）、graph-ui-m1.md、seat-scheduling-m2.md |
 | [dia graph Web 视觉设计稿（v0.3）](design/graph-web.md) | 落地状态（2026-11-06）：M1 已实现 dia graph --export-html（真实账本 → 单文件静态 HTML，无网络）； |
-| [固定席位 + 上下文亲和（M2 设计）](design/seat-scheduling-m2.md) | 状态：设计定稿（2026-11-06，未实现）｜依赖：graph-prio-dag.md（eff/rank）、graph-ui-m1.md（面板） |
+| [固定席位 + 上下文亲和（M2 设计）](design/seat-scheduling-m2.md) | 状态：M2a 已实现（2026-11-09）：dia graph --next --seats N｜src/seats.ts |
 

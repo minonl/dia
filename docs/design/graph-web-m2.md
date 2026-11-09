@@ -5,7 +5,8 @@
 > 已实现补充（0.0.25）：轮询自动刷新（2s + 304 + 顶部「有更新/刷新」条，可在 live 注入、导出件不含 fetch）、
 > Origin / Sec-Fetch-Site 校验、`localhost` → `127.0.0.1` 归一、E_PORT/E_RUNTIME 提示；
 > 服务端以 `bun build` 打成 `packages/graph-web/dist/main.js`（模板内联，node 可直接跑）；publish 增加「装 tarball → --serve → /api/health」冒烟。
-> 未实现：SSE、`/api/next` 端点、写操作（保持只读）｜前置：`graph-web-m1.md`、`graph-ui-m1.md`、`seat-scheduling-m2.md`
+> 已实现（D3 后续）：`/api/next`（next/seats 两种形态，完全复用 CLI 同一构造函数）、`/api/events` SSE（rev 推送，前端优先 SSE、失败回落轮询）、非 TTY 打码 + `~/.dia/export/serve-<pid>.url`（0600）
+> 未实现：写操作（保持只读）｜前置：`graph-web-m1.md`、`graph-ui-m1.md`、`seat-scheduling-m2.md`
 > 定位：本机**只读**实时预览；不写账本、不做多人共享、不暴露公网。
 
 ## 1. 目标 / 非目标
@@ -35,7 +36,7 @@
 - 传递（M2a 实现）：启动打印 `/?t=<token>`；服务端校验后种 `HttpOnly; SameSite=Strict` cookie 并 302 到 `/`，
   token 不残留在页面 URL；`/api/*` 也接受 `x-dia-token` 头（脚本用）。
   （原设计的 fragment 方案需要页面 JS 读取，当前静态模板没有 fetch，故采用 cookie 换票，等价于「一次性 token 换会话」。）
-- 输出：仅 TTY 打印完整 URL；非 TTY 打码，并把完整 URL 写入 `~/.dia/export/serve-<pid>.url`（0600），打印路径；
+- 输出：仅 TTY 打印完整 URL；非 TTY 打码并写 `~/.dia/export/serve-<pid>.url`（0600），打印路径（已实现）；
 - 401：页面显示「会话已失效，请回到终端重新打开」+ 可复制的重开命令。
 
 ## 5. API（只读）
@@ -44,7 +45,9 @@
 |---|---|---|
 | GET | `/api/graph?rev=` | `{schema,rev,payload}`（与导出件同一 `buildPayload`） |
 | GET | `/api/next?n=5&seats=S` | 复用 `buildNext` / 席位分配（`seats` 缺省 1） |
-| GET | `/api/meta` | `{version, capabilities, seats_default, presence_ttl_s, readonly:true}` |
+| GET | `/api/next?n=5&seats=S` | 与 CLI `--next` 同源（seats 参数时复用 seats.assignSeats；不写 presence） |
+| GET | `/api/events` | SSE：`event: rev` 推送账本 rev 变化（2s 检测、15s 心跳） |
+| GET | `/api/meta` | `{version, capabilities, next_default, seats_default, presence_ttl_s, readonly:true}` |
 | GET | `/api/health` | `{ok:true}`（同样鉴权，不泄露版本细节） |
 
 - 非 GET → 405；未知路径 → 404；错误 envelope `{error:{code,message}}`，不返回堆栈；

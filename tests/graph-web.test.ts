@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync, statSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -60,5 +60,63 @@ describe("graph-web live 服务（只读/loopback/token）", () => {
     const r = await fetch(base + "/api/graph", { headers: { "x-dia-token": token, host: "evil.example" } });
     expect(r.status).toBe(421);
     expect((await fetch(base + "/api/graph", { method: "POST", headers: { "x-dia-token": token } })).status).toBe(405);
+  });
+});
+
+describe("D3 后续：/api/next、SSE、非 TTY", () => {
+  test("/api/next 默认与 seats 两种形态", async () => {
+    const r = await fetch(base + "/api/next", { headers: { "x-dia-token": token } });
+    expect(r.status).toBe(200);
+    const j = await r.json();
+    expect(j.policy).toBe("kahn-v1");
+    expect(Array.isArray(j.items)).toBe(true);
+    expect(j.items[0].id).toBeTruthy();
+
+    const s = await fetch(base + "/api/next?seats=1", { headers: { "x-dia-token": token } });
+    expect(s.status).toBe(200);
+    const sj = await s.json();
+    expect(sj.policy).toBe("seats-v1");
+    expect(Array.isArray(sj.seats)).toBe(true);
+    expect(Array.isArray(sj.assignments)).toBe(true);
+
+    const bad = await fetch(base + "/api/next?n=0", { headers: { "x-dia-token": token } });
+    expect(bad.status).toBe(400);
+  });
+
+  test("/api/events 首帧返回 rev", async () => {
+    const r = await fetch(base + "/api/events", { headers: { "x-dia-token": token } });
+    expect(r.status).toBe(200);
+    expect(r.headers.get("content-type") || "").toContain("text/event-stream");
+    const reader = r.body!.getReader();
+    const { value } = await reader.read();
+    const text = new TextDecoder().decode(value);
+    expect(text).toContain("event: rev");
+    await reader.cancel();
+  });
+
+  test("非 TTY：打码 URL + 0600 URL 文件", async () => {
+    const { spawn } = await import("node:child_process");
+    const root2 = mkdtempSync(join(tmpdir(), "dia-web-cli-"));
+    const child = spawn("bun", [join(import.meta.dir, "..", "packages", "graph-web", "src", "main.ts"), "--port", "0"], {
+      env: { ...process.env as any, DIA_ROOT: root2 }, stdio: ["ignore", "pipe", "pipe"],
+    });
+    const line = await new Promise<string>((resolve, reject) => {
+      let buf = "";
+      const t = setTimeout(() => reject(new Error("timeout " + buf)), 8000);
+      child.stdout!.on("data", (d) => {
+        buf += d.toString();
+        const m = buf.match(/dia graph web: [^\n]+/);
+        if (m) { clearTimeout(t); resolve(m[0]); }
+      });
+    });
+    child.kill("SIGTERM");
+    expect(line).toContain("t=***");
+    const files = readdirSync(join(root2, "export"));
+    const f = files.find((x) => x.endsWith(".url"))!;
+    expect(f).toBeTruthy();
+    const full = readFileSync(join(root2, "export", f), "utf8");
+    expect(full).toContain("?t=");
+    expect(full).not.toContain("***");
+    expect(statSync(join(root2, "export", f)).mode & 0o777).toBe(0o600);
   });
 });

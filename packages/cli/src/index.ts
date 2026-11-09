@@ -1,4 +1,4 @@
-import { buildIndex, search, lint, getDoc, resolveKbPath } from "@dia/kb";
+import { buildIndex, search, lint, getDoc, resolveKbPath, indexStatus } from "@dia/kb";
 import { ingest, readGitUpdates } from "../../../src/ingest.ts";
 import * as audit from "../../../src/audit.ts";
 import * as freeze from "../../../src/freeze.ts";
@@ -246,6 +246,8 @@ async function kb(argv: string[]): Promise<number> {
       if (tagFilter && !k.tags.includes(tagFilter)) continue;
       let kr: any[] = [];
       try {
+        // kit 内容会随升级变化：索引不是 ok（缺失/过期/属主不符）就重建
+        if ((await indexStatus(k.dir)).state !== "ok") await buildIndex(k.dir);
         kr = await search(k.dir, q, undefined, limit);
       } catch {
         try { await buildIndex(k.dir); kr = await search(k.dir, q, undefined, limit); } catch { kr = []; }

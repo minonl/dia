@@ -61,7 +61,20 @@
 | tag 索引与实际知识页 front-matter 一致 | WARN |
 | 同一 tag 下存在重复内容（hash 相同） | WARN（提示合并） |
 
-## 5. 迁移顺序（小步，不搬家式重写）
+## 5. 迁移进度（2026-11-09）
+
+| 阶段 | 内容 | 状态 |
+|---|---|---|
+| P0 | 设计 + `tags` + `kit list` 展示标签 | ✅ #102 |
+| P1 | kit/git、kit/node（worktree / hooks / pnpm） | ✅ #104 #109 #140 |
+| P1b | kb 聚合检索（persona KB + 已装 kit，`--tag` 过滤，来源标注，索引过期重建，kit 名额保底） | ✅ #103 #110 #111 |
+| P2 | yan-agent 变薄：pnpm 页、worktree 选型/事故复盘迁入 kit；persona 快照同步 | ✅ MR !125 !132 |
+| P2b | persona 外部 kit 引用（`id@range`）、安装时自动分发、doctor 版本校验 | ✅ #142 #144 |
+| P2c | 槽位排序按 `installedAt`（同 semver 多 commit 不再选错） | ✅ #149 #150 |
+| P2d | 版本治理：`dia kit gc`（保最近 N 版 + persona 引用版本） | ✅ #154 #155 |
+| P3 | dabo 声明同一套 kit，验证「换 persona 不换经验」 | ✅ dabo-agent #4 |
+
+### 原计划
 
 1. **P0**：本设计 + `dia kit` 支持 `tags`（本 PR）
 2. **P1（pilot）**：抽 `kit/git` 与 `kit/node`

@@ -68,7 +68,12 @@ dia collab stats [--since 7d] [--by session|pair|class] [--now ISO] [--json]
 
 - **指标不需要常驻**：读时聚合即可；
 - **观察器用法（M3a）**：`dia collab observe` 恒为**一次性 tick**（无 `--watch/--daemon`，请求即 `E_NO_DAEMON`）；
-  定时交给唯一调度器 `dia job`，推荐 **300s**（与插件 5 分钟节流同量级；cron 需 60 的倍数）：
+  定时交给唯一调度器 `dia job`，推荐 **300s**（与插件 5 分钟节流同量级；cron 需 60 的倍数）。
+
+  **interval 的唯一事实源 = job registry 的注册参数**（2026-11 修订）：`board.interval_s` 只是
+  「上次 tick 时 job 声明的值」的副本，`observe`/`board --refresh` 一律按 job 写回；`job` 未注册才回退默认 300。
+  `dia collab enable` 不只「缺则装」，还会**校正**已注册但 interval/命令不对的定时；`doctor` 的
+  「未注册 / interval 不一致」修复命令统一是 `dia collab enable`（幂等，不会重复注册）：
 
   ```bash
   dia job install collab-observe --desc 'collab board 刷新' --interval 300 --cmd 'dia collab observe'

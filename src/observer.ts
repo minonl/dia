@@ -1,7 +1,7 @@
 // dia collab observer（M3a）：只读看板 + 一次性 tick
 // 设计：docs/design/comm-semantics.md §7
 // 约束：一次只跑一个 tick（定时交给 dia job）；不写消息状态；不常驻；不联网。
-import { accessSync, appendFileSync, chmodSync, constants, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { accessSync, appendFileSync, chmodSync, constants, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { delimiter } from "node:path";
 import { dirname, join } from "node:path";
 import * as collab from "./collab.ts";
@@ -56,7 +56,8 @@ export const MAX_INTERVAL_S = 450;
 export function normInterval(v: number | undefined): number {
   if (v === undefined || !Number.isFinite(v)) return DEFAULT_INTERVAL_S;
   const n = Math.trunc(v);
-  if (n < MIN_INTERVAL_S || n > MAX_INTERVAL_S) return DEFAULT_INTERVAL_S;
+  // 调度器（cron）只接受整分 → 只收 60 的倍数；非倍数会让 Linux 装不上、平台间 board/job 漂移
+  if (n < MIN_INTERVAL_S || n > MAX_INTERVAL_S || n % 60 !== 0) return DEFAULT_INTERVAL_S;
   return n;
 }
 
@@ -84,7 +85,8 @@ const SLA_MS: Record<number, number> = { 0: 30 * 60_000, 1: 4 * 3600_000 };
 export function buildBoard(opts: ObserveOptions = {}): Board {
   const now = opts.now ?? new Date();
   const nowMs = now.getTime();
-  const interval = normInterval(opts.intervalSec ?? readInterval(opts));
+  // 写 board 时以调度器声明为准（board 只是副本）；job 未注册才回退到显式参数/旧 board/默认值
+  const interval = normInterval(opts.intervalSec ?? jobInterval() ?? readInterval(opts));
   const all = collab.allMessages().filter((m) => !m.legacy && !TERMINAL.has(m.state));
   const age = (m: any) => { const t = ts(m.created_at); return t === null ? 0 : Math.max(0, nowMs - t); };
   const cls = (m: any) => (typeof m.class_snapshot === "number" ? m.class_snapshot : 2);
@@ -122,6 +124,16 @@ export function buildBoard(opts: ObserveOptions = {}): Board {
   };
 }
 
+/** 调度器注册的 interval（唯一事实源）；未注册/非周期（calendar）返回 undefined。 */
+export function jobInterval(): number | undefined {
+  try {
+    const reg = JSON.parse(readFileSync(join(job.jobRootResolved(), "tasks", "registry.json"), "utf8"))?.tasks || {};
+    const key = Object.keys(reg).find((k) => k === "collab-observe");
+    const n = Number(String(reg[key]?.interval ?? "").trim());
+    return Number.isFinite(n) && n > 0 ? n : undefined;
+  } catch { return undefined; }
+}
+
 function readInterval(opts: ObserveOptions): number | undefined {
   try {
     const raw = JSON.parse(readFileSync(boardFile(opts), "utf8"));
@@ -140,7 +152,7 @@ function writeFile600(path: string, data: string) {
 /** 一次性 tick：写 board/metrics/escalations；返回 board */
 export function observe(opts: ObserveOptions = {}): Board {
   const now = opts.now ?? new Date();
-  const interval = normInterval(opts.intervalSec ?? readInterval(opts));
+  const interval = normInterval(opts.intervalSec ?? jobInterval() ?? readInterval(opts));
   const board = buildBoard({ ...opts, now, intervalSec: interval });
   const done = (b: Board): Board => b;
 
@@ -210,16 +222,38 @@ export function readBoard(opts: ObserveOptions = {}): Board {
   return readBoardState(opts).board!;
 }
 
-/** 幂等注册观察器定时（300s）；返回错误信息或 null。由 `dia collab enable` 调用。 */
-export function ensureJob(): string | null {
+/**
+ * 幂等**校正**观察器定时：缺则装、interval/命令不对则重装、正确则 noop。
+ * interval 单一事实源 = job registry（默认 300s，必须 60 的倍数）；board.interval_s 只是副本。
+ * 返回错误信息或 null。由 `dia collab enable` 调用。
+ */
+export function ensureJob(desired = DEFAULT_INTERVAL_S): string | null {
   const NAME = "collab-observe";
   try {
-    const regPath = join(job.jobRootResolved(), "tasks", "registry.json");
+    const bin = diaBin();
+    // 定时器跑在 launchd/cron 里，PATH 不含 ~/.local/bin：裸 "dia" 必然 127 → 宁可注册失败
+    if (!bin.startsWith("/")) return "E_NO_DIA_BIN: 找不到 dia 的绝对路径（设 DIA_BIN）";
+
+    const interval = normInterval(desired);
+    const envPrefix = ["DIA_ROOT", "DIA_HOME"]
+      .filter((k) => process.env[k])
+      .map((k) => `${k}='${String(process.env[k]).replace(/'/g, "'\\''")}'`)
+      .join(" ");
+    const cmd = `${envPrefix ? envPrefix + " " : ""}'${bin}' collab observe --interval ${interval}`;
+
     let tasks: Record<string, any> = {};
-    try { tasks = JSON.parse(readFileSync(regPath, "utf8"))?.tasks || {}; } catch { /* none */ }
-    if (Object.keys(tasks).some((k) => k === NAME || k.endsWith(`.${NAME}`))) return null;
-    const cmd = `'${diaBin()}' collab observe`;
-    const base = ["install", NAME, "--desc", "collab board 刷新（dia collab enable 注册）", "--interval", "300", "--cmd", cmd];
+    try { tasks = JSON.parse(readFileSync(join(job.jobRootResolved(), "tasks", "registry.json"), "utf8"))?.tasks || {}; } catch { /* none */ }
+    const key = Object.keys(tasks).find((k) => k === NAME);
+    if (key) {
+      const reg = tasks[key] || {};
+      const sameInterval = Number(String(reg.interval ?? "").trim()) === interval;
+      const sameCmd = String(reg.cmd || "").includes("collab observe");
+      if (sameInterval && sameCmd) return null;
+      // 校正：先卸载旧注册，再按当前口径重装（避免重复 label / 旧 interval 自锁）
+      try { job.runJobCapture(["uninstall", NAME]); } catch { /* 旧注册不存在也无妨 */ }
+    }
+
+    const base = ["install", NAME, "--desc", "collab board 刷新（dia collab enable 注册）", "--interval", String(interval), "--cmd", cmd];
     let r = job.runJobCapture(base);
     // 门控 rc=4：npm 全局的 `dia` 不是 git checkout，class=unknown。命令本身固定且稳定，按逃生舱重试一次。
     if (r.status === 4) r = job.runJobCapture([...base, "--allow-unstable"]);
@@ -228,6 +262,12 @@ export function ensureJob(): string | null {
   } catch (e: any) {
     return e?.message || String(e);
   }
+}
+
+/** 对称清理：卸载定时注册 + 删派生的 board/escalated（metrics/escalations 历史保留）。 */
+export function removeJob(): void {
+  try { job.runJobCapture(["uninstall", "collab-observe"]); } catch { /* 未注册也无妨 */ }
+  for (const f of [boardFile({}), escalatedFile({})]) { try { rmSync(f, { force: true }); } catch { /* ignore */ } }
 }
 
 export function boardFileMode(opts: ObserveOptions = {}): number {

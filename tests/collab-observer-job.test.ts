@@ -12,7 +12,7 @@ const run = (args: string[], extraEnv: Record<string, string> = {}) => spawnSync
   env: {
     ...process.env as Record<string, string>,
     DIA_ROOT: root, DIA_JOB_ROOT: jobRoot, DIA_HOME: home,
-    DIA_JOB_NO_LAUNCHD: "1", ...extraEnv,
+    DIA_JOB_NO_LAUNCHD: "1", DIA_BIN: process.execPath, ...extraEnv,
   },
 });
 const json = (s: string) => JSON.parse(s);
@@ -36,7 +36,7 @@ function writeRegistry(tasks: Record<string, any>) {
   writeFileSync(join(jobRoot, "tasks", "registry.json"), JSON.stringify({ tasks }));
 }
 
-const KEYS = ["DIA_ROOT", "DIA_JOB_ROOT", "DIA_HOME", "DIA_JOB_NO_LAUNCHD"] as const;
+const KEYS = ["DIA_ROOT", "DIA_JOB_ROOT", "DIA_HOME", "DIA_JOB_NO_LAUNCHD", "DIA_BIN"] as const;
 const saved: Record<string, string | undefined> = {};
 for (const k of KEYS) saved[k] = process.env[k];
 afterEach(() => {
@@ -51,9 +51,35 @@ beforeEach(() => {
   process.env.DIA_JOB_ROOT = jobRoot;
   process.env.DIA_HOME = home;
   process.env.DIA_JOB_NO_LAUNCHD = "1";
+  process.env.DIA_BIN = process.execPath; // CI 的 PATH 里没有绝对 dia；显式给一个绝对可执行路径
 });
 
 afterAll(() => { /* temp dirs */ });
+
+describe("interval 单一事实源 = job registry", () => {
+  test("已注册 60s → ensureJob 校正为 300s（不再自锁）", () => {
+    writeRegistry({ "collab-observe": { interval: "60", cmd: "dia collab observe", desc: "旧" } });
+    expect(ensureJob()).toBeNull();
+    const reg = JSON.parse(readFileSync(join(jobRoot, "tasks", "registry.json"), "utf8")).tasks["collab-observe"];
+    expect(reg.interval).toBe("300");
+    expect(reg.cmd).toContain("--interval 300");
+  });
+
+  test("board 写出 job 声明的 interval（而不是旧 board 值）", () => {
+    writeRegistry({ "collab-observe": { interval: "120", cmd: "dia collab observe --interval 120" } });
+    writeBoard(board(60));
+    const r = run(["collab", "observe"]);
+    expect(r.status).toBe(0);
+    const b = JSON.parse(readFileSync(join(root, "collab", "state", "board.json"), "utf8"));
+    expect(b.interval_s).toBe(120);
+  });
+
+  test("非 60 倍数的 interval 归一为默认 300", () => {
+    expect(ensureJob(90)).toBeNull();
+    const reg = JSON.parse(readFileSync(join(jobRoot, "tasks", "registry.json"), "utf8")).tasks["collab-observe"];
+    expect(reg.interval).toBe("300");
+  });
+});
 
 describe("观察器定时：注册与 doctor 自检", () => {
   test("ensureJob 幂等注册 300s", () => {
@@ -65,7 +91,7 @@ describe("观察器定时：注册与 doctor 自检", () => {
     const cmd = String(reg[key!].cmd);
     expect(cmd).toContain("collab observe");
     // 有 dia 的机器写绝对路径（launchd PATH 不含 ~/.local/bin）；CI 无安装时退化为 'dia'
-    expect(cmd).toMatch(/collab observe$/);
+    expect(cmd).toMatch(/collab observe --interval 300$/);
     expect(ensureJob()).toBeNull(); // 第二次不再写
   });
 
@@ -74,7 +100,7 @@ describe("观察器定时：注册与 doctor 自检", () => {
     let d = json(run(["doctor", "--json"]).stdout);
     let c = d.checks.find((x: any) => x.name === "collab.observer");
     expect(c.status).toBe("warn");
-    expect(c.detail).toContain("未注册定时");
+    expect(c.detail).toContain("未注册");
 
     writeRegistry({ "collab-observe": { interval: "300", cmd: "dia collab observe" } });
     d = json(run(["doctor", "--json"]).stdout);

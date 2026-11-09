@@ -194,7 +194,7 @@ bun src/cli.ts version  # 直接跑源码
 | `wt` | `dia wt create|form|list|status|check|route|scope|clean|prune-merged …` |  |
 | `cmd` | `dia cmd <name> [args…]` | 只查 persona 声明的命令（可绕开同名内置） |
 | `<persona-cmd>` | `dia <persona-cmd> [args…]` | 一级委派（内置优先） |
-| `collab` | `dia collab status|enable|disable [--persona ID]` | dia-msg 默认能力开关（默认开） |
+| `collab` | `dia collab status|enable|disable [--persona ID]` | dia-msg 开关；enable 校正 300s 观察器定时并刷新 board，disable 一并卸载 |
 | `collab` | `dia collab stats [--since 7d] [--by session|pair|class] [--json]` | 只读聚合（送达/回复/积压） |
 | `collab` | `dia collab board [--cached|--refresh] [--json] | observe [--interval 300] [--json]` | 一次性 tick/看板（无常驻；定时用 dia job） |
 | `whoami` | `dia whoami [--json] [--name NAME]` | 当前会话身份（session id） |

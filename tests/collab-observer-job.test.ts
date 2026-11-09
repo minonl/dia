@@ -62,7 +62,8 @@ describe("观察器定时：注册与 doctor 自检", () => {
     const key = Object.keys(reg).find((k) => k === "collab-observe" || k.endsWith(".collab-observe"));
     expect(key).toBeTruthy();
     expect(String(reg[key!].interval)).toBe("300");
-    expect(String(reg[key!].cmd)).toContain("dia collab observe");
+    expect(String(reg[key!].cmd)).toContain("collab observe");
+    expect(String(reg[key!].cmd).startsWith("'/")).toBe(true);
     expect(ensureJob()).toBeNull(); // 第二次不再写
   });
 

@@ -1,7 +1,8 @@
 // dia collab observer（M3a）：只读看板 + 一次性 tick
 // 设计：docs/design/comm-semantics.md §7
 // 约束：一次只跑一个 tick（定时交给 dia job）；不写消息状态；不常驻；不联网。
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { accessSync, appendFileSync, chmodSync, constants, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { delimiter } from "node:path";
 import { dirname, join } from "node:path";
 import * as collab from "./collab.ts";
 import * as paths from "./paths.ts";
@@ -35,6 +36,17 @@ export interface BoardState {
   age_ms: number | null;
   missing: boolean;
   persisted: boolean;
+}
+
+/** 找到当前 dia 可执行文件（launchd/cron 的 PATH 不含 ~/.local/bin，必须写绝对路径） */
+export function diaBin(): string {
+  if (process.env.DIA_BIN) return process.env.DIA_BIN;
+  for (const dir of (process.env.PATH || "").split(delimiter)) {
+    if (!dir) continue;
+    const p = join(dir, "dia");
+    try { accessSync(p, constants.X_OK); return p; } catch { /* next */ }
+  }
+  return "dia";
 }
 
 export const DEFAULT_INTERVAL_S = 300;
@@ -206,7 +218,8 @@ export function ensureJob(): string | null {
     let tasks: Record<string, any> = {};
     try { tasks = JSON.parse(readFileSync(regPath, "utf8"))?.tasks || {}; } catch { /* none */ }
     if (Object.keys(tasks).some((k) => k === NAME || k.endsWith(`.${NAME}`))) return null;
-    const base = ["install", NAME, "--desc", "collab board 刷新（dia collab enable 注册）", "--interval", "300", "--cmd", "dia collab observe"];
+    const cmd = `'${diaBin()}' collab observe`;
+    const base = ["install", NAME, "--desc", "collab board 刷新（dia collab enable 注册）", "--interval", "300", "--cmd", cmd];
     let r = job.runJobCapture(base);
     // 门控 rc=4：npm 全局的 `dia` 不是 git checkout，class=unknown。命令本身固定且稳定，按逃生舱重试一次。
     if (r.status === 4) r = job.runJobCapture([...base, "--allow-unstable"]);

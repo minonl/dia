@@ -1,2 +1,4 @@
 packages:
   - packages/*
+  # graph-web 是自包含可选包（无依赖），不参与 workspace/lockfile
+  - "!packages/graph-web"

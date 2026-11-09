@@ -364,9 +364,18 @@ export function satisfies(version: string, range: string): boolean {
 export function resolveKitDir(id: string, range: string): string {
   const root = join(paths.installDir(), "kits", id);
   if (!existsSync(root)) throw new Error(`E_KIT_NOT_FOUND: ${id}（安装目录无 kits/${id}）`);
-  const versions = readdirSync(root).filter((v) => statSync(join(root, v)).isDirectory()).sort();
+  // 布局一：kit 源目录（kits/<id>/dia.json，版本在清单里）——install.sh/npm 包分发的是这种
+  if (existsSync(join(root, "dia.json"))) {
+    const v = readKitManifest(root).version;
+    if (satisfies(v, range)) return root;
+    throw new Error(`E_KIT_VERSION: ${id}@${v} 不满足 ${range}`);
+  }
+  // 布局二：版本目录（kits/<id>/<ver>/dia.json）
+  const versions = readdirSync(root)
+    .filter((v) => existsSync(join(root, v, "dia.json")))
+    .sort();
   const hit = versions.filter((v) => satisfies(v, range)).pop();
-  if (!hit) throw new Error(`E_KIT_VERSION: ${id} 无满足 ${range} 的版本（候选：${versions.join(", ")}）`);
+  if (!hit) throw new Error(`E_KIT_VERSION: ${id} 无满足 ${range} 的版本（候选：${versions.join(", ") || "无"}）`);
   return join(root, hit);
 }
 

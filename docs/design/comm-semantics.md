@@ -67,16 +67,22 @@ dia collab stats [--since 7d] [--by session|pair|class] [--now ISO] [--json]
 ## 7. 观察器与唤醒
 
 - **指标不需要常驻**：读时聚合即可；
-- **M3a 已实现**：`dia collab observe --once`（建议用 `dia job` 60s 周期跑）产出
-  `collab/state/board.json`（0600）/ `metrics/<day>.json` / `escalations.jsonl`（只含 id/class/age，无正文）；
-  `dia collab board` 读缓存（hook 用，缺失/过期现算）；
-- **M3b 已提供**：`kits/dia-msg` 安装 OpenCode 插件 `dia-inbox`（`ctx.session.hook("context")`），
-  每个 model context 前读 board，只在「本会话有未读」时注入一行计数提示（5 分钟节流、10 分钟 board 过期）；
-  **不调 `dia in`、不标 delivered/exposed**；dsh 无 hook 时退化为 SKILL 规则；
-- hook 与指标的关系：提示只是计数，不算 exposed；要记 exposed 需 hook 显式调 `dia in --expose`；
-- 唤醒优先级：per-turn hook（读 `dia collab board` 缓存）> wake 文件 > 钉钉升级；
-- 红线：不代答、不自动 ack、不写消息状态、不联网（`src/**` 零网络不变）。
+- **观察器用法（M3a）**：`dia collab observe` 恒为**一次性 tick**（无 `--watch/--daemon`，请求即 `E_NO_DAEMON`）；
+  定时交给唯一调度器 `dia job`，推荐 **300s**（与插件 5 分钟节流同量级；cron 需 60 的倍数）：
 
+  ```bash
+  dia job install collab-observe --desc 'collab board 刷新' --interval 300 --cmd 'dia collab observe'
+  ```
+
+- 产出 `collab/state/board.json`（0600、原子写）/ `metrics/<day>.json` / `escalations.jsonl`
+  （去重：同一 `id:class` 只追加一次；只含 id/class/age，无正文）；
+- `dia collab board` 默认**只读**：缓存新鲜直接用；缺失/过期时**内存现算**（`stale:true`），不写盘；
+  `--refresh` 才落盘，`--cached` 只看缓存（缺失 exit 3，可与「0 未读」区分）；
+- 新鲜度：`TTL = 2×interval`，且必须 `> interval+60s`（上限 900s）；**interval 只认 board 里的声明值**，
+  回退计算不会用 CLI 默认值覆盖；未来时间戳视为不可信；
+- **M3b 已提供**：OpenCode 插件 `dia-inbox`（`ctx.session.hook("context")`）只读 board，
+  每轮最多注入一行计数提示（新鲜 5 分钟节流 / 过期 1 小时并标注「可能不准」），
+  **不调 `dia in`、不标 delivered/exposed、不写盘**；dsh 无 hook 时退化为 SKILL 规则；
 ## 8. 验收
 
 - 三态：`in` 输出后 delivered；`--expose` 写 exposed；ack 直跳补 delivered/first_touch；

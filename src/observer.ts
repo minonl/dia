@@ -1,8 +1,8 @@
-// dia collab observer（M3a）：只读观察器
+// dia collab observer（M3a）：只读看板 + 一次性 tick
 // 设计：docs/design/comm-semantics.md §7
-// 红线：只扫消息文件 + 写 board/metrics/escalations；不写消息状态、不代答、不联网。
-import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+// 约束：一次只跑一个 tick（定时交给 dia job）；不写消息状态；不常驻；不联网。
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import * as collab from "./collab.ts";
 import * as paths from "./paths.ts";
 
@@ -22,31 +22,57 @@ export interface Board {
 
 export interface ObserveOptions {
   now?: Date;
+  /** 生产 cadence（秒）；默认取已有 board 的 interval_s，再退到 300 */
   intervalSec?: number;
-  /** 默认 ~/.dia/collab；测试可注入 */
   root?: string;
 }
 
-const TERMINAL = new Set(["replied", "closed"]);
-const SLA_MS: Record<number, number> = { 0: 30 * 60_000, 1: 4 * 3600_000 };
+export interface BoardState {
+  board: Board | null;
+  /** 快照是否已过期/不可信 */
+  stale: boolean;
+  age_ms: number | null;
+  missing: boolean;
+  persisted: boolean;
+}
+
+export const DEFAULT_INTERVAL_S = 300;
+export const MIN_INTERVAL_S = 60;
+export const MAX_INTERVAL_S = 450;
+
+export function normInterval(v: number | undefined): number {
+  if (v === undefined || !Number.isFinite(v)) return DEFAULT_INTERVAL_S;
+  const n = Math.trunc(v);
+  if (n < MIN_INTERVAL_S || n > MAX_INTERVAL_S) return DEFAULT_INTERVAL_S;
+  return n;
+}
+
+/** TTL = 2×interval，且必须 > interval+60s；上限 900s */
+export function ttlMs(intervalSec: number): number {
+  const base = normInterval(intervalSec);
+  return Math.min(900_000, Math.max(base * 2000, base * 1000 + 60_000));
+}
 
 const rootOf = (o: ObserveOptions) => o.root ?? join(paths.diaHome(), "collab");
 const stateDir = (o: ObserveOptions) => join(rootOf(o), "state");
 const metricsDir = (o: ObserveOptions) => join(rootOf(o), "metrics");
 const boardFile = (o: ObserveOptions) => join(stateDir(o), "board.json");
+const escalatedFile = (o: ObserveOptions) => join(stateDir(o), "escalated.json");
 const escalationsFile = (o: ObserveOptions) => join(rootOf(o), "escalations.jsonl");
 
 const ts = (s?: string) => { if (!s) return null; const t = Date.parse(s); return Number.isNaN(t) ? null : t; };
 
-export function boardPath(): string { return join(paths.diaHome(), "collab", "state", "board.json"); }
+export function boardPath(root?: string): string { return join(root ?? join(paths.diaHome(), "collab"), "state", "board.json"); }
 
-/** 一次 tick：扫描 → 写 board / 当日 metrics 快照 / escalations；返回 board */
-export function observe(opts: ObserveOptions = {}): Board {
+const TERMINAL = new Set(["replied", "closed"]);
+const SLA_MS: Record<number, number> = { 0: 30 * 60_000, 1: 4 * 3600_000 };
+
+/** 纯计算：扫描消息 → board（不写盘） */
+export function buildBoard(opts: ObserveOptions = {}): Board {
   const now = opts.now ?? new Date();
   const nowMs = now.getTime();
-  const interval = opts.intervalSec ?? 60;
+  const interval = normInterval(opts.intervalSec ?? readInterval(opts));
   const all = collab.allMessages().filter((m) => !m.legacy && !TERMINAL.has(m.state));
-
   const age = (m: any) => { const t = ts(m.created_at); return t === null ? 0 : Math.max(0, nowMs - t); };
   const cls = (m: any) => (typeof m.class_snapshot === "number" ? m.class_snapshot : 2);
 
@@ -63,17 +89,12 @@ export function observe(opts: ObserveOptions = {}): Board {
     .slice(0, 5)
     .map((m) => ({ id: m.id, class: cls(m), subject: m.subject, age_ms: age(m) }));
 
-  // 升级事件：P0 超过 30m / P1 超过 4h 仍未送达
-  const esc: any[] = [];
-  for (const m of all) {
-    const c = cls(m);
-    const limit = SLA_MS[c];
-    if (limit === undefined || m.delivered_at) continue;
-    const a = age(m);
-    if (a > limit) esc.push({ ts: now.toISOString(), id: m.id, class: `P${c}`, age_ms: a, kind: "undelivered" });
-  }
+  const escalated = all.filter((m) => {
+    const c = cls(m); const limit = SLA_MS[c];
+    return limit !== undefined && !m.delivered_at && age(m) > limit;
+  });
 
-  const board: Board = {
+  return {
     schema: 1,
     generated_at: now.toISOString(),
     interval_s: interval,
@@ -84,38 +105,96 @@ export function observe(opts: ObserveOptions = {}): Board {
     oldest_age_ms: all.reduce((x, m) => Math.max(x, age(m)), 0),
     sessions: [...sessions.values()].sort((a, b) => b.oldest_age_ms - a.oldest_age_ms),
     top,
-    escalations: esc.length,
+    escalations: escalated.length,
   };
+}
 
-  mkdirSync(stateDir(opts), { recursive: true, mode: 0o700 });
-  writeFileSync(boardFile(opts), JSON.stringify(board, null, 1) + "\n", { mode: 0o600 });
+function readInterval(opts: ObserveOptions): number | undefined {
+  try {
+    const raw = JSON.parse(readFileSync(boardFile(opts), "utf8"));
+    return typeof raw?.interval_s === "number" ? raw.interval_s : undefined;
+  } catch { return undefined; }
+}
 
-  // 当日 metrics 快照（按天覆盖：同一日多次 tick 用最新值；不累积历史事件）
+function chmodDir(dir: string) { try { mkdirSync(dir, { recursive: true, mode: 0o700 }); chmodSync(dir, 0o700); } catch { /* ignore */ } }
+function writeFile600(path: string, data: string) {
+  const tmp = `${path}.tmp.${process.pid}.${Math.random().toString(16).slice(2)}`;
+  writeFileSync(tmp, data, { mode: 0o600 });
+  renameSync(tmp, path);
+  try { chmodSync(path, 0o600); } catch { /* ignore */ }
+}
+
+/** 一次性 tick：写 board/metrics/escalations；返回 board */
+export function observe(opts: ObserveOptions = {}): Board {
+  const now = opts.now ?? new Date();
+  const interval = normInterval(opts.intervalSec ?? readInterval(opts));
+  const board = buildBoard({ ...opts, now, intervalSec: interval });
+  const done = (b: Board): Board => b;
+
+  chmodDir(stateDir(opts));
+  writeFile600(boardFile(opts), JSON.stringify(board, null, 1) + "\n");
+
   try {
     const day = board.generated_at.slice(0, 10);
     const st = collab.messageStats({ since: "7d", now });
-    mkdirSync(metricsDir(opts), { recursive: true, mode: 0o700 });
-    writeFileSync(join(metricsDir(opts), `${day}.json`), JSON.stringify(st, null, 1) + "\n", { mode: 0o600 });
+    chmodDir(metricsDir(opts));
+    writeFile600(join(metricsDir(opts), `${day}.json`), JSON.stringify(st, null, 1) + "\n");
   } catch { /* 指标失败不影响 board */ }
 
-  if (esc.length) {
-    mkdirSync(rootOf(opts), { recursive: true, mode: 0o700 });
-    appendFileSync(escalationsFile(opts), esc.map((e) => JSON.stringify(e)).join("\n") + "\n", { mode: 0o600 });
-  }
-  return board;
+  // 升级事件：按 `${id}:${class}` 去重（状态文件只是「当前仍升级中」集合，有界）
+  try {
+    const currently = buildEscalations(opts, now);
+    const keys = new Set(currently.map((e) => `${e.id}:${e.class}`));
+    let prev: string[] = [];
+    try { const raw = JSON.parse(readFileSync(escalatedFile(opts), "utf8")); if (Array.isArray(raw)) prev = raw.filter((x) => typeof x === "string"); } catch { /* none */ }
+    const seen = new Set(prev);
+    const fresh = currently.filter((e) => !seen.has(`${e.id}:${e.class}`));
+    if (fresh.length) {
+      chmodDir(rootOf(opts));
+      appendFileSync(escalationsFile(opts), fresh.map((e) => JSON.stringify(e)).join("\n") + "\n", { mode: 0o600 });
+      try { chmodSync(escalationsFile(opts), 0o600); } catch { /* ignore */ }
+    }
+    writeFile600(escalatedFile(opts), JSON.stringify([...keys].sort(), null, 1) + "\n");
+  } catch { /* ignore */ }
+
+  return done(board);
 }
 
-/** 读缓存 board（hook 用，≤50ms）：缺失或过期则现算一次 */
+function buildEscalations(opts: ObserveOptions, now: Date) {
+  const nowMs = now.getTime();
+  const out: any[] = [];
+  for (const m of collab.allMessages()) {
+    if (m.legacy || TERMINAL.has(m.state)) continue;
+    const c = typeof m.class_snapshot === "number" ? m.class_snapshot : 2;
+    const limit = SLA_MS[c];
+    if (limit === undefined || m.delivered_at) continue;
+    const t = ts(m.created_at);
+    const age = t === null ? 0 : Math.max(0, nowMs - t);
+    if (age > limit) out.push({ ts: now.toISOString(), id: m.id, class: `P${c}`, age_ms: age, kind: "undelivered" });
+  }
+  return out;
+}
+
+/** 读缓存状态（不写盘）：fresh / stale / missing */
+export function readBoardState(opts: ObserveOptions = {}): BoardState {
+  const now = opts.now ?? new Date();
+  let raw: any = null;
+  try { raw = JSON.parse(readFileSync(boardFile(opts), "utf8")); } catch { raw = null; }
+  const missing = !raw || raw.schema !== 1;
+  const at = missing ? null : ts(raw.generated_at);
+  const age = at === null ? null : now.getTime() - at;
+  const interval = normInterval(raw?.interval_s ?? opts.intervalSec);
+  const ttl = ttlMs(interval);
+  const future = at !== null && at > now.getTime() + 5_000;
+  const fresh = !missing && age !== null && age >= 0 && !future && age <= ttl;
+  if (fresh) return { board: raw as Board, stale: false, age_ms: age, missing: false, persisted: true };
+  const computed = buildBoard({ ...opts, now, intervalSec: interval });
+  return { board: computed, stale: true, age_ms: age, missing: missing || future, persisted: false };
+}
+
+/** 兼容包装：返回 board（缺失/过期时内存现算，不写盘） */
 export function readBoard(opts: ObserveOptions = {}): Board {
-  const f = boardFile(opts);
-  try {
-    if (existsSync(f)) {
-      const b = JSON.parse(readFileSync(f, "utf8")) as Board;
-      const age = Date.now() - ts(b.generated_at)!;
-      if (age <= (b.interval_s || 60) * 2 * 1000) return b;
-    }
-  } catch { /* fall through */ }
-  return observe(opts);
+  return readBoardState(opts).board!;
 }
 
 export function boardFileMode(opts: ObserveOptions = {}): number {

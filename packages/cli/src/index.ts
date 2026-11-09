@@ -188,7 +188,7 @@ usage:
   dia <persona-cmd> [args…]           # 一级委派（内置优先）
   dia collab status|enable|disable [--persona ID]   # dia-msg 默认能力开关（默认开）
   dia collab stats [--since 7d] [--by session|pair|class] [--json]   # 只读聚合（送达/回复/积压）
-  dia collab board [--json] | observe [--once] [--interval 60] [--json]   # 只读看板/观察器（不写消息状态）
+  dia collab board [--cached|--refresh] [--json] | observe [--interval 300] [--json]   # 一次性 tick/看板（无常驻；定时用 dia job）
   dia whoami [--json] [--name NAME]   # 当前会话身份（session id）
   dia in [--unread] [--all] [--legacy] [--class P0,P1] [--sort priority|arrival] [--expose] [--json]   # 会话收件箱（正文内联）
   dia out --to <session_id> --subject S (--body B|--body-file F) [--kind K] [--touch p1,p2] [--reply-to ID]
@@ -1076,17 +1076,46 @@ async function collabCli(argv: string[]): Promise<number> {
       return 0;
     }
     if (sub === "board" || sub === "observe") {
-      const intervalSec = Number(flag(args, "--interval") || 60);
-      if (!Number.isInteger(intervalSec) || intervalSec < 10) { err("E_USAGE: --interval 必须是 >=10 的整数"); return 2; }
+      const allowed = sub === "observe"
+        ? ["--once", "--interval", "--now", "--json"]
+        : ["--cached", "--refresh", "--now", "--json"];
+      const daemonFlags = ["--watch", "--daemon", "--follow"];
+      for (const a of args) {
+        if (!a.startsWith("--")) continue;
+        if (daemonFlags.includes(a)) { err("E_NO_DAEMON: dia 无常驻设计；定时请用 dia job install（observe 恒为一次性）"); return 2; }
+        if (!allowed.includes(a)) { err(`E_USAGE: 未知参数 ${a}（允许：${allowed.join(" ")}）`); return 2; }
+      }
       const nowRaw = flag(args, "--now");
       const now = nowRaw ? new Date(nowRaw) : undefined;
       if (now && Number.isNaN(now.getTime())) { err("E_USAGE: 非法 --now"); return 2; }
-      const b = sub === "board" ? observer.readBoard({ now, intervalSec }) : observer.observe({ now, intervalSec });
-      if (asJson) { out(JSON.stringify(b, null, 1)); return 0; }
-      const f = (v: number | null | undefined) => v === null || v === undefined ? "-" : String(v);
-      out(`board ${b.generated_at}  open=${b.open}  P0=${b.p0}  P1=${b.p1}  undelivered=${b.undelivered}  oldest=${b.oldest_age_ms}ms`);
-      if (b.top.length) { out("top:"); for (const t of b.top) out(`  P${t.class}\t${t.id}\t${t.subject}\t${t.age_ms}ms`); }
-      if (b.escalations) out(`escalations: ${b.escalations}（详见 ~/.dia/collab/escalations.jsonl）`);
+
+      const outBoard = (b: any, meta?: any) => {
+        const payload = meta ? { ...b, ...meta } : b;
+        if (asJson) { out(JSON.stringify(payload, null, 1)); return; }
+        const f = (v: number | null | undefined) => v === null || v === undefined ? "-" : String(v);
+        const tag = meta?.missing ? "  missing" : meta?.stale ? `  快照 ${Math.round((meta.age_ms || 0) / 60000)} 分钟前（可能过期）` : "";
+        out(`board ${b?.generated_at || "-"}  open=${b?.open ?? 0}  P0=${b?.p0 ?? 0}  P1=${b?.p1 ?? 0}  undelivered=${b?.undelivered ?? 0}  oldest=${b?.oldest_age_ms ?? 0}ms${tag}`);
+        if (b?.top?.length) { out("top:"); for (const t of b.top) out(`  P${t.class}\t${t.id}\t${t.subject}\t${t.age_ms}ms`); }
+        if (b?.escalations) out(`escalations: ${b.escalations}（详见 ~/.dia/collab/escalations.jsonl）`);
+      };
+
+      if (sub === "observe") {
+        const intervalSec = flag(args, "--interval") === undefined ? undefined : Number(flag(args, "--interval"));
+        if (intervalSec !== undefined && (!Number.isInteger(intervalSec) || intervalSec < observer.MIN_INTERVAL_S || intervalSec > observer.MAX_INTERVAL_S)) {
+          err(`E_USAGE: --interval 必须是 ${observer.MIN_INTERVAL_S}-${observer.MAX_INTERVAL_S} 的整数秒`); return 2;
+        }
+        outBoard(observer.observe({ now, intervalSec }));
+        return 0;
+      }
+
+      if (has(args, "--refresh")) { outBoard(observer.observe({ now })); return 0; }
+      const st = observer.readBoardState({ now });
+      if (has(args, "--cached") && st.missing) {
+        if (asJson) out(JSON.stringify({ board: null, missing: true, stale: true }, null, 1));
+        else out("(no board cache；先跑 dia collab observe)");
+        return 3;
+      }
+      outBoard(st.board, { stale: st.stale, age_ms: st.age_ms, missing: st.missing, persisted: st.persisted });
       return 0;
     }
     if (sub === "stats") {

@@ -234,6 +234,7 @@ run cp "$SRC/dist/cli.js" "$DIA_INSTALL_DIR/dist/cli.js"
 run cp "$SRC/package.json" "$DIA_INSTALL_DIR/package.json"
 # 所有 kit 源一起分发（dia-msg / git / node …）；安装到数据根由 `dia kit add` 完成
 for _k in "$SRC"/kits/*/; do
+  _k="${_k%/}"                              # 去尾斜杠：cp -R 带斜杠会"摊平"目录
   [ -d "$_k" ] && run cp -R "$_k" "$DIA_INSTALL_DIR/kits/"
 done
 run cp -R "$SRC/packages/job/bin" "$DIA_INSTALL_DIR/packages/job/"

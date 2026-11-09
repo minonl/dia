@@ -109,7 +109,7 @@ dia persona remove dabo
 | `collab board / observe` | **已实现** | `observe` 恒为一次性 tick（无守护；定时用 `dia job`，建议 300s）→ board/metrics/escalations（0600、去重、无正文）；`board` 默认只读（缺失/过期内存现算 + stale 标记），`--refresh` 落盘、`--cached` 只读 |
 | `collab stats` | **已实现** | 只读聚合：delivered/exposed/ack/reply 率、deliver_lag、reply_latency（median/p90/censored）、backlog（orphan/by_class）；cohort 按 created_at 入窗 |
 | `task add/list/link/plan/split/status/done` | **已实现** | done 需 judge + evidence；`plan` 写计划态（prio/start/due/progress）；`split` 父 depends on 子（单条原子事件，judge 继承） |
-| `graph [--json] [--task T] [--tui …] [--export-html] [--next/--explain/--lint/--seats]` | **已实现** | 图 JSON（schema 1 + capabilities）；节点带 prio/start/due/progress + 派生 `eff_prio/ready/rank/unblocks/critical` 等；`--export-html` 单文件 HTML；`--next [n]` / `--explain <id>` / `--lint` 只读编排（Kahn-v1）；`--next --seats N [--presence-ttl 30m]` 固定席位分配（seats-v1，见 [seat-scheduling-m2.md](design/seat-scheduling-m2.md)） |
+| `graph [--json] [--task T] [--tui …] [--export-html] [--serve] [--next/--explain/--lint/--seats]` | **已实现** | 图 JSON（schema 1 + capabilities）；节点带 prio/start/due/progress + 派生 `eff_prio/ready/rank/unblocks/critical` 等；`--export-html` 单文件 HTML；`--next [n]` / `--explain <id>` / `--lint` 只读编排（Kahn-v1）；`--next --seats N [--presence-ttl 30m]` 固定席位分配（seats-v1）；`--serve [--port N] [--no-open]` 本机只读 web（需 graph-web 可选包） |
 | `team run --mock / --acp / --dsh`、`team gate/accept/reject` | **已实现** | 状态机 + 门禁；成功/失败路径均跑通 |
 | `job …` | **已实现** | 转发 `packages/job`（launchd/cron/schtasks） |
 | `patch …` | **未实现** | 当前 `unknown command`；设计见 `docs/patching.md` |

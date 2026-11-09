@@ -1,6 +1,8 @@
 # graph live 服务（M2 设计，可选包）
 
-> 状态：设计定稿（2026-11-06，未实现）｜前置：`graph-web-m1.md`（静态导出）、`graph-ui-m1.md`、`seat-scheduling-m2.md`
+> 状态：M2a 已实现（2026-11-09）：`packages/graph-web` + `dia graph --serve`
+> 已实现：loopback/端口 0、token→HttpOnly cookie、`/`、`/api/graph`（rev/304）、`/api/health`、`/api/meta`、Host/Origin 校验、CSP、405/421
+> 未实现：SSE/自动轮询刷新、`/api/next` 透传、写操作（保持只读）｜前置：`graph-web-m1.md`、`graph-ui-m1.md`、`seat-scheduling-m2.md`
 > 定位：本机**只读**实时预览；不写账本、不做多人共享、不暴露公网。
 
 ## 1. 目标 / 非目标
@@ -27,7 +29,9 @@
 - 只绑 `127.0.0.1`；默认 `--port 0`（内核分配），启动后从 `server.address()` 取真实端口；
 - 拒绝 `0.0.0.0` 与 IPv6 通配；显式 `--port` 也只绑 loopback；
 - **token**：32B 随机 base64url，进程内有效（**不是单次**），所有 `/api/*` 要求 `X-Dia-Token`，比较用 `timingSafeEqual`；
-- 传递：URL fragment `#t=<token>` → 启动时读取 → `sessionStorage` → `history.replaceState` 立即抹掉；**不能**与路由 hash 抢位（先剥离 token 再交给 `#/graph`）；
+- 传递（M2a 实现）：启动打印 `/?t=<token>`；服务端校验后种 `HttpOnly; SameSite=Strict` cookie 并 302 到 `/`，
+  token 不残留在页面 URL；`/api/*` 也接受 `x-dia-token` 头（脚本用）。
+  （原设计的 fragment 方案需要页面 JS 读取，当前静态模板没有 fetch，故采用 cookie 换票，等价于「一次性 token 换会话」。）
 - 输出：仅 TTY 打印完整 URL；非 TTY 打码，并把完整 URL 写入 `~/.dia/export/serve-<pid>.url`（0600），打印路径；
 - 401：页面显示「会话已失效，请回到终端重新打开」+ 可复制的重开命令。
 

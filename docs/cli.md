@@ -95,7 +95,7 @@ dia persona remove dabo
 | `persona update <id>` | **已实现** | 从 lock 记录的 source+ref 重装，并把 active 指向新版本；本地源亦可；`--force` 覆盖宿主/内联内容冲突（先备份） |
 | `persona default <id>` | **已实现** | 改宿主 `default_agent`：备份原文件 + 记原值，`--unset` 精确还原；非严格 JSON 直接拒绝 |
 | `persona create / render` | **已实现** | `create` 出骨架；`render --check` 只比对不写盘（跳过宿主自写文件，如 dsh `cordis.yml` / `package.json` / 锁文件）；`render` 只覆盖 persona 产物，不整树重建宿主 profile |
-| `kit add / list / verify / remove` | **已实现** | 复制/软链/记账；冲突写盘前全量检查（`E_CONFLICT`）；**空清单/空内容拒绝**（`E_MANIFEST`/`E_KIT_EMPTY`）；`src/kit.ts` + `tests/kit.test.ts` |
+| `kit add / list / verify / remove / gc` | **已实现** | 复制/软链/记账；冲突写盘前全量检查（`E_CONFLICT`）；**空清单/空内容拒绝**（`E_MANIFEST`/`E_KIT_EMPTY`）；`src/kit.ts` + `tests/kit.test.ts` |
 | `env list / check / run` | **已实现** | 白名单注入、不回显值、`--redact`、密钥不进 argv；清单由 persona 声明（`src/env.ts` + `tests/env.test.ts`） |
 | `postinstall` | **已实现** | 全局安装后自举：装配内置 `dia-msg` kit + 写自举戳；幂等、永不失败（供 npm `postinstall` 与 `--ignore-scripts` 用户手动补跑） |
 | `migrate data [--from DIR] [--dry-run]` | **已实现** | 旧数据根 → `~/.dia`：只搬数据子目录，目标已存在则合并，失败计数退 1（取代已删除的 `install.sh --migrate`） |

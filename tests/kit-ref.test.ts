@@ -61,6 +61,20 @@ describe("persona 外部 kit 引用", () => {
     expect(r.rendered.length).toBeGreaterThan(0);
   });
 
+  test("安装目录为 kit 源目录布局（kits/<id>/dia.json）也能解析", () => {
+    const data = tmp(), install = tmp(), src = tmp(), agents = tmp();
+    const dir = join(install, "kits", "node");
+    mkdirSync(join(dir, "knowledge"), { recursive: true });
+    writeFileSync(join(dir, "dia.json"), JSON.stringify({ schema: 1, kind: "kit", id: "node", version: "0.2.0", knowledge: ["knowledge"] }));
+    writeFileSync(join(dir, "knowledge", "a.md"), "---\ntitle: n\n---\n\nn\n");
+    seedPersona(src, ["node@>=0.1.0"]);
+    setEnv({ DIA_ROOT: data, DIA_INSTALL_DIR: install, DIA_OPENCODE_AGENTS_DIR: agents });
+    persona.install(src);
+    const slot = readdirSync(join(data, "personas", "p"))[0];
+    const lock = JSON.parse(readFileSync(join(data, "personas", "p", slot, "dia.lock"), "utf8"));
+    expect(lock.kits).toEqual([{ id: "node", version: "0.2.0", range: ">=0.1.0" }]);
+  });
+
   test("无匹配版本报 E_KIT_VERSION", () => {
     const data = tmp(), install = tmp(), src = tmp(), agents = tmp();
     seedInstall(install, "git", ["0.1.0"]);

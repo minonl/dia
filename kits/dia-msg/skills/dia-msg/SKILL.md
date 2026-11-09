@@ -50,6 +50,7 @@ dia out --to <session_id> --subject "交接" --body-file ./handoff.md --kind han
 - `dia collab status` 看当前是否启用、禁用原因。
 - `dia collab stats [--since 7d] [--by session|pair|class]` 看送达率/回复率/回复时长/积压。
 - `dia collab board` 看缓存快照（hook 用；`observe --once` 由 job 周期刷新）。
+- 装了 OpenCode 插件 `dia-inbox` 时，每轮模型请求前会收到一行「你有 N 条未读」提示（5 分钟节流）；看到就去跑 `dia in`，不要凭提示行动。
 - `dia collab disable` / `dia collab enable` 全局开关；`DIA_MSG=0` 只临时关闭自动行为。
 - 旧 `dia msg ...` 命令是 v1 兼容；新会话请用 `dia in / out / ack / reply / close`。
 

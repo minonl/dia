@@ -131,3 +131,14 @@ describe("live 注入不影响导出", () => {
     expect(live).toContain("abc123");
   });
 });
+
+describe("可访问性与大图降级（模板契约）", () => {
+  test("卡片/时间线条可键盘操作，且有规模降级", () => {
+    const tpl = readFileSync(join(import.meta.dir, "..", "src", "graph-html", "template.html"), "utf8");
+    expect(tpl).toContain("el.tabIndex=0");
+    expect(tpl).toContain("bar.tabIndex=0");
+    expect(tpl).toContain("applyScale()");
+    expect(tpl).toContain("n>200");
+    expect(tpl).toContain("Escape");
+  });
+});

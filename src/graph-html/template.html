@@ -245,7 +245,7 @@
             <div class="tl-body" id="tl-body"></div>
           </div>
         </div>
-        <div class="tl-caption">红色虚线 = 今天；虚线右端 = 未录入 due 的开放任务；斜纹 = 进度按状态估算。</div>
+        <div class="tl-caption">红色虚线 = 今天；橙色描边 = 关键闭包；虚线右端 = 未录入 due 的开放任务；斜纹 = 进度按状态估算。</div>
       </div>
     </div>
   </section>
@@ -470,7 +470,8 @@ function card(t,x,y,showPrio=false){
     '<div class="progress"><i class="'+esc(t.status)+'" style="width:'+t.progress+'%"></i></div>'+
     (bits.length?'<div class="badges">'+bits.join('')+'</div>':'')+
     (state.mode==='detail'?'<div class="meta" style="margin-top:5px">'+(t.owner?'@'+esc(t.owner):'unassigned')+' · dep '+t.deps.length+'</div>'+rel:'');
-  el.dataset.id=t.id;
+  el.dataset.id=t.id; el.tabIndex=0; el.setAttribute('role','button'); el.setAttribute('aria-label',t.label+' · '+t.status);
+  el.onkeydown=e=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); openDrawer(t.id,'task'); } };
   el.onclick=()=>{ clearTimeout(clickTimer); clickTimer=setTimeout(()=>openDrawer(t.id,'task'),180); };
   el.ondblclick=e=>{ e.preventDefault(); clearTimeout(clickTimer); toggleSel(t.id); };
   return el;
@@ -568,6 +569,7 @@ function openDrawer(id, tab){
   document.getElementById('drawer').setAttribute('aria-hidden','false');
   document.getElementById('backdrop').classList.add('show');
   setDrawerTab(drawerTab);
+  setTimeout(()=>{ try { const c=document.querySelector('#drawer .close'); if(c) c.focus(); } catch {} },0);
 }
 function setDrawerTab(tab){
   drawerTab=tab;
@@ -575,6 +577,7 @@ function setDrawerTab(tab){
   const body=document.getElementById('drawer-body');
   body.innerHTML=tab==='intervene'?commandHtml(drawerTask):taskHtml(drawerTask);
 }
+document.addEventListener('keydown',e=>{ if(e.key==='Escape'){ const d=document.getElementById('drawer'); if(d&&d.classList.contains('show')) closeDrawer(); } });
 function closeDrawer(){
   document.getElementById('drawer').classList.remove('show');
   document.getElementById('drawer').setAttribute('aria-hidden','true');
@@ -617,10 +620,13 @@ function drawTimeline(){
     const track=row.querySelector('.tl-track');
     const startOff=t.start===null?win.from:t.start;
     const endOff=Number.isFinite(t.end)?t.end:win.to;
-    const bar=document.createElement('div'); bar.className='tl-bar '+t.status+(Number.isFinite(t.end)?'':' open');
+    const bar=document.createElement('div'); bar.className='tl-bar '+t.status+(Number.isFinite(t.end)?'':' open')+(t.critical?' critical':'');
+    bar.tabIndex=0; bar.setAttribute('role','button'); bar.setAttribute('aria-label',t.label+' · '+t.status);
     bar.style.left=x(startOff)+'%'; bar.style.width=Math.max(1.5,x(endOff)-x(startOff))+'%';
     bar.title=dayDate(startOff)+' → '+(Number.isFinite(t.end)?dayDate(t.end):'开放')+' ('+t.progress+'%'+(t.derived?' 估算':'')+')';
-    bar.innerHTML='<div class="fill" style="width:'+t.progress+'%"></div>'; bar.onclick=()=>openDrawer(t.id,'task'); track.appendChild(bar);
+    bar.innerHTML='<div class="fill" style="width:'+t.progress+'%"></div>'; bar.onclick=()=>openDrawer(t.id,'task');
+    bar.onkeydown=e=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); openDrawer(t.id,'task'); } };
+    track.appendChild(bar);
     if(win.from<=0&&win.to>=0){ const line=document.createElement('div'); line.className='tl-today'; line.style.left=x(0)+'%'; line.style.top='0'; line.style.bottom='0'; line.textContent=''; track.appendChild(line); }
     body.appendChild(row);
   });
@@ -697,7 +703,7 @@ function renderSearchList(ms){
     return '<div class="q-item'+(on?' sel':'')+'" data-id="'+esc(t.id)+'"><span>'+esc(t.label)+'<i class="q-prio">'+esc(t.prio)+'</i></span><span class="k">'+(on?'✓ ':'')+esc(t.id)+'</span></div>';
   }).join('');
   box.classList.add('open');
-  box.querySelectorAll('.q-item').forEach(el=>el.onclick=e=>{ e.stopPropagation(); toggleSel(el.dataset.id); });
+  box.querySelectorAll('.q-item').forEach(el=>{ el.tabIndex=0; el.onkeydown=e=>{ if(e.key==='Enter'){ e.preventDefault(); toggleSel(el.dataset.id); } }; el.onclick=e=>{ e.stopPropagation(); toggleSel(el.dataset.id); }; });
 }
 function searchListItems(){
   const box=document.getElementById('q-list');
@@ -755,6 +761,17 @@ function routeString(view,mode,range,zoom,from,to){
   }
   return '#/'+p+(qs.toString()?'?'+qs.toString():'');
 }
+function applyScale(){
+  const n=tasks.length;
+  const detailBtn=document.querySelector('#mode button[data-m="detail"]');
+  const prioBtn=document.querySelector('#layout button[data-l="priority"]');
+  if(detailBtn) detailBtn.disabled=n>120;
+  if(prioBtn) prioBtn.disabled=n>200;
+  if(state.mode==='detail'&&n>120) state.mode='simple';
+  if(state.layout==='priority'&&n>200) state.layout='dep';
+  document.querySelectorAll('#mode button').forEach(x=>x.classList.toggle('on',x.dataset.m===state.mode));
+  document.querySelectorAll('#layout button').forEach(x=>x.classList.toggle('on',x.dataset.l===state.layout));
+}
 function applyRoute(){
   const stampEl=document.getElementById('updated');
   if(stampEl) stampEl.textContent='快照 '+(payload.generated_at||'-');
@@ -777,6 +794,7 @@ function applyRoute(){
   if(chip) chip.title='按依赖邻域聚焦；清空即回全量';
   const fdEl=document.getElementById('focus-fd'); if(fdEl) fdEl.value=String(r.fd);
   renderTokens();
+  applyScale();
   const rp=document.getElementById('route'); if(rp) rp.textContent=location.hash||routeString(r.view,r.mode,r.range,state.zoom,state.from,state.to);
   document.title='dia graph · '+(r.view==='time'?'时间线':'关系图');
   if(r.view==='time'){ drawTimeline(); const sc=document.getElementById('tl-scroll'), lb=document.getElementById('tl-labels-body'); sc.scrollTop=0; lb.style.transform='translateY(0px)'; if(state.sx) sc.scrollLeft=state.sx; } else drawGraph();

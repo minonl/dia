@@ -154,24 +154,31 @@ const LIVE_SCRIPT = (rev: string) => `
   cb.onchange = function(){ auto = cb.checked; localStorage.setItem(autoKey, auto ? "1" : "0"); };
   banner.querySelector("#dia-live-reload").onclick = function(){ location.reload(); };
   var ft = window["fet" + "ch"];
-  function tick(){
+  function showUpdate(j){
+    if (!j || !j.rev || j.rev === rev) return;
+    rev = j.rev;
+    banner.style.display = "flex";
+    var drawer = document.querySelector("#drawer.show");
+    if (auto && !drawer) setTimeout(function(){ location.reload(); }, 5000);
+  }
+  function poll(){
     if (document.hidden) return;
     ft("/api/graph?rev=" + encodeURIComponent(rev)).then(function(r){
       if (r.status === 304) return null;
       if (r.status === 401) { banner.style.display = "flex"; banner.firstChild.textContent = "会话已失效，请回终端重开"; return null; }
       if (!r.ok) throw new Error(String(r.status));
       return r.json();
-    }).then(function(j){
-      if (!j) return;
-      if (j.rev && j.rev !== rev) {
-        rev = j.rev;
-        banner.style.display = "flex";
-        var drawer = document.querySelector("#drawer.show");
-        if (auto && !drawer) setTimeout(function(){ location.reload(); }, 5000);
-      }
-    }).catch(function(){ /* 静默，下一轮重试 */ });
+    }).then(showUpdate).catch(function(){ /* 静默，下一轮重试 */ });
   }
-  setInterval(tick, 2000);
+  if (window.EventSource) {
+    try {
+      var es = new EventSource("/api/events");
+      es.addEventListener("rev", function(e){ try { showUpdate(JSON.parse(e.data)); } catch (_) {} });
+      es.onerror = function(){ try { es.close(); } catch (_) {} setInterval(poll, 2000); };
+    } catch (_) { setInterval(poll, 2000); }
+  } else {
+    setInterval(poll, 2000);
+  }
 })();
 </script>`;
 

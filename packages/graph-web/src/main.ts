@@ -1,5 +1,8 @@
 // dia-graph-web 入口（构建后 dist/main.js，node/bun 均可运行）
 import { spawn } from "node:child_process";
+import { mkdirSync, writeFileSync, chmodSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { startDiaServer } from "./server.ts";
 
 const argv = process.argv.slice(2);
@@ -23,10 +26,28 @@ try {
 }
 
 const { url, close } = started;
-console.log(`dia graph web: ${url}`);
+const masked = url.replace(/t=[^&]+/, "t=***");
+if (process.stdout.isTTY) {
+  console.log(`dia graph web: ${url}`);
+} else {
+  // 非 TTY（脚本/CI）：只打印打码 URL，完整 URL 0600 落盘
+  try {
+    const root = process.env.DIA_ROOT || process.env.DIA_DATA_DIR || join(homedir(), ".dia");
+    const dir = join(root, "export");
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const file = join(dir, `serve-${process.pid}.url`);
+    writeFileSync(file, url + "\n", { mode: 0o600 });
+    chmodSync(file, 0o600);
+    console.log(`dia graph web: ${masked}`);
+    console.log(`完整 URL（0600）：${file}`);
+  } catch (e: any) {
+    console.log(`dia graph web: ${masked}`);
+    console.log(`E_URLFILE: ${e?.message || e}`);
+  }
+}
 console.log("只读 · 仅本机 · 关闭：Ctrl-C");
 
-if (!has("--no-open")) {
+if (process.stdout.isTTY && !has("--no-open")) {
   const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
   const args = process.platform === "win32" ? ["/c", "start", "", url] : [url];
   try { spawn(opener, args, { stdio: "ignore", detached: true }).unref(); } catch { /* 手开 URL */ }

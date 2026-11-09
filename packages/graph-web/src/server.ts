@@ -7,6 +7,9 @@ import { buildPayload, renderHtml } from "../../../src/graph-html/render.ts";
 import * as graph from "../../../src/graph.ts";
 import * as claims from "../../../src/claims.ts";
 import * as task from "../../../src/task.ts";
+import * as plan from "../../../src/plan.ts";
+import * as seats from "../../../src/seats.ts";
+import { buildNext } from "../../../src/graph-next.ts";
 
 export interface ServerOptions {
   port?: number;
@@ -119,6 +122,49 @@ export function createDiaServer(opts: ServerOptions = {}) {
       return;
     }
 
+    if (url.pathname === "/api/next") {
+      try {
+        const nRaw = url.searchParams.get("n");
+        const n = nRaw === null ? 5 : Number(nRaw);
+        if (!Number.isInteger(n) || n < 1 || n > 50) { res.writeHead(400, { ...base, "Content-Type": "application/json" }); res.end(JSON.stringify({ error: { code: "E_BAD_REQ", message: "n 必须是 1-50" } })); log(400); return; }
+        const seatsRaw = url.searchParams.get("seats");
+        if (seatsRaw !== null) {
+          const sN = Number(seatsRaw);
+          if (!Number.isInteger(sN) || sN < 0) { res.writeHead(400, { ...base, "Content-Type": "application/json" }); res.end(JSON.stringify({ error: { code: "E_BAD_REQ", message: "seats 必须是 >=0 的整数" } })); log(400); return; }
+          const r = seats.assignSeats(task.list(), { seats: sN, now: opts.now });
+          res.writeHead(200, { ...base, "Content-Type": "application/json; charset=utf-8" });
+          res.end(JSON.stringify(r)); log(200); return;
+        }
+        const tasks = task.list();
+        const dr = plan.derive(tasks);
+        const next = buildNext(tasks.map((t) => {
+          const d = dr.byId.get(t.id)!;
+          return { id: t.id, title: t.title, status: t.status, rank: d.rank, declared: t.prio ?? null, eff: d.eff_prio, inherited: d.prio_inherited, critical: d.critical, unblocks: d.unblocks, blocked_by: d.blocked_by, ready: d.ready, startable: d.startable, rank_reason: d.rank_reason };
+        }), n);
+        res.writeHead(200, { ...base, "Content-Type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify(next)); log(200);
+      } catch (e: any) {
+        res.writeHead(503, { ...base, "Content-Type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({ error: { code: "E_LEDGER", message: String(e?.message || e) } })); log(503);
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/events") {
+      res.writeHead(200, { ...base, "Content-Type": "text/event-stream; charset=utf-8", Connection: "keep-alive" });
+      let last = revOf();
+      res.write(`event: rev\ndata: ${JSON.stringify({ rev: last })}\n\n`);
+      const timer = setInterval(() => {
+        try {
+          const r = revOf();
+          if (r !== last) { last = r; res.write(`event: rev\ndata: ${JSON.stringify({ rev: r })}\n\n`); }
+        } catch { /* ignore */ }
+      }, 2000);
+      const beat = setInterval(() => { try { res.write(": ping\n\n"); } catch { /* ignore */ } }, 15_000);
+      req.on("close", () => { clearInterval(timer); clearInterval(beat); });
+      return;
+    }
+
     if (url.pathname === "/api/health") {
       res.writeHead(200, { ...base, "Content-Type": "application/json; charset=utf-8" });
       res.end(JSON.stringify({ ok: true })); log(200); return;
@@ -126,7 +172,7 @@ export function createDiaServer(opts: ServerOptions = {}) {
 
     if (url.pathname === "/api/meta") {
       res.writeHead(200, { ...base, "Content-Type": "application/json; charset=utf-8" });
-      res.end(JSON.stringify({ readonly: true, capabilities: ["eff-prio", "ready", "rank", "split"] })); log(200); return;
+      res.end(JSON.stringify({ readonly: true, next_default: 5, seats_default: 1, capabilities: ["eff-prio", "ready", "rank", "split", "next", "seats"] })); log(200); return;
     }
 
     res.writeHead(404, { ...base, "Content-Type": "text/plain; charset=utf-8" });

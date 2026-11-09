@@ -79,18 +79,42 @@ export function buildPayload(graph: Graph, opts: RenderOptions = {}) {
       id: bare(n.id),
       label: n.label,
       status: n.status ?? "todo",
-      prio: n.prio ?? null,
+      declared: n.prio ?? null,
+      eff: n.eff_prio ?? n.prio ?? "P?",
+      inherited: !!n.prio_inherited,
+      source: n.prio_source ?? null,
+      rank: typeof n.rank === "number" ? n.rank : null,
+      rank_key: n.rank_key ?? null,
+      rank_reason: n.rank_reason ?? null,
+      critical: !!n.critical,
+      ready: n.ready !== false,
+      startable: !!n.startable,
+      blocked_by: n.blocked_by ?? [],
+      released_by: n.released_by ?? [],
+      dangling: n.dangling_deps ?? [],
+      depth: typeof n.depth === "number" ? n.depth : 0,
+      unblocks: typeof n.unblocks === "number" ? n.unblocks : 0,
+      slice: !!n.slice,
+      split_from: n.split_from ?? null,
+      split_children: n.split_children ?? [],
       start: startDay ? dayDiff(today, startDay) : null,
       end: endDay && startDay ? dayDiff(today, endDay) : null,
       progress: typeof n.progress === "number" ? n.progress : 0,
       derived: n.progress_derived !== false,
       owner: n.owner ? (redact ? `owner-${shortHash(n.owner)}` : n.owner) : null,
-      deps: (n.deps ?? []).filter((d) => known.has(`task:${d}`)),
+      deps: n.deps ?? [],
       touches: (n.touches ?? []).map((p) => (redact ? p.split("/").pop() || p : p)),
     };
   });
 
   const shownIds = new Set(tasks.map((t) => t.id));
+  // 依赖与边同口径：只保留实际渲染出来的任务，避免「有依赖没卡片/没边」
+  for (const t of tasks) t.deps = t.deps.filter((d) => shownIds.has(d));
+  const nextItems = tasks
+    .filter((t) => (t.status === "doing" || t.startable) && t.rank !== null)
+    .sort((a, b) => (a.status === "doing" ? 0 : 1) - (b.status === "doing" ? 0 : 1) || (a.rank! - b.rank!))
+    .slice(0, 5)
+    .map((t) => ({ id: t.id, title: t.label, rank: t.rank, eff: t.eff, status: t.status, why: t.rank_reason ?? `eff=${t.eff}` }));
   const edges = graph.edges
     .filter((e) => e.kind === "depends_on")
     .map((e) => ({ from: bare(e.from), to: bare(e.to), kind: "depends_on" as const }))
@@ -102,6 +126,7 @@ export function buildPayload(graph: Graph, opts: RenderOptions = {}) {
     generated_at: `${today} ${pad(now.getHours())}:${pad(now.getMinutes())}`,
     tasks,
     edges,
+    next: { policy: "kahn-v1", n: 5, items: nextItems },
     cycles: graph.cycles.map((c) => c.map(bare)),
     claims: opts.claims ?? graph.edges.filter((e) => e.kind === "claims").length,
     truncated: limit > 0 && ordered.length > limit ? { shown: limit, total: ordered.length } : null,

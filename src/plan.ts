@@ -36,6 +36,10 @@ export interface Derived {
   depth: number;
   unblocks: number;
   rank: number | null;
+  /** 排序键（eff,due,critical,slice,-unblocks,depth,created_at,id），供 UI 解释 */
+  rank_key?: (string | number)[];
+  /** 人话版排序依据 */
+  rank_reason?: string;
   split_from?: string;
   split_children?: string[];
   slice?: boolean;
@@ -226,6 +230,16 @@ export function derive(tasks: Task[]): DerivedResult {
       t.id,
     ] as const;
   };
+  const keyArray = (t: Task) => [...key(t)] as (string | number)[];
+  const keyReason = (t: Task) => {
+    const d = byIdOut.get(t.id)!;
+    const bits = [`eff=${d.eff_prio}`];
+    if (t.due) bits.push(`due=${t.due}`);
+    if (d.critical) bits.push("关键闭包");
+    if (d.slice) bits.push("最小切片");
+    if (d.unblocks) bits.push(`解锁${d.unblocks}`);
+    return bits.join(" · ");
+  };
   const cmp = (a: Task, b: Task) => {
     const ka = key(a), kb = key(b);
     for (let i = 0; i < ka.length; i++) {
@@ -238,7 +252,10 @@ export function derive(tasks: Task[]): DerivedResult {
   const pending = [...readyQueue].sort(cmp);
   while (pending.length) {
     const t = pending.shift()!;
-    byIdOut.get(t.id)!.rank = ++rank;
+    const d = byIdOut.get(t.id)!;
+    d.rank = ++rank;
+    d.rank_key = keyArray(t);
+    d.rank_reason = keyReason(t);
     for (const d of dependents.get(t.id) || []) {
       const n = indeg.get(d); if (n === undefined) continue;
       indeg.set(d, n - 1);

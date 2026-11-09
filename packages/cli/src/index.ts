@@ -1432,6 +1432,13 @@ async function personaCli(argv: string[]): Promise<number> {
       const resolved = ver ? persona.resolveVersion(id, ver) : null;
       const r = active.use(id, resolved || (has(args, "--latest") ? null : null), { reason: flag(args, "--reason") });
       out(asJson ? JSON.stringify(r) : `${id}: ${r.previous ?? "(未设置)"} → ${r.current.version}（${r.current.commit ?? "?"}, by ${r.current.by}）`);
+      // 切换版本后宿主产物（agent md / skill 软链 / dsh profile）仍指向旧槽位 → 顺手重渲染，避免 verify 立刻报漂移
+      try {
+        const rd = persona.render(id);
+        if (rd.drift.length) out(`  ↳ 已重渲染 ${rd.drift.length} 个宿主产物`);
+      } catch (e: any) {
+        err(`warn: 宿主产物未重渲染（${e?.message || e}）；可稍后运行 dia persona render ${id}`);
+      }
       await autoIndexPersona(id);
       return 0;
     } catch (e: any) {

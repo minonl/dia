@@ -77,6 +77,19 @@ describe("kit install", () => {
     kit.remove("nm-kit"); // 不影响后续 kit.list() 断言
   });
 
+  test("force：覆盖已存在的异内容产物并备份（内置 kit 升级用）", () => {
+    const dest = join(home, ".config/opencode/AGENTS.md");
+    mkdirSync(dirname(dest), { recursive: true });
+    writeFileSync(dest, "user-customized\n");
+    const m = { files: [{ from: "core/knowledge/scenes.md", to: "~/.config/opencode/AGENTS.md" }] };
+    expect(() => kit.renderContent(src, src, m)).toThrow(/E_CONFLICT/);
+    kit.renderContent(src, src, m, { force: true });
+    expect(readFileSync(dest, "utf8")).toContain("# scenes");
+    const bdir = join(process.env.DIA_DATA_DIR!, "backups");
+    expect(readdirSync(bdir).length).toBeGreaterThan(0);
+    rmSync(dest, { force: true });
+  });
+
   test("dry-run 不写任何东西", () => {
     const r = kit.install(src, { dryRun: true });
     expect(r.hash).toBeNull();

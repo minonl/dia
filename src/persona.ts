@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { closeSync, cpSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, cpSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -79,6 +79,10 @@ export interface Installed {
 
 function shaFile(p: string): string {
   return createHash("sha256").update(readFileSync(p)).digest("hex");
+}
+
+function isSymlink(p: string): boolean {
+  try { return lstatSync(p).isSymbolicLink(); } catch { return false; }
 }
 
 function walkFiles(root: string): string[] {
@@ -691,16 +695,31 @@ export function render(id: string, opts: { host?: string; home?: string; check?:
   }
   if (opts.check) return { id, version, check: true, drift, backups: [] };
 
+  // persona 自带内容（skills/bin 软链）也要重渲染：切版本后软链可能仍指旧槽位，而内容相同 → 曾漏判
+  const hostHasInline = hosts.some((h) => h === "opencode" || h === "dsh");
+  const inlineManifest: any = hostHasInline ? m : { ...m, skills: [] };
+  const inlinePlan = kit.renderContent(dir, dir, inlineManifest, { dryRun: true, force: true }) ?? [];
+  const inlineDrift: RenderDrift[] = [];
+  for (const e of inlinePlan) {
+    if (e.type === "dir" || e.type !== "link") continue;
+    const want = resolve(dir, e.value);
+    let cur = "";
+    try { cur = realpathSync(e.path); } catch { inlineDrift.push({ path: e.path, action: "missing" }); continue; }
+    if (cur !== realpathSync(want)) inlineDrift.push({ path: e.path, action: "changed" });
+  }
+  drift.push(...inlineDrift);
+
   const msgKit = defaultMsg.ensureForPersona(id, m.capabilities);
   const backups: string[] = [];
   if (drift.length) {
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
     const bdir = join(dataDir(), "backups", `render-${stamp}`);
     for (const d of drift) {
-      if (!existsSync(d.path)) continue;
+      if (!existsSync(d.path) && !isSymlink(d.path)) continue;
       mkdirSync(bdir, { recursive: true });
       const dest = join(bdir, basename(d.path));
-      cpSync(d.path, dest, { recursive: true });
+      if (isSymlink(d.path)) writeFileSync(`${dest}.symlink`, readlinkSync(d.path));
+      else cpSync(d.path, dest, { recursive: true });
       backups.push(dest);
     }
   }
@@ -720,6 +739,8 @@ export function render(id: string, opts: { host?: string; home?: string; check?:
     writeFileSync(join(dshDest, ".dia-managed"), JSON.stringify({ id, version }, null, 1));
   }
 
+  const inlineRendered = kit.renderContent(dir, dir, inlineManifest, { force: true }) ?? [];
+
   // 只更新渲染产物记录；persona 内容哈希（lock.hash）不变。
   const lockPath = join(dir, "dia.lock");
   const lock = JSON.parse(readFileSync(lockPath, "utf8"));
@@ -729,6 +750,7 @@ export function render(id: string, opts: { host?: string; home?: string; check?:
     : [];
   const rendered: string[] = [...new Set([
     ...(lock.rendered ?? []).filter((p: string) => !staleCodex.includes(p)),
+    ...inlineRendered.filter((e) => e.type !== "dir").map((e) => e.path),
     ...(agentDest ? [agentDest] : []),
     ...(codexDest ? [codexDest] : []),
   ])];

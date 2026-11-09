@@ -183,6 +183,16 @@ describe("persona check / update", () => {
     expect(JSON.parse(r.stdout).installed.id).toBe("yan");
   });
 
+  test("persona use 切版本后自动重渲染宿主产物（不留下指向旧槽位）", () => {
+    const agent = join(home, ".config/opencode/agents/yan.md");
+    writeFileSync(agent, "tampered\n");
+    const r = run(["persona", "use", "yan"]);
+    expect(r.status).toBe(0);
+    expect(readFileSync(agent, "utf8")).toContain("You are yan.");
+    // 只断言「宿主产物被修复」：persona 内容哈希受前序用例影响，不在这里重复断言
+    expect(r.stdout).toContain("→");
+  });
+
   test("内容被改 → check 返回 2", () => {
     writeFileSync(join(home, ".config/opencode/AGENTS.md"), "tampered\n");
     expect(run(["persona", "check", "yan"]).status).toBe(2);

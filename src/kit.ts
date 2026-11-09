@@ -333,7 +333,7 @@ export function renderContent(
   return rendered;
 }
 
-export function install(from: string, opts: { ref?: string; dryRun?: boolean; json?: boolean } = {}): KitInstallResult {
+export function install(from: string, opts: { ref?: string; dryRun?: boolean; json?: boolean; force?: boolean } = {}): KitInstallResult {
   const src = resolveSource(from, opts.ref);
   const m = readKitManifest(src.dir);
   const kitsRoot = resolve(dataDir(), "kits");
@@ -347,7 +347,7 @@ export function install(from: string, opts: { ref?: string; dryRun?: boolean; js
   const hasContent = ["files", "skills", "bin", "dirs", "knowledge", "commands", "config"]
     .some((k) => ((m as any)[k]?.length ?? 0) > 0);
   if (!hasContent) throw new Error("E_MANIFEST: kit 未声明任何内容（files/skills/bin/dirs/knowledge/commands/config）");
-  const planned = renderContent(src.dir, target, m, { dryRun: true }) ?? [];
+  const planned = renderContent(src.dir, target, m, { dryRun: true, force: opts.force }) ?? [];
   if (opts.dryRun) return { id: m.id, version: m.version, dir: target, root: kitRoot, rendered: planned, hash: null, changed: false };
 
   return withInstallLock(join(kitsRoot, ".install.lock"), () => {
@@ -381,7 +381,7 @@ export function install(from: string, opts: { ref?: string; dryRun?: boolean; js
     }
 
     // 渲染（软链必须指向最终 target，不能在 staging 里建）
-    const rendered = renderContent(src.dir, target, m) ?? planned;
+    const rendered = renderContent(src.dir, target, m, { force: opts.force }) ?? planned;
     const appliedConfig = config.apply(m.config ?? []);
     const hash = hashTree(target);
     writeFileSync(join(target, "kit.lock"), JSON.stringify({

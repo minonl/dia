@@ -1735,6 +1735,11 @@ export async function main(rawArgv: string[]): Promise<number> {
     const r = spawnSync("npm", ["i", "-g", "@minonl/dia@latest"], { stdio: "inherit" });
     if (r.status !== 0) { err("E_UPDATE: npm 安装失败（可能需要 sudo 或调整 npm prefix）"); return r.status || 1; }
     out(`已更新到 ${latest}（重新打开终端/会话生效）`);
+    // npm 11 起默认屏蔽安装脚本（allowScripts）→ 升级后在本进程内补一次自举，保证「装完即用」
+    try {
+      const b = defaultMsg.ensure(undefined, { force: true });
+      out(b.ok ? `内置能力已同步（${b.kit}）` : `! 内置能力未装配：${b.reason}（修复：dia postinstall）`);
+    } catch { /* 自举失败不影响升级结果 */ }
     return 0;
   }
   if (cmd === "kb") {

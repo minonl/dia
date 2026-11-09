@@ -91,6 +91,7 @@
 | D0.21 | worktree 抽取 `packages/wt` | **完成** | 7 处 python→node；`dia wt`；4 套测试原样迁移全绿 |
 | D0.23 | doctor 平台版本自检 | **完成** | `platform:opencode` / `platform:dsh` 报版本（缺宿主 = warn，不判红）；`tests/active-doctor.test.ts` |
 | D0.44 | 配置迁移走 LLM 任务 | **完成** | `docs/migrations/llm-migration.md`：升级只改声明；迁移=任务+判据+回滚；禁止代码里堆版本分支（安全敏感/原子场景例外） |
+| D0.69 | npm ≥ 11 allowScripts 兜底 | **完成** | 文档给出 `--allow-scripts=@minonl/dia` 一次性放行 + 长期 config；`dia update` 成功后在进程内补一次 `defaultMsg.ensure(force)`；doctor 的 bootstrap 两条文案都指向 `dia postinstall` |
 | D0.68 | postinstall 自举 + 删除 install.sh | **完成** | npm 全局安装自动跑 `postinstall`（装配内置 kit + 自举戳；CI/非全局/`--ignore-scripts` 安全跳过）；`dia postinstall` 手动补跑；`dia migrate data` 取代 `--migrate`；删除 `install.sh` 与 3 个守卫测试 |
 | D0.67 | npm 单一安装通道（收口） | **完成** | `dia update` 脚本安装分支统一引导 `npm i -g` + 回链；`E_WT`/`job`/`doctor wt` 报错不再让人跑 `install.sh`；`install_shadow` 修复命令统一 npm；README 主流程只留 npm，`install.sh` 降为开发/离线 |
 | D0.66 | 内置能力分层（dia-msg 用户零操作） | **完成** | `kit.install` 原子换入 + 数据根锁；版本 semver 排序；`installDir()` 校验；`collab enable` 失败退 32；自举戳 `~/.dia/state/bootstrap.json` + `doctor bootstrap` 检查；`install_shadow` 降 warn；设计见 [builtin-kit-design.md](builtin-kit-design.md) |

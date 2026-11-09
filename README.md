@@ -72,19 +72,15 @@ dia update --check     # 查 npm 最新版；dia update 按安装方式升级（
 git clone https://github.com/minonl/dia ~/repos/github/dia
 cd ~/repos/github/dia
 bun install && bun run build      # 或 npm ci + npm run build（Node ≥ 24）
-bash install.sh                   # → ~/.local/share/dia + ~/.local/bin/dia
+npm i -g .                        # 仍然走 npm 全局安装（与正式安装同一条路径）
 dia version && dia doctor
 ```
 
 - 依赖：Node ≥ 24 或 Bun ≥ 1.2（见 `package.json` 的 `engines`）。
 - 安装只落盘：**不启停服务、不改宿主默认 agent**。
-- **安装守卫**：`~/.local/bin/dia` 当前属于包管理器全局安装（npm/bun 的 `node_modules/@minonl/dia` 软链，
-  pnpm/yarn 的 shim 脚本，volta 的 bin —— 即会被脚本安装抢走）时，`install.sh` **拒绝并 exit 3，不改动任何文件**；
-  确实想换脚本安装用 `DIA_ALLOW_SCRIPT_INSTALL=1 bash install.sh`，想留在 npm 安装用
-  `ln -sfn "$(npm prefix -g)/bin/dia" ~/.local/bin/dia`。只装到别处（不碰生效链接）用
-  `bash install.sh --home DIR --bin BINDIR`——`--home` 单独用只改安装目录，链接仍写默认 bin，守卫照旧生效。
-  装完会打印 `effective: <实际生效的 dia> (<version>)`，顺带暴露 PATH 顺序问题。
-- `install.sh` = **开发 / 离线通道**（从仓库构建时用）；日常安装/升级一律 `npm i -g @minonl/dia@latest`。
+- **升级只有一条路**：`npm i -g @minonl/dia@latest`（`dia update` 会走这条）。
+- `bash install.sh` 仅用于**开发 / 离线**：它把包内容拷到 `~/.local/share/dia` 并改 `~/.local/bin/dia`；
+  当那条链接已属于包管理器安装时会被守卫拒绝（exit 3，零改动）。细节见 [install-guard-design.md](docs/install-guard-design.md)。
 - 内置能力（`dia-msg`）无需手动安装：首次 `persona add/render` 或 `dia collab enable` 自动装配，`dia doctor` 的 `bootstrap` 项会显示是否跟随包版本。
 - 装 persona（示例 dabo）：`dia persona add dabo --from git+https://github.com/minonl/dabo-agent.git`
 - 卸载：`dia persona remove dabo`（只删带 `.dia-managed` 的产物）。

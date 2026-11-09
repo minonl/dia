@@ -38,7 +38,7 @@ export function jobRootResolved(): string {
 export function runJobCapture(argv: string[]): { status: number; stdout: string; stderr: string } {
   const { bin, error } = jobBin();
   if (!bin) {
-    process.stderr.write(`dia job: ${error || "未找到 dia-job；先跑 packages/job/install.sh 或设置 DIA_JOB_BIN"}\n`);
+    process.stderr.write(`dia job: ${error || "未找到 dia-job；npm 包不完整？`npm i -g @minonl/dia@latest` 重装；或设置 DIA_JOB_BIN"}\n`);
     return { status: 2, stdout: "", stderr: "" };
   }
   const r = spawnSync(bin, argv, {
@@ -56,7 +56,7 @@ export function runJobCapture(argv: string[]): { status: number; stdout: string;
 export function runJob(argv: string[]): number {
   const { bin, error } = jobBin();
   if (!bin) {
-    process.stderr.write(`dia job: ${error || "未找到 dia-job；先跑 packages/job/install.sh 或设置 DIA_JOB_BIN"}\n`);
+    process.stderr.write(`dia job: ${error || "未找到 dia-job；npm 包不完整？`npm i -g @minonl/dia@latest` 重装；或设置 DIA_JOB_BIN"}\n`);
     return 2;
   }
   // 把 dia 的数据根传下去：dia-job 默认仍按 XDG 推导，不传会与 ~/.dia 分叉

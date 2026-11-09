@@ -5,6 +5,7 @@ import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, renameS
 import { dirname, join } from "node:path";
 import * as collab from "./collab.ts";
 import * as paths from "./paths.ts";
+import * as job from "./job.ts";
 
 export interface Board {
   schema: 1;
@@ -195,6 +196,25 @@ export function readBoardState(opts: ObserveOptions = {}): BoardState {
 /** 兼容包装：返回 board（缺失/过期时内存现算，不写盘） */
 export function readBoard(opts: ObserveOptions = {}): Board {
   return readBoardState(opts).board!;
+}
+
+/** 幂等注册观察器定时（300s）；返回错误信息或 null。由 `dia collab enable` 调用。 */
+export function ensureJob(): string | null {
+  const NAME = "collab-observe";
+  try {
+    const regPath = join(job.jobRootResolved(), "tasks", "registry.json");
+    let tasks: Record<string, any> = {};
+    try { tasks = JSON.parse(readFileSync(regPath, "utf8"))?.tasks || {}; } catch { /* none */ }
+    if (Object.keys(tasks).some((k) => k === NAME || k.endsWith(`.${NAME}`))) return null;
+    const base = ["install", NAME, "--desc", "collab board 刷新（dia collab enable 注册）", "--interval", "300", "--cmd", "dia collab observe"];
+    let r = job.runJobCapture(base);
+    // 门控 rc=4：npm 全局的 `dia` 不是 git checkout，class=unknown。命令本身固定且稳定，按逃生舱重试一次。
+    if (r.status === 4) r = job.runJobCapture([...base, "--allow-unstable"]);
+    if (r.status !== 0) return (r.stderr || r.stdout || `exit ${r.status}`).trim().split("\n")[0];
+    return null;
+  } catch (e: any) {
+    return e?.message || String(e);
+  }
 }
 
 export function boardFileMode(opts: ObserveOptions = {}): number {

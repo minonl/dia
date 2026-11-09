@@ -38,6 +38,37 @@ function platformChecks(): Check[] {
 }
 
 /** detail 里的重建命令要能直接复制执行：含 shell 元字符时加单引号（导出仅为单测覆盖转义）。 */
+function collabObserverCheck(): Check {
+  const name = "collab.observer";
+  // 未启用 dia-msg 的机器不该因为「没有观察器」被标黄
+  try { if (!defaultMsg.status(undefined).enabled) return { name, status: "ok", detail: "dia-msg 未启用（跳过）" }; } catch { /* ignore */ }
+  const boardPath = join(paths.diaHome(), "collab", "state", "board.json");
+  const statePath = join(paths.diaHome(), "collab", "state");
+  let tasks: Record<string, any> = {};
+  try { tasks = JSON.parse(readFileSync(join(job.jobRootResolved(), "tasks", "registry.json"), "utf8"))?.tasks || {}; } catch { /* none */ }
+  const key = Object.keys(tasks).find((k) => k === "collab-observe" || k.endsWith(".collab-observe"));
+  if (!key) return { name, status: "warn", detail: '未注册定时（dia job install collab-observe --interval 300 --cmd "dia collab observe"）' };
+  const reg = tasks[key] || {};
+  let board: any = null;
+  try { board = JSON.parse(readFileSync(boardPath, "utf8")); } catch { /* none */ }
+  if (!board) return { name, status: "warn", detail: "定时已注册但 board 未生成（先跑 dia collab observe）" };
+
+  const issues: string[] = [];
+  try { const m = statSync(boardPath).mode & 0o777; if (m & 0o077) issues.push(`board 权限 ${m.toString(8)}（应 600）`); } catch { /* ignore */ }
+  try { const m = statSync(statePath).mode & 0o777; if (m & 0o077) issues.push(`state 目录权限 ${m.toString(8)}（应 700）`); } catch { /* ignore */ }
+
+  const interval = Number(String(reg.interval ?? "").trim()) || 300;
+  if (typeof board.interval_s === "number" && board.interval_s !== interval) {
+    issues.push(`interval 不一致：board=${board.interval_s}s / job=${interval}s`);
+  }
+  const age = Date.now() - Date.parse(board.generated_at);
+  const ttl = Math.min(900_000, Math.max(interval * 2000, interval * 1000 + 60_000));
+  if (!Number.isFinite(age) || age < -5_000) issues.push("board 时间戳异常（未来/不可解析）");
+  else if (age > ttl) issues.push(`board ${Math.round(age / 60000)} 分钟未刷新（> ${Math.round(ttl / 1000)}s）`);
+
+  return { name, status: issues.length ? "warn" : "ok", detail: issues[0] ?? `job=${interval}s · board ${Math.round(Math.max(0, age) / 60000)} 分钟前` };
+}
+
 export function quoteArg(v: string): string {
   return /^[\w.@%+=:,\/-]+$/.test(v) ? v : `'${v.replace(/'/g, "'\\''")}'`;
 }
@@ -318,6 +349,8 @@ export async function run(opts: { persona?: string } = {}): Promise<{
 
   const wt = join(install, "packages/wt/bin/dia-wt");
   checks.push({ name: "wt", status: existsSync(wt) ? "ok" : "warn", detail: existsSync(wt) ? wt : "dia wt 未安装（npm 包不完整？npm i -g @minonl/dia@latest 重装）" });
+
+  checks.push(collabObserverCheck());
 
   const jobRoot = job.jobRootResolved();
   checks.push({

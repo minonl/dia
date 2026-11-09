@@ -342,7 +342,7 @@ export function install(from: string, opts: { ref?: string; host?: string; home?
   const hash = hashTree(target);
   const renderedHashes: Record<string, string> = {};
   for (const f of rendered) renderedHashes[f] = shaFile(f);
-  writeFileSync(join(target, "dia.lock"), JSON.stringify({ id: m.id, version: m.version, slot, commit: src.commit, source: from, ref: opts.ref ?? null, hash, rendered, renderedHashes, renderedDirs, kits: kitRefs,
+  writeFileSync(join(target, "dia.lock"), JSON.stringify({ id: m.id, version: m.version, slot, commit: src.commit, source: from, ref: opts.ref ?? null, installedAt: new Date().toISOString(), hash, rendered, renderedHashes, renderedDirs, kits: kitRefs,
     content: { knowledge: m.knowledge ?? [], commands: m.commands ?? [], dataRoot: m.data_root ?? null, env: m.env ?? null, rendered: inline, config: appliedConfig },
   }, null, 1));
   return { id: m.id, version: slot, dir: target, rendered, hash, commit: src.commit, overwrites, msgKit };

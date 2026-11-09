@@ -2,7 +2,10 @@
 
 > 状态：M2a 已实现（2026-11-09）：`packages/graph-web` + `dia graph --serve`
 > 已实现：loopback/端口 0、token→HttpOnly cookie、`/`、`/api/graph`（rev/304）、`/api/health`、`/api/meta`、Host/Origin 校验、CSP、405/421
-> 未实现：SSE/自动轮询刷新、`/api/next` 透传、写操作（保持只读）｜前置：`graph-web-m1.md`、`graph-ui-m1.md`、`seat-scheduling-m2.md`
+> 已实现补充（0.0.25）：轮询自动刷新（2s + 304 + 顶部「有更新/刷新」条，可在 live 注入、导出件不含 fetch）、
+> Origin / Sec-Fetch-Site 校验、`localhost` → `127.0.0.1` 归一、E_PORT/E_RUNTIME 提示；
+> 服务端以 `bun build` 打成 `packages/graph-web/dist/main.js`（模板内联，node 可直接跑）；publish 增加「装 tarball → --serve → /api/health」冒烟。
+> 未实现：SSE、`/api/next` 端点、写操作（保持只读）｜前置：`graph-web-m1.md`、`graph-ui-m1.md`、`seat-scheduling-m2.md`
 > 定位：本机**只读**实时预览；不写账本、不做多人共享、不暴露公网。
 
 ## 1. 目标 / 非目标
@@ -67,7 +70,9 @@
 
 ## 8. 分发与安装
 
-- `packages/graph-web/{package.json,src/,bin/}`；根 `files` 增该目录；`install.sh` 用 `[ -d packages/graph-web ]` 保护拷贝（旧树不报错）；
+- `packages/graph-web/{package.json,src/,bin/,dist/}`；根 `files` 增该目录（安装包只带 bin/dist，运行时不再依赖根 `src/`）；
+- `build` 产出 `dist/main.js`（bun build，模板 text import 内联）；`dia graph --serve` spawn `process.execPath + dist/main.js`，node/bun 均可；
+- publish workflow 断言 tarball 含 `packages/graph-web/dist/main.js`，并做「装 tarball → --serve → /api/health」冒烟；
 - `dia doctor` 增一项「graph-web 可选包」，缺包只 warn + 修复命令；
 - 兼容：`dia graph --export-html` 始终可用，作为服务不可用时的兜底。
 

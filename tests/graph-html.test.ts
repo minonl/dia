@@ -121,3 +121,13 @@ describe("graph-html 派生量（D1）", () => {
     expect(p.edges).toEqual([]);
   });
 });
+
+describe("live 注入不影响导出", () => {
+  test("导出件无 fetch；live 件含轮询脚本", () => {
+    const plain = renderHtml(fixture, { now });
+    expect(plain).not.toMatch(/\bfetch\s*\(/);
+    const live = renderHtml(fixture, { now, live: true, liveRev: "abc123" });
+    expect(live).toContain("/api/graph");
+    expect(live).toContain("abc123");
+  });
+});

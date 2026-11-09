@@ -48,6 +48,22 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run build
       - run: bun test tests
+      - name: graph-web 打包冒烟（安装 tarball 后真跑一次）
+        run: |
+          set -e
+          TGZ=$(npm pack --silent | tail -1)
+          T=$(mktemp -d)
+          npm i --prefix "$T" "./$TGZ" >/dev/null
+          DIA_ROOT="$T/data" "$T/node_modules/.bin/dia" graph --serve --no-open >"$T/log" 2>&1 &
+          pid=$!
+          for i in $(seq 1 20); do grep -q "dia graph web:" "$T/log" && break; sleep 0.5; done
+          url=$(sed -n 's/^dia graph web: //p' "$T/log" | head -1)
+          [ -n "$url" ] || { cat "$T/log"; kill $pid || true; exit 1; }
+          port=$(printf '%s' "$url" | sed -E 's#http://127\.0\.0\.1:([0-9]+)/.*#\1#')
+          curl -fsS -c "$T/cj" -b "$T/cj" -L "$url" -o /dev/null
+          curl -fsS -b "$T/cj" "http://127.0.0.1:$port/api/health"
+          kill $pid || true
+          echo "graph-web smoke ok"
       - name: OIDC preflight（诊断用，不打印 token）
         run: |
           set -u
@@ -72,7 +88,7 @@ jobs:
             // npm 12 返回 { "<name>": { files: [...] } }；旧版返回 [{ files: [...] }]。
             const pkg = Array.isArray(j) ? j[0] : j[Object.keys(j)[0]];
             const files = (pkg && pkg.files ? pkg.files : []).map((f) => f.path);
-            const need = ["docs/deps.jsonl", "docs/platforms/registry.json"];
+            const need = ["docs/deps.jsonl", "docs/platforms/registry.json", "packages/graph-web/dist/main.js", "packages/graph-web/bin/dia-graph-web"];
             const missing = need.filter((n) => !files.includes(n));
             if (missing.length) { console.error("tarball missing:", missing.join(", ")); process.exit(1); }
             console.log("tarball ok:", files.length, "files");

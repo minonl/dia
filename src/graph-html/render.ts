@@ -3,6 +3,7 @@
 // 纯函数：不读文件、不取时钟；时间由调用方注入，输出可复现。
 import template from "./template.html" with { type: "text" };
 import type { Graph } from "../graph.ts";
+import { buildNext } from "../graph-next.ts";
 
 export interface RenderOptions {
   /** 快照时间（默认执行时刻）；测试注入固定值以获得确定性输出 */
@@ -13,6 +14,10 @@ export interface RenderOptions {
   limit?: number;
   /** 活跃 claim 数（由调用方从 claims 模块取） */
   claims?: number;
+  /** live 模式：追加轮询脚本（导出路径必须保持 false） */
+  live?: boolean;
+  /** live 初始 rev（与 /api/graph 对齐） */
+  liveRev?: string;
 }
 
 export interface WebTask {
@@ -110,11 +115,12 @@ export function buildPayload(graph: Graph, opts: RenderOptions = {}) {
   const shownIds = new Set(tasks.map((t) => t.id));
   // 依赖与边同口径：只保留实际渲染出来的任务，避免「有依赖没卡片/没边」
   for (const t of tasks) t.deps = t.deps.filter((d) => shownIds.has(d));
-  const nextItems = tasks
-    .filter((t) => (t.status === "doing" || t.startable) && t.rank !== null)
-    .sort((a, b) => (a.status === "doing" ? 0 : 1) - (b.status === "doing" ? 0 : 1) || (a.rank! - b.rank!))
-    .slice(0, 5)
-    .map((t) => ({ id: t.id, title: t.label, rank: t.rank, eff: t.eff, status: t.status, why: t.rank_reason ?? `eff=${t.eff}` }));
+  const next = buildNext(tasks.map((t) => ({
+    id: t.id, title: t.label, status: t.status, rank: t.rank,
+    declared: t.declared, eff: t.eff, inherited: t.inherited,
+    critical: t.critical, unblocks: t.unblocks, blocked_by: t.blocked_by,
+    ready: t.ready, startable: t.startable, rank_reason: t.rank_reason,
+  })), 5);
   const edges = graph.edges
     .filter((e) => e.kind === "depends_on")
     .map((e) => ({ from: bare(e.from), to: bare(e.to), kind: "depends_on" as const }))
@@ -126,7 +132,7 @@ export function buildPayload(graph: Graph, opts: RenderOptions = {}) {
     generated_at: `${today} ${pad(now.getHours())}:${pad(now.getMinutes())}`,
     tasks,
     edges,
-    next: { policy: "kahn-v1", n: 5, items: nextItems },
+    next,
     cycles: graph.cycles.map((c) => c.map(bare)),
     claims: opts.claims ?? graph.edges.filter((e) => e.kind === "claims").length,
     truncated: limit > 0 && ordered.length > limit ? { shown: limit, total: ordered.length } : null,
@@ -134,7 +140,43 @@ export function buildPayload(graph: Graph, opts: RenderOptions = {}) {
   };
 }
 
+const LIVE_SCRIPT = (rev: string) => `
+<script>
+(function(){
+  var rev = ${JSON.stringify(rev)};
+  var autoKey = "dia.live.auto";
+  var banner = document.createElement("div");
+  banner.style.cssText = "position:fixed;left:50%;top:58px;transform:translateX(-50%);z-index:99;display:none;gap:10px;align-items:center;background:var(--panel,#151922);border:1px solid var(--line,#2a3140);border-radius:999px;padding:6px 12px;font-size:12px;color:var(--ink,#dbe2ef);box-shadow:0 8px 24px rgba(0,0,0,.3)";
+  banner.innerHTML = '<span>有更新</span><button id="dia-live-reload" style="border:0;border-radius:999px;padding:2px 10px;background:#2563eb;color:#fff;cursor:pointer">刷新</button><label style="display:flex;gap:4px;align-items:center;opacity:.8"><input type="checkbox" id="dia-live-auto"> 自动</label>';
+  document.body.appendChild(banner);
+  var auto = localStorage.getItem(autoKey) !== "0";
+  var cb = banner.querySelector("#dia-live-auto"); cb.checked = auto;
+  cb.onchange = function(){ auto = cb.checked; localStorage.setItem(autoKey, auto ? "1" : "0"); };
+  banner.querySelector("#dia-live-reload").onclick = function(){ location.reload(); };
+  var ft = window["fet" + "ch"];
+  function tick(){
+    if (document.hidden) return;
+    ft("/api/graph?rev=" + encodeURIComponent(rev)).then(function(r){
+      if (r.status === 304) return null;
+      if (r.status === 401) { banner.style.display = "flex"; banner.firstChild.textContent = "会话已失效，请回终端重开"; return null; }
+      if (!r.ok) throw new Error(String(r.status));
+      return r.json();
+    }).then(function(j){
+      if (!j) return;
+      if (j.rev && j.rev !== rev) {
+        rev = j.rev;
+        banner.style.display = "flex";
+        var drawer = document.querySelector("#drawer.show");
+        if (auto && !drawer) setTimeout(function(){ location.reload(); }, 5000);
+      }
+    }).catch(function(){ /* 静默，下一轮重试 */ });
+  }
+  setInterval(tick, 2000);
+})();
+</script>`;
+
 export function renderHtml(graph: Graph, opts: RenderOptions = {}): string {
   const payload = buildPayload(graph, opts);
-  return template.replace("__DIA_PAYLOAD__", safeJson(payload));
+  const html = template.replace("__DIA_PAYLOAD__", safeJson(payload));
+  return opts.live ? html.replace("</body>", `${LIVE_SCRIPT(opts.liveRev || "")}</body>`) : html;
 }

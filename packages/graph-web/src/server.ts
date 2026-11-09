@@ -62,7 +62,15 @@ export function createDiaServer(opts: ServerOptions = {}) {
     const expectHost = [`127.0.0.1:${(server.address() as any)?.port || port}`, `localhost:${(server.address() as any)?.port || port}`];
     const log = (status: number) => console.log(JSON.stringify({ ts: new Date().toISOString(), method: req.method, path: url.pathname, status }));
 
-    if (!expectHost.includes(host)) { res.writeHead(421); res.end("misdirected"); log(421); return; }
+    if (!expectHost.includes(host)) {
+      const portNow = (server.address() as any)?.port || port;
+      if (host === `localhost:${portNow}`) { res.writeHead(302, { Location: `http://127.0.0.1:${portNow}/` }); res.end(); log(302); return; }
+      res.writeHead(421); res.end("misdirected"); log(421); return;
+    }
+    const origin = req.headers.origin;
+    if (origin && !expectHost.some((h) => origin === `http://${h}`)) { res.writeHead(403); res.end("bad origin"); log(403); return; }
+    const site = req.headers["sec-fetch-site"];
+    if (site && site !== "same-origin" && site !== "none") { res.writeHead(403); res.end("cross-site"); log(403); return; }
     if (req.method !== "GET") { res.writeHead(405); res.end("method not allowed"); log(405); return; }
 
     // 首屏：?t=<token> → 种 HttpOnly cookie 并重定向，token 不留在页面 URL
@@ -85,7 +93,7 @@ export function createDiaServer(opts: ServerOptions = {}) {
 
     if (url.pathname === "/" || url.pathname === "/index.html") {
       try {
-        const html = renderHtml(graph.build(), { now: opts.now ?? new Date(), claims: claims.list({}).length });
+        const html = renderHtml(graph.build(), { now: opts.now ?? new Date(), claims: claims.list({}).length, live: true, liveRev: revOf() });
         res.writeHead(200, { ...base, "Content-Type": "text/html; charset=utf-8" });
         res.end(html); log(200);
       } catch (e: any) {

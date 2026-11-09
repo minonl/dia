@@ -23,7 +23,7 @@
   },
   "scripts": {
     "dev": "bun packages/cli/src/index.ts",
-    "build": "bun build packages/cli/src/index.ts --target node --outfile dist/cli.js --external bun:sqlite",
+    "build": "bun build packages/cli/src/index.ts --target node --outfile dist/cli.js --external bun:sqlite && bun build packages/graph-web/src/main.ts --target node --outfile packages/graph-web/dist/main.js",
     "test": "bun test tests && bash tests/smoke.sh && bash tests/e2e.sh",
     "compile": "bun build packages/cli/src/index.ts --compile --outfile dist/dia",
     "prepublishOnly": "bun run build",

@@ -16,6 +16,7 @@ import * as plan from "../../../src/plan.ts";
 import * as msgPriority from "../../../src/msg-priority.ts";
 import * as observer from "../../../src/observer.ts";
 import * as seats from "../../../src/seats.ts";
+import { buildNext } from "../../../src/graph-next.ts";
 import * as defaultMsg from "../../../src/default-msg.ts";
 import * as paths from "../../../src/paths.ts";
 import * as agents from "../../../src/agents.ts";
@@ -589,18 +590,18 @@ async function graphCli(argv: string[]): Promise<number> {
   if (has(argv, "--serve")) {
     const cands = [
       process.env.DIA_GRAPH_WEB_BIN,
-      join(paths.installDir(), "packages", "graph-web", "bin", "dia-graph-web"),
-      join(process.cwd(), "packages", "graph-web", "bin", "dia-graph-web"),
+      join(paths.installDir(), "packages", "graph-web", "dist", "main.js"),
+      join(process.cwd(), "packages", "graph-web", "dist", "main.js"),
     ].filter(Boolean) as string[];
     const bin = cands.find((p) => { try { return existsSync(p); } catch { return false; } });
     if (!bin) { err("E_WEB: 未找到 graph-web 可选包（重装 @minonl/dia 或设 DIA_GRAPH_WEB_BIN）"); return 2; }
-    const args = [bin];
+    const args: string[] = [];
     for (const k of ["--port", "--now"]) if (flag(argv, k) !== undefined) args.push(k, flag(argv, k)!);
     if (has(argv, "--no-open")) args.push("--no-open");
     return await new Promise<number>((resolve) => {
-      const child = spawn(bin, args.slice(1), { stdio: "inherit" });
+      const child = spawn(process.execPath, [bin, ...args], { stdio: "inherit" });
       child.on("exit", (code) => resolve(code ?? 0));
-      child.on("error", (e) => { err(`E_WEB: ${e.message}`); resolve(2); });
+      child.on("error", (e) => { err(`E_RUNTIME: ${e.message}（graph-web 需要 node 或 bun）`); resolve(2); });
     });
   }
   if (has(argv, "--next") || has(argv, "--explain") || has(argv, "--lint")) {
@@ -663,23 +664,17 @@ async function graphCli(argv: string[]): Promise<number> {
     // --next [n]
     const raw = flag(argv, "--next");
     const n = raw && /^\d+$/.test(raw) ? Math.max(1, Number(raw)) : 5;
-    const doing = tasks.filter((t) => t.status === "doing" && dr.byId.get(t.id)!.rank !== null)
-      .sort((a, b) => (dr.byId.get(a.id)!.rank! - dr.byId.get(b.id)!.rank!));
-    const startable = tasks.filter((t) => dr.byId.get(t.id)!.startable)
-      .sort((a, b) => (dr.byId.get(a.id)!.rank! - dr.byId.get(b.id)!.rank!));
-    const picked = [...doing, ...startable].slice(0, n);
-    const items = picked.map((t) => {
+    const next = buildNext(tasks.map((t) => {
       const d = dr.byId.get(t.id)!;
       return {
         id: t.id, title: t.title, status: t.status, rank: d.rank,
         declared: t.prio ?? null, eff: d.eff_prio, inherited: d.prio_inherited,
-        ready: d.ready, critical: d.critical, unblocks: d.unblocks,
-        blocked_by: d.blocked_by,
-        why: `${t.status === "doing" ? "进行中" : "可开工"} · eff=${d.eff_prio}${d.prio_inherited ? `(←${d.prio_source?.id})` : ""} · 解锁${d.unblocks}${d.critical ? " · 关键路径" : ""}`,
+        critical: d.critical, unblocks: d.unblocks, blocked_by: d.blocked_by,
+        ready: d.ready, startable: d.startable, rank_reason: d.rank_reason,
       };
-    });
-    out(asJson ? JSON.stringify({ policy: dr.ranking.policy, items })
-      : (items.length ? items.map((x, i) => `#${i + 1}\t${x.id}\t${x.eff}${x.inherited ? "(继承)" : ""}\t${x.title}\t${x.why}`).join("\n") : "(没有可开工任务)"));
+    }), n);
+    out(asJson ? JSON.stringify(next)
+      : (next.items.length ? next.items.map((x, i) => `#${i + 1}\t${x.id}\t${x.eff}${x.inherited ? "(继承)" : ""}\t${x.title}\t${x.why}`).join("\n") : "(没有可开工任务)"));
     return dr.cycles.length ? 3 : 0;
   }
   if (has(argv, "--export-html") || has(argv, "--out")) {

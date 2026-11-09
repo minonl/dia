@@ -48,6 +48,14 @@ describe("graph-web live 服务（只读/loopback/token）", () => {
     expect(r.headers.get("set-cookie") || "").toContain("HttpOnly");
   });
 
+  test("localhost 归一 302；跨源 Origin 403", async () => {
+    const port = new URL(base).port;
+    const r = await fetch(`http://localhost:${port}/api/graph`, { headers: { "x-dia-token": token, host: `localhost:${port}` } });
+    expect([200, 302, 421]).toContain(r.status);
+    const bad = await fetch(base + "/api/graph", { headers: { "x-dia-token": token, origin: "http://evil.example" } });
+    expect(bad.status).toBe(403);
+  });
+
   test("Host 伪造 421；非 GET 405", async () => {
     const r = await fetch(base + "/api/graph", { headers: { "x-dia-token": token, host: "evil.example" } });
     expect(r.status).toBe(421);

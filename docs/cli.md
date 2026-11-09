@@ -106,6 +106,7 @@ dia persona remove dabo
 | `kb index/search/query/get/lint/path/review` | **已实现** | persona 作用域下索引过期自动重建；显式 `--root` 保持「缺索引即报错」 |
 | `kb <域命令>` | **已实现（委派）** | 未命中内置 → persona `commands` → 委派；argv 透传、exit code 原样 |
 | `<persona-cmd>` / `cmd <name>` | **已实现** | 一级委派（内置优先）；`dia cmd` 只查外部命令，可绕开同名内置 |
+| `collab board / observe` | **已实现** | `observe --once` 只读扫描 → board/metrics/escalations（0600，无正文）；`board` 读缓存供 hook；不改消息状态 |
 | `collab stats` | **已实现** | 只读聚合：delivered/exposed/ack/reply 率、deliver_lag、reply_latency（median/p90/censored）、backlog（orphan/by_class）；cohort 按 created_at 入窗 |
 | `task add/list/link/plan/split/status/done` | **已实现** | done 需 judge + evidence；`plan` 写计划态（prio/start/due/progress）；`split` 父 depends on 子（单条原子事件，judge 继承） |
 | `graph [--json] [--task T] [--tui …] [--export-html] [--next/--explain/--lint]` | **已实现** | 图 JSON（schema 1 + capabilities）；节点带 prio/start/due/progress + 派生 `eff_prio/ready/rank/unblocks/critical` 等；`--export-html` 单文件 HTML；`--next [n]` / `--explain <id>` / `--lint` 只读编排（Kahn-v1，见 [graph-prio-dag.md](design/graph-prio-dag.md)） |

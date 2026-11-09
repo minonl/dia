@@ -64,11 +64,13 @@ dia collab stats [--since 7d] [--by session|pair|class] [--now ISO] [--json]
 - 锁文件带 `{pid, token}`：进程活着**永不**判陈旧；进程死了**立即**回收；释放只删自己的 token；
 - 历史消息缺 `arrival_seq` 时按 `created_at` epoch + `id` 稳定排序（不引入全局计数器热点）。
 
-## 7. 观察器与唤醒（M3，未实现）
+## 7. 观察器与唤醒
 
 - **指标不需要常驻**：读时聚合即可；
-- 常驻只为「唤醒/升级」：建议 `dia collab observer`（60s periodic job，**不复用 `dia service` 名词**），产出
-  `board.json` / `metrics/<day>.json` / `escalations.jsonl`，healthcheck 0/20/21；
+- **M3a 已实现**：`dia collab observe --once`（建议用 `dia job` 60s 周期跑）产出
+  `collab/state/board.json`（0600）/ `metrics/<day>.json` / `escalations.jsonl`（只含 id/class/age，无正文）；
+  `dia collab board` 读缓存（hook 用，缺失/过期现算）；
+- **M3b 未实现**：per-turn hook 读 `dia collab board`（目标 ≤50ms）；dsh 侧无 hook 时退化为 turn 首条提示；
 - 唤醒优先级：per-turn hook（读 `dia collab board` 缓存）> wake 文件 > 钉钉升级；
 - 红线：不代答、不自动 ack、不写消息状态、不联网（`src/**` 零网络不变）。
 

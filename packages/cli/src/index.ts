@@ -14,6 +14,7 @@ import * as graphTui from "../../../src/graph-tui.ts";
 import * as graphHtml from "../../../src/graph-html/render.ts";
 import * as plan from "../../../src/plan.ts";
 import * as msgPriority from "../../../src/msg-priority.ts";
+import * as observer from "../../../src/observer.ts";
 import * as defaultMsg from "../../../src/default-msg.ts";
 import * as paths from "../../../src/paths.ts";
 import * as agents from "../../../src/agents.ts";
@@ -187,6 +188,7 @@ usage:
   dia <persona-cmd> [args…]           # 一级委派（内置优先）
   dia collab status|enable|disable [--persona ID]   # dia-msg 默认能力开关（默认开）
   dia collab stats [--since 7d] [--by session|pair|class] [--json]   # 只读聚合（送达/回复/积压）
+  dia collab board [--json] | observe [--once] [--interval 60] [--json]   # 只读看板/观察器（不写消息状态）
   dia whoami [--json] [--name NAME]   # 当前会话身份（session id）
   dia in [--unread] [--all] [--legacy] [--class P0,P1] [--sort priority|arrival] [--expose] [--json]   # 会话收件箱（正文内联）
   dia out --to <session_id> --subject S (--body B|--body-file F) [--kind K] [--touch p1,p2] [--reply-to ID]
@@ -1069,6 +1071,20 @@ async function collabCli(argv: string[]): Promise<number> {
           (kitInfo ? (kitInfo.ok ? `  kit=${kitInfo.kit}` : `  ⚠ ${kitInfo.reason}`) : ""));
       // enable 装不上内置 kit 时必须非 0：否则 CI/脚本无法判断「消息能力是否真的可用」
       if (kitInfo && !kitInfo.ok) return 32;
+      return 0;
+    }
+    if (sub === "board" || sub === "observe") {
+      const intervalSec = Number(flag(args, "--interval") || 60);
+      if (!Number.isInteger(intervalSec) || intervalSec < 10) { err("E_USAGE: --interval 必须是 >=10 的整数"); return 2; }
+      const nowRaw = flag(args, "--now");
+      const now = nowRaw ? new Date(nowRaw) : undefined;
+      if (now && Number.isNaN(now.getTime())) { err("E_USAGE: 非法 --now"); return 2; }
+      const b = sub === "board" ? observer.readBoard({ now, intervalSec }) : observer.observe({ now, intervalSec });
+      if (asJson) { out(JSON.stringify(b, null, 1)); return 0; }
+      const f = (v: number | null | undefined) => v === null || v === undefined ? "-" : String(v);
+      out(`board ${b.generated_at}  open=${b.open}  P0=${b.p0}  P1=${b.p1}  undelivered=${b.undelivered}  oldest=${b.oldest_age_ms}ms`);
+      if (b.top.length) { out("top:"); for (const t of b.top) out(`  P${t.class}\t${t.id}\t${t.subject}\t${t.age_ms}ms`); }
+      if (b.escalations) out(`escalations: ${b.escalations}（详见 ~/.dia/collab/escalations.jsonl）`);
       return 0;
     }
     if (sub === "stats") {

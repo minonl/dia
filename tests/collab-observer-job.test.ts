@@ -74,6 +74,14 @@ describe("interval 单一事实源 = job registry", () => {
     expect(b.interval_s).toBe(120);
   });
 
+  test("collab enable 顺手写一次 board（interval 立即对齐 job）", () => {
+    writeRegistry({});
+    const r = run(["collab", "enable"]);
+    expect(r.status).toBe(0);
+    const b = JSON.parse(readFileSync(join(root, "collab", "state", "board.json"), "utf8"));
+    expect(b.interval_s).toBe(300);
+  });
+
   test("非 60 倍数的 interval 归一为默认 300", () => {
     expect(ensureJob(90)).toBeNull();
     const reg = JSON.parse(readFileSync(join(jobRoot, "tasks", "registry.json"), "utf8")).tasks["collab-observe"];

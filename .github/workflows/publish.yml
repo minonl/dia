@@ -56,8 +56,9 @@ jobs:
           npm i --prefix "$T" "./$TGZ" >/dev/null
           DIA_ROOT="$T/data" "$T/node_modules/.bin/dia" graph --serve --no-open >"$T/log" 2>&1 &
           pid=$!
-          for i in $(seq 1 20); do grep -q "dia graph web:" "$T/log" && break; sleep 0.5; done
-          url=$(sed -n 's/^dia graph web: //p' "$T/log" | head -1)
+          for i in $(seq 1 20); do ls "$T"/data/export/serve-*.url >/dev/null 2>&1 && break; sleep 0.5; done
+          grep -q "t=\*\*\*" "$T/log" || { echo "expected masked URL in non-TTY log"; cat "$T/log"; kill $pid || true; exit 1; }
+          url=$(cat "$T"/data/export/serve-*.url 2>/dev/null | head -1)
           [ -n "$url" ] || { cat "$T/log"; kill $pid || true; exit 1; }
           port=$(printf '%s' "$url" | sed -E 's#http://127\.0\.0\.1:([0-9]+)/.*#\1#')
           curl -fsS -c "$T/cj" -b "$T/cj" -L "$url" -o /dev/null

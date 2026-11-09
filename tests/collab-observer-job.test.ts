@@ -12,7 +12,7 @@ const run = (args: string[], extraEnv: Record<string, string> = {}) => spawnSync
   env: {
     ...process.env as Record<string, string>,
     DIA_ROOT: root, DIA_JOB_ROOT: jobRoot, DIA_HOME: home,
-    DIA_JOB_NO_LAUNCHD: "1", ...extraEnv,
+    DIA_JOB_NO_LAUNCHD: "1", DIA_BIN: process.execPath, ...extraEnv,
   },
 });
 const json = (s: string) => JSON.parse(s);
@@ -36,7 +36,7 @@ function writeRegistry(tasks: Record<string, any>) {
   writeFileSync(join(jobRoot, "tasks", "registry.json"), JSON.stringify({ tasks }));
 }
 
-const KEYS = ["DIA_ROOT", "DIA_JOB_ROOT", "DIA_HOME", "DIA_JOB_NO_LAUNCHD"] as const;
+const KEYS = ["DIA_ROOT", "DIA_JOB_ROOT", "DIA_HOME", "DIA_JOB_NO_LAUNCHD", "DIA_BIN"] as const;
 const saved: Record<string, string | undefined> = {};
 for (const k of KEYS) saved[k] = process.env[k];
 afterEach(() => {
@@ -51,6 +51,7 @@ beforeEach(() => {
   process.env.DIA_JOB_ROOT = jobRoot;
   process.env.DIA_HOME = home;
   process.env.DIA_JOB_NO_LAUNCHD = "1";
+  process.env.DIA_BIN = process.execPath; // CI 的 PATH 里没有绝对 dia；显式给一个绝对可执行路径
 });
 
 afterAll(() => { /* temp dirs */ });

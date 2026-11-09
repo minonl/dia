@@ -91,6 +91,7 @@
 | D0.21 | worktree 抽取 `packages/wt` | **完成** | 7 处 python→node；`dia wt`；4 套测试原样迁移全绿 |
 | D0.23 | doctor 平台版本自检 | **完成** | `platform:opencode` / `platform:dsh` 报版本（缺宿主 = warn，不判红）；`tests/active-doctor.test.ts` |
 | D0.44 | 配置迁移走 LLM 任务 | **完成** | `docs/migrations/llm-migration.md`：升级只改声明；迁移=任务+判据+回滚；禁止代码里堆版本分支（安全敏感/原子场景例外） |
+| D0.73 | observer interval 单一事实源 = job registry | **完成** | `observe`/`board --refresh` 按 job 注册值写 board；`collab enable` 校正（缺则装、不对则重装，绝对路径 + DIA_ROOT/DIA_HOME 固化）；`disable` 对称卸载并清派生 board；`doctor` 修复命令统一 `dia collab enable`、非 60 倍数报「不可调度」；`collab status` 显示 observer |
 | D0.72 | 内置 kit 升级不再卡冲突 / 切版本自动重渲染 | **完成** | `kit.install({force})` 透传到 dry-run 规划（否则 `E_CONFLICT` 提前抛）；内置 kit 装配强制覆盖并备份；`persona use` 后自动 `render`；`render` 覆盖 skills/bin 软链（按真实指向判 drift，内容相同也能修） |
 | D0.71 | 知识索引自动建（派生物不等人） | **完成** | `persona add/update/use` 成功后 best-effort 建索引；doctor 缺索引文案改为「首次检索或下次装/切换会自动建」；测试覆盖 add 自动就绪与索引被删的 warn |
 | D0.70 | README/Pages 与代码同构 | **完成** | `scripts/lib/user-docs.mjs` 从 `--help` usage + package.json 生成安装/首次使用/更新/卸载/命令表；README 与 `docs/index.md` 共用片段（marker 拼接，`docs:check` 进 CI）；补齐 npm 12 拦截脚本、bun/pnpm、卸载序列、旧路径 |

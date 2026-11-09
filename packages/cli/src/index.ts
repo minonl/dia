@@ -188,7 +188,7 @@ usage:
   dia wt create|form|list|status|check|route|scope|clean|prune-merged …
   dia cmd <name> [args…]              # 只查 persona 声明的命令（可绕开同名内置）
   dia <persona-cmd> [args…]           # 一级委派（内置优先）
-  dia collab status|enable|disable [--persona ID]   # dia-msg 默认能力开关（默认开）
+  dia collab status|enable|disable [--persona ID]   # dia-msg 开关；enable 校正 300s 观察器定时并刷新 board，disable 一并卸载
   dia collab stats [--since 7d] [--by session|pair|class] [--json]   # 只读聚合（送达/回复/积压）
   dia collab board [--cached|--refresh] [--json] | observe [--interval 300] [--json]   # 一次性 tick/看板（无常驻；定时用 dia job）
   dia whoami [--json] [--name NAME]   # 当前会话身份（session id）
@@ -1103,9 +1103,11 @@ async function collabCli(argv: string[]): Promise<number> {
     const personaId = flag(args, "--persona") || process.env.DIA_PERSONA || undefined;
     if (sub === "status") {
       const s = defaultMsg.status(personaId);
-      if (asJson) out(JSON.stringify(s, null, 1));
+      const obsInterval = observer.jobInterval();
+      if (asJson) out(JSON.stringify({ ...s, observer: { interval: obsInterval ?? null } }, null, 1));
       else {
         out(`enabled: ${s.enabled}${s.reason ? `  (${s.reason})` : ""}`);
+        out(`observer: ${obsInterval ? `job=${obsInterval}s` : "未注册（dia collab enable）"}`);
         out(`kit: ${s.kit_installed || "(not installed)"}  source=${s.kit_dir}`);
         out(`config: ${s.config_file}`);
         if (s.disabled_personas.length) out(`disabled personas: ${s.disabled_personas.join(", ")}`);
@@ -1123,11 +1125,12 @@ async function collabCli(argv: string[]): Promise<number> {
       }
       const kitInfo = sub === "enable" ? defaultMsg.ensure(personaId, { force: true }) : null;
       const jobWarn = sub === "enable" ? observer.ensureJob() : null;
-      out(asJson ? JSON.stringify({ ...c, removed, kit: kitInfo }, null, 1)
+      if (sub === "disable" && !personaId) observer.removeJob();
+      out(asJson ? JSON.stringify({ ...c, removed, kit: kitInfo, job: jobWarn ? { ok: false, reason: jobWarn } : { ok: true } }, null, 1)
         : `${sub}d: enabled=${c.enabled}${c.disabled_personas.length ? ` disabled_personas=${c.disabled_personas.join(",")}` : ""}` +
           (removed.length ? `  removed=${removed.length}` : "") +
           (kitInfo ? (kitInfo.ok ? `  kit=${kitInfo.kit}` : `  ⚠ ${kitInfo.reason}`) : "") +
-          (jobWarn ? `  ⚠ 观察器定时未注册：${jobWarn}（手动：dia job install collab-observe --interval 300 --cmd 'dia collab observe'）` : ""));
+          (jobWarn ? `  ⚠ 观察器定时未校正：${jobWarn}（重跑 dia collab enable 或设 DIA_BIN）` : ""));
       // enable 装不上内置 kit 时必须非 0：否则 CI/脚本无法判断「消息能力是否真的可用」
       if (kitInfo && !kitInfo.ok) return 32;
       return 0;

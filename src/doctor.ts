@@ -15,6 +15,7 @@ import * as dsh from "./dsh.ts";
 import * as platforms from "./platforms.ts";
 import * as deps from "./deps.ts";
 import * as paths from "./paths.ts";
+import * as observer from "./observer.ts";
 import * as job from "./job.ts";
 import { indexStatus, type IndexStatus } from "./kb.ts";
 
@@ -46,8 +47,8 @@ function collabObserverCheck(): Check {
   const statePath = join(paths.diaHome(), "collab", "state");
   let tasks: Record<string, any> = {};
   try { tasks = JSON.parse(readFileSync(join(job.jobRootResolved(), "tasks", "registry.json"), "utf8"))?.tasks || {}; } catch { /* none */ }
-  const key = Object.keys(tasks).find((k) => k === "collab-observe" || k.endsWith(".collab-observe"));
-  if (!key) return { name, status: "warn", detail: '未注册定时（dia job install collab-observe --interval 300 --cmd "dia collab observe"）' };
+  const key = Object.keys(tasks).find((k) => k === "collab-observe");
+  if (!key) return { name, status: "warn", detail: "观察器定时未注册（修复：dia collab enable）" };
   const reg = tasks[key] || {};
   let board: any = null;
   try { board = JSON.parse(readFileSync(boardPath, "utf8")); } catch { /* none */ }
@@ -57,12 +58,19 @@ function collabObserverCheck(): Check {
   try { const m = statSync(boardPath).mode & 0o777; if (m & 0o077) issues.push(`board 权限 ${m.toString(8)}（应 600）`); } catch { /* ignore */ }
   try { const m = statSync(statePath).mode & 0o777; if (m & 0o077) issues.push(`state 目录权限 ${m.toString(8)}（应 700）`); } catch { /* ignore */ }
 
-  const interval = Number(String(reg.interval ?? "").trim()) || 300;
-  if (typeof board.interval_s === "number" && board.interval_s !== interval) {
-    issues.push(`interval 不一致：board=${board.interval_s}s / job=${interval}s`);
+  // interval 唯一事实源 = job registry；calendar 型（非数字）只跳过 interval 校验
+  const rawInterval = String(reg.interval ?? "").trim();
+  const parsed = Number(rawInterval);
+  const interval = Number.isFinite(parsed) && parsed > 0 ? parsed : observer.DEFAULT_INTERVAL_S;
+  if (Number.isFinite(parsed) && parsed > 0) {
+    if (parsed % 60 !== 0 || parsed > observer.MAX_INTERVAL_S) {
+      issues.push(`job interval=${parsed}s 不可调度（须为 60 的倍数且 ≤${observer.MAX_INTERVAL_S}s；修复：dia collab enable）`);
+    } else if (typeof board.interval_s === "number" && board.interval_s !== parsed) {
+      issues.push(`interval 不一致：board=${board.interval_s}s / job=${parsed}s（修复：dia collab enable）`);
+    }
   }
   const age = Date.now() - Date.parse(board.generated_at);
-  const ttl = Math.min(900_000, Math.max(interval * 2000, interval * 1000 + 60_000));
+  const ttl = observer.ttlMs(interval);
   if (!Number.isFinite(age) || age < -5_000) issues.push("board 时间戳异常（未来/不可解析）");
   else if (age > ttl) issues.push(`board ${Math.round(age / 60000)} 分钟未刷新（> ${Math.round(ttl / 1000)}s）`);
 

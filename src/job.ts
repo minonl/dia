@@ -64,7 +64,7 @@ export function assertWritableJobRoot(root = jobRootResolved()): void {
   if (resolve(root) === resolve(legacyJobRoot())) {
     throw new Error(`E_JOB_ROOT_LEGACY: 当前解析到旧 job 根 ${root}（只读兼容）；修复：dia job migrate --from ${root}`);
   }
-  if (isEphemeralPath(root) && process.env.DIA_JOB_NO_LAUNCHD !== "1") {
+  if (!process.env.DIA_JOB_ROOT && isEphemeralPath(root) && process.env.DIA_JOB_NO_LAUNCHD !== "1") {
     throw new Error(`E_JOB_ROOT_EPHEMERAL: ${root} 在临时目录，拒绝注册真定时（测试用 DIA_JOB_NO_LAUNCHD=1，或显式 DIA_JOB_ALLOW_EPHEMERAL=1）`);
   }
 }

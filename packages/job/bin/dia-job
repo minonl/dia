@@ -51,6 +51,7 @@ json() { [ -n "$NODE_BIN" ] || { echo "dia-job: 找不到 node/bun（JSON 适配
 . "$SELF_DIR/../lib/config.sh"
 dia_job_load_config
 # 数据根：DIA_JOB_ROOT 优先；未显式设置时兼容旧 YAN_DATA_ROOT；最后才用新默认。
+DIA_JOB_ROOT_GIVEN="${DIA_JOB_ROOT:-}"
 DIA_JOB_ROOT="${DIA_JOB_ROOT:-${YAN_DATA_ROOT:-${XDG_DATA_HOME:-$HOME/.local/share}/dia-job}}"
 # ⚠️ 2026-11-09：此前「目录不存在 → 静默回退旧根」会让临时根/新机器的注册写进 ~/.local/share/dia-job，
 #    与 doctor/`dia job list` 读的根分叉（实测产生 split-brain）。改为建目录，失败即报错，绝不换根。
@@ -889,7 +890,7 @@ cmd_install() {
   # 临时根绝不允许注册真调度（测试/沙箱请设 DIA_JOB_NO_LAUNCHD=1 或 DIA_JOB_ALLOW_EPHEMERAL=1）
   case "$DIA_JOB_ROOT" in
     /tmp/*|/var/folders/*|/private/var/folders/*|/run/user/*|/dev/shm/*)
-      if [ "${DIA_JOB_NO_LAUNCHD:-0}" != "1" ] && [ "${DIA_JOB_ALLOW_EPHEMERAL:-0}" != "1" ]; then
+      if [ -z "${DIA_JOB_ROOT_GIVEN:-}" ] && [ "${DIA_JOB_NO_LAUNCHD:-0}" != "1" ] && [ "${DIA_JOB_ALLOW_EPHEMERAL:-0}" != "1" ]; then
         echo "  ✗ E_JOB_ROOT_EPHEMERAL: job 根在临时目录（$DIA_JOB_ROOT），拒绝注册真定时" >&2
         return 9
       fi ;;
@@ -1081,7 +1082,7 @@ cmd_uninstall() {
       _launchd_off || launchctl bootout "gui/$UID_NUM/$(label_for "$name")" 2>/dev/null || true   # ⚠️ 守卫必须在**这一行**（先前误命中 install 的同名行 ⇒ uninstall 未隔离，实测踩到）
       [ -f "$f" ] && rm -f "$f" && echo "  · 已删 plist"
     else
-      echo "  ! plist 属于其它 job 根（$_prog），跳过下线/删除（避免误删新根注册）"
+      echo "  ! plist 属于其它 job 根（${_prog}），跳过下线/删除（避免误删新根注册）"
     fi
   elif [ "$backend" = systemd ]; then
     [ "$DIA_JOB_NO_LAUNCHD" = 1 ] || systemd_remove "$name"

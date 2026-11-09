@@ -333,6 +333,51 @@ export function renderContent(
   return rendered;
 }
 
+
+/** 简易 semver 匹配（kit 版本是 x.y.z）：精确 / ^ / ~ / >= / * */
+export function satisfies(version: string, range: string): boolean {
+  const r = (range || "*").trim();
+  const v = version.trim().replace(/^v/, "");
+  const cmp = (a: string, b: string) => {
+    const pa = a.split(".").map(Number), pb = b.split(".").map(Number);
+    for (let i = 0; i < 3; i++) { const d = (pa[i] || 0) - (pb[i] || 0); if (d) return d; }
+    return 0;
+  };
+  if (r === "*" || r === "") return true;
+  if (r.startsWith("^")) {
+    const base = r.slice(1);
+    const [maj, min] = base.split(".").map(Number);
+    const upper = maj > 0 ? `${maj + 1}.0.0` : `0.${min + 1}.0`;
+    return cmp(v, base) >= 0 && cmp(v, upper) < 0;
+  }
+  if (r.startsWith("~")) {
+    const base = r.slice(1);
+    const [maj, min] = base.split(".").map(Number);
+    const upper = `${maj}.${min + 1}.0`;
+    return cmp(v, base) >= 0 && cmp(v, upper) < 0;
+  }
+  if (r.startsWith(">=")) return cmp(v, r.slice(2)) >= 0;
+  return cmp(v, r) === 0;
+}
+
+/** 从 dia 安装目录的 kits/<id>/ 里挑满足 range 的最高版本目录（外部 kit 引用用） */
+export function resolveKitDir(id: string, range: string): string {
+  const root = join(paths.installDir(), "kits", id);
+  if (!existsSync(root)) throw new Error(`E_KIT_NOT_FOUND: ${id}（安装目录无 kits/${id}）`);
+  const versions = readdirSync(root).filter((v) => statSync(join(root, v)).isDirectory()).sort();
+  const hit = versions.filter((v) => satisfies(v, range)).pop();
+  if (!hit) throw new Error(`E_KIT_VERSION: ${id} 无满足 ${range} 的版本（候选：${versions.join(", ")}）`);
+  return join(root, hit);
+}
+
+/** 按 id@range 从安装目录安装 */
+export function installRef(ref: string): KitInstallResult {
+  const at = ref.lastIndexOf("@");
+  const id = at > 0 ? ref.slice(0, at) : ref;
+  const range = at > 0 ? ref.slice(at + 1) : "*";
+  return install(resolveKitDir(id, range));
+}
+
 export function install(from: string, opts: { ref?: string; dryRun?: boolean; json?: boolean; force?: boolean } = {}): KitInstallResult {
   const src = resolveSource(from, opts.ref);
   const m = readKitManifest(src.dir);

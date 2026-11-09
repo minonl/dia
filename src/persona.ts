@@ -319,13 +319,21 @@ export function install(from: string, opts: { ref?: string; host?: string; home?
   const appliedConfig = config.apply((m.config ?? []) as any);
 
   // kits：包内相对路径，装完树后逐个分发（内容归 kit，人格只引用）
-  const kitRefs: { id: string; version: string }[] = [];
+  const kitRefs: { id: string; version: string; range?: string }[] = [];
   for (const ref of m.kits ?? []) {
-    const kitDir = resolve(target, ref);
-    if (!kitDir.startsWith(target + sep)) throw new Error(`E_MANIFEST: kit escapes persona dir: ${ref}`);
-    if (!existsSync(join(kitDir, "dia.json"))) throw new Error(`E_MANIFEST: kit manifest missing: ${ref}`);
-    const r = kit.install(kitDir);
-    kitRefs.push({ id: r.id, version: r.version });
+    const isPath = ref.startsWith(".") || ref.includes("/");
+    if (isPath) {
+      const kitDir = resolve(target, ref);
+      if (!kitDir.startsWith(target + sep)) throw new Error(`E_MANIFEST: kit escapes persona dir: ${ref}`);
+      if (!existsSync(join(kitDir, "dia.json"))) throw new Error(`E_MANIFEST: kit manifest missing: ${ref}`);
+      const r = kit.install(kitDir);
+      kitRefs.push({ id: r.id, version: r.version });
+    } else {
+      // 外部引用：`<id>[@<range>]`，从 dia 安装目录的 kits/ 解析（2026-11-09）
+      const r = kit.installRef(ref);
+      const at = ref.lastIndexOf("@");
+      kitRefs.push({ id: r.id, version: r.version, range: at > 0 ? ref.slice(at + 1) : "*" });
+    }
   }
 
   // 默认能力包（dia-msg）：不阻断 persona 安装；显式 capabilities.msg=false 或用户 disable 时跳过。

@@ -256,13 +256,15 @@ async function personaChecks(id: string, prefix: string, shared: Map<string, { c
 
   // kit 校验
   // 只校验该 persona 引用的 kit；未引用的“孤儿 kit”不拖红（它们不属于这个 persona）
-  let refs: { id: string; version: string }[] = [];
+  let refs: { id: string; version: string; range?: string }[] = [];
   try { refs = JSON.parse(readFileSync(join(sc.dir, "dia.lock"), "utf8")).kits ?? []; } catch { refs = []; }
   if (!refs.length) checks.push({ name: `${prefix}kits`, status: "ok", detail: "无独立 kit（内容由 persona 自带）" });
   for (const k of refs) {
     try {
       const r = kit.verify(k.id, k.version);
-      checks.push({ name: `${prefix}kit:${k.id}@${k.version}`, status: r.ok ? "ok" : "fail", detail: r.ok ? "一致" : r.drift.join("; ") });
+      const rangeOk = !k.range || kit.satisfies(k.version, k.range);
+      checks.push({ name: `${prefix}kit:${k.id}@${k.version}`, status: r.ok && rangeOk ? "ok" : "fail",
+        detail: !rangeOk ? `版本 ${k.version} 不满足 persona 要求 ${k.range}` : (r.ok ? "一致" : r.drift.join("; ")) });
     } catch (e: any) {
       checks.push({ name: `${prefix}kit:${k.id}@${k.version}`, status: "fail", detail: e?.message });
     }

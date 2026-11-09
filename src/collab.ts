@@ -51,6 +51,13 @@ export interface MessageV2 {
   created_at: string;
   state: State;
   delivered_at?: string;
+  /** 模型看到（hook/显式回执）的时间；送达三态：delivered → exposed → acked */
+  exposed_at?: string;
+  /** 首次被处理的时间（ack/reply/close 时若未 delivered 则补写） */
+  first_touch_at?: string;
+  /** 到达时快照的优先级（0=P0 最高，3=P3），避免任务状态变化回溯改写历史消息 */
+  class_snapshot?: number;
+  class_why?: string[];
   acked_at?: string;
   replied_at?: string;
   closed_at?: string;
@@ -88,12 +95,17 @@ export interface SendOptions {
   idempotencyKey?: string;
   hops?: number;
   name?: string;
+  /** 到达时快照的优先级（0=P0 … 3=P3）；由调用方按发送者任务 eff 计算 */
+  classSnapshot?: number;
+  classWhy?: string[];
 }
 
 export interface InboxOptions {
   unread?: boolean;
   all?: boolean;
   limit?: number;
+  sort?: "arrival" | "priority";
+  classes?: number[];
 }
 
 const root = () => join(paths.diaHome(), "collab");
@@ -127,19 +139,35 @@ export function withLock<T>(name: string, fn: () => T): T {
   ensureDir(dir);
   const safe = name.replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 100);
   const lock = join(dir, `${safe}.lock`);
+  const token = `${process.pid}-${Math.random().toString(16).slice(2)}`;
+  // 陈旧判定：有 pid 且进程活着 → 永不判陈旧；进程已死 → 立即回收；老格式（无 pid）→ mtime > 30s
+  const stale = () => {
+    try {
+      const raw = readFileSync(lock, "utf8");
+      const info = (() => { try { return JSON.parse(raw); } catch { return null; } })();
+      if (info?.pid) { try { process.kill(info.pid, 0); return false; } catch { return true; } }
+      return Date.now() - statSync(lock).mtimeMs > 30_000;
+    } catch { return false; }
+  };
   let fd: number | undefined;
   for (let i = 0; i < 150; i++) {
     try { fd = openSync(lock, "wx", 0o600); break; }
     catch (e: any) {
       if (e?.code !== "EEXIST") throw e;
-      try { if (Date.now() - statSync(lock).mtimeMs > 30_000) rmSync(lock, { force: true }); } catch { /* ignore */ }
+      try { if (stale()) rmSync(lock, { force: true }); } catch { /* ignore */ }
       sleep(20);
     }
   }
   if (fd === undefined) throw new Error(`E_LOCK: 获取锁超时（${name}）`);
-  try { return fn(); } finally {
+  try {
+    try { writeFileSync(lock, JSON.stringify({ pid: process.pid, token, at: Date.now() }), { mode: 0o600 }); } catch { /* ignore */ }
+    return fn();
+  } finally {
     try { closeSync(fd); } catch { /* ignore */ }
-    try { rmSync(lock, { force: true }); } catch { /* ignore */ }
+    try {
+      const info = JSON.parse(readFileSync(lock, "utf8"));
+      if (!info?.token || info.token === token) rmSync(lock, { force: true });
+    } catch { /* ignore */ }
   }
 }
 
@@ -208,6 +236,12 @@ function messageFile(sessionId: string, id: string): string {
   return join(inboxRoot(), normalizeSessionId(sessionId), `${id}.json`);
 }
 
+function listInboxFiles(sessionId: string): string[] {
+  const dir = join(inboxRoot(), normalizeSessionId(sessionId));
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir).filter((f) => f.endsWith(".json")).map((f) => join(dir, f));
+}
+
 function readAll(sessionId: string): { msg: MessageV2; path: string }[] {
   const dir = join(inboxRoot(), normalizeSessionId(sessionId));
   if (!existsSync(dir)) return [];
@@ -218,8 +252,19 @@ function readAll(sessionId: string): { msg: MessageV2; path: string }[] {
     const msg = readJson<MessageV2>(path);
     if (msg) out.push({ msg, path });
   }
-  return out.sort((a, b) =>
-    a.msg.created_at.localeCompare(b.msg.created_at) || a.msg.seq - b.msg.seq);
+  // 到达序：解析成 epoch（历史消息可能带 +08:00，字典序会排错），再以 id 稳定兜底
+  const ms = (m: MessageV2) => { const t = Date.parse(m.created_at); return Number.isNaN(t) ? Number.MAX_SAFE_INTEGER : t; };
+  return out.sort((a, b) => ms(a.msg) - ms(b.msg) || a.msg.id.localeCompare(b.msg.id));
+}
+
+/** 全部 v2 消息（跨收件箱）；stats/观察器用 */
+export function allMessages(): MessageV2[] {
+  const out: MessageV2[] = [];
+  for (const sid of allSessionsWithInbox()) {
+    if (!SESSION_RE.test(sid)) continue; // 脏目录容错：不因一个坏目录让全量扫描失败
+    try { out.push(...readAll(sid).map((x) => x.msg)); } catch { /* skip */ }
+  }
+  return out;
 }
 
 function allSessionsWithInbox(): string[] {
@@ -331,6 +376,7 @@ export function send(opts: SendOptions): MessageV2 {
       idempotency_key: idempotencyKey,
       created_at: now(),
       state: "pending",
+      ...(opts.classSnapshot !== undefined ? { class_snapshot: opts.classSnapshot, class_why: opts.classWhy } : {}),
       transport: "file",
     };
     writeAtomic(messageFile(to, id), JSON.stringify(msg, null, 1) + "\n");
@@ -343,6 +389,12 @@ export function inbox(sessionId: string, opts: InboxOptions = {}): MessageV2[] {
   let rows = readAll(id).map((x) => x.msg);
   if (opts.unread) rows = rows.filter((m) => m.state === "pending" || m.state === "delivered");
   else if (!opts.all) rows = rows.filter((m) => !TERMINAL.includes(m.state));
+  if (opts.classes?.length) rows = rows.filter((m) => opts.classes!.includes(m.class_snapshot ?? 2));
+  if (opts.sort === "priority") {
+    const ms = (m: MessageV2) => { const t = Date.parse(m.created_at); return Number.isNaN(t) ? Number.MAX_SAFE_INTEGER : t; };
+    rows = rows.slice().sort((a, b) =>
+      (a.class_snapshot ?? 2) - (b.class_snapshot ?? 2) || ms(a) - ms(b) || a.id.localeCompare(b.id));
+  }
   return opts.limit && opts.limit > 0 ? rows.slice(0, opts.limit) : rows;
 }
 
@@ -389,9 +441,66 @@ function mutate(sessionId: string, id: string, fn: (m: MessageV2) => void): Mess
   });
 }
 
+function touchDelivered(m: MessageV2) {
+  if (!m.delivered_at) { m.delivered_at = now(); m.first_touch_at = m.delivered_at; }
+  if (m.state === "pending") m.state = "delivered";
+}
+
 export function markDelivered(sessionId: string, id: string): MessageV2 {
-  return mutate(sessionId, id, (m) => {
-    if (m.state === "pending") { m.state = "delivered"; m.delivered_at = now(); }
+  return mutate(sessionId, id, (m) => { touchDelivered(m); });
+}
+
+/** 批量置 delivered：一次锁 + 一次读取，避免 `dia in` 的 O(N^2) 读放大 */
+export function markDeliveredBatch(sessionId: string, ids: string[]): number {
+  const sid = normalizeSessionId(sessionId);
+  if (!ids.length) return 0;
+  const want = new Set(ids);
+  return withLock(`inbox-${sid}`, () => {
+    const at = now();
+    let n = 0;
+    for (const f of listInboxFiles(sid)) {
+      const msg = readJson<MessageV2>(f);
+      if (!msg || !want.has(msg.id) || msg.legacy) continue;
+      if (msg.delivered_at) continue;
+      msg.delivered_at = at; msg.first_touch_at = at;
+      if (msg.state === "pending") msg.state = "delivered";
+      writeAtomic(f, JSON.stringify(msg, null, 1) + "\n");
+      n++;
+    }
+    return n;
+  });
+}
+
+/** 模型侧回执（hook/宿主调用）：记录 exposed_at，不改 ack 状态 */
+export function markExposed(sessionId: string, ids: string[]): number {
+  const sid = normalizeSessionId(sessionId);
+  const want = new Set(ids);
+  return withLock(`inbox-${sid}`, () => {
+    const at = now();
+    let n = 0;
+    for (const f of listInboxFiles(sid)) {
+      const msg = readJson<MessageV2>(f);
+      if (!msg || !want.has(msg.id) || msg.legacy) continue;
+      if (!msg.delivered_at) { msg.delivered_at = at; msg.first_touch_at = at; }
+      if (!msg.exposed_at) { msg.exposed_at = at; n++; }
+      if (msg.state === "pending") msg.state = "delivered";
+      writeAtomic(f, JSON.stringify(msg, null, 1) + "\n");
+    }
+    return n;
+  });
+}
+
+/** `dia out --reply-to` 补记：把原消息置 replied（避免 reply_rate 低估） */
+export function markReplied(originalId: string, replyId: string): MessageV2 {
+  const hit = findAny(originalId);
+  if (!hit) throw new Error(`E_NOT_FOUND: ${originalId}`);
+  const sid = hit.msg.to.session_id;
+  return mutate(sid, originalId, (m) => {
+    if (m.state === "replied" || m.state === "closed") return;
+    touchDelivered(m);
+    m.state = "replied";
+    m.replied_at = now();
+    m.reply_id = replyId;
   });
 }
 
@@ -399,6 +508,7 @@ export function ack(sessionId: string, id: string): MessageV2 {
   return mutate(sessionId, id, (m) => {
     if (m.state === "acked") return;
     if (m.state !== "pending" && m.state !== "delivered") throw new Error(`E_STATE: ${id} 是 ${m.state}，不能 ack`);
+    touchDelivered(m);
     m.state = "acked";
     m.acked_at = now();
   });
@@ -427,6 +537,7 @@ export function reply(sessionId: string, id: string, body: string, refs?: Record
       hops: maxHops + 1,
     });
     const original = mutate(idNorm, id, (m) => {
+      touchDelivered(m);
       m.state = "replied";
       m.replied_at = now();
       m.reply_id = r.id;
@@ -443,10 +554,106 @@ export function close(sessionId: string, id: string, reason: string): MessageV2 
       if (m.closure_reason === why) return;
       throw new Error(`E_STATE: ${id} 已关闭（${m.closure_reason}），不能改成 ${why}`);
     }
+    touchDelivered(m);
     m.state = "closed";
     m.closure_reason = why;
     m.closed_at = now();
   });
+}
+
+export interface StatsOptions {
+  since?: string;
+  now?: Date;
+  by?: "session" | "pair" | "class";
+}
+
+const TERMINAL_STATES = new Set(["replied", "closed"]);
+
+function percentile(xs: number[], p: number): number | null {
+  if (!xs.length) return null;
+  const a = [...xs].sort((x, y) => x - y);
+  const i = Math.min(a.length - 1, Math.max(0, Math.ceil((p / 100) * a.length) - 1));
+  return Math.round(a[i]);
+}
+
+function parseSince(v: string | undefined, now: Date): Date {
+  if (!v) return new Date(now.getTime() - 7 * 86400000);
+  const m = /^(\d+)([dhm])$/.exec(v.trim());
+  if (m) return new Date(now.getTime() - Number(m[1]) * ({ d: 86400000, h: 3600000, m: 60000 }[m[2] as "d" | "h" | "m"]));
+  const t = Date.parse(v);
+  if (Number.isNaN(t)) throw new Error(`E_USAGE: 非法 --since ${v}`);
+  return new Date(t);
+}
+
+const tsOf = (s?: string) => { if (!s) return null; const t = Date.parse(s); return Number.isNaN(t) ? null : t; };
+
+/** 只读聚合：cohort 口径（按 created_at 入窗）+ backlog as-of（当前积压） */
+export function messageStats(opts: StatsOptions = {}) {
+  const now = opts.now ?? new Date();
+  const since = parseSince(opts.since, now);
+  const sinceMs = since.getTime(), nowMs = now.getTime();
+  const all = allMessages();
+  const liveSessions = new Set(readdirSyncSafe(sessionsDir(), ".json").map((f) => f.replace(/\.json$/, "")));
+
+  const rows = all.filter((m) => !m.legacy && m.from.session_id !== m.to.session_id);
+  const cohort = rows.filter((m) => {
+    const t = tsOf(m.created_at);
+    if (t === null || t < sinceMs || t > nowMs) return false;
+    if (m.state === "closed" && m.closure_reason === "duplicate") return false;
+    return true;
+  });
+
+  const lag = (a?: string, b?: string) => { const x = tsOf(a), y = tsOf(b); return x === null || y === null ? null : y - x; };
+  const deliverLags = cohort.map((m) => lag(m.created_at, m.delivered_at)).filter((x): x is number => x !== null && x >= 0);
+  const replyTargets = cohort.filter((m) => m.requires_reply && m.kind !== "reply");
+  const replyLags = replyTargets.map((m) => lag(m.created_at, m.replied_at)).filter((x): x is number => x !== null && x >= 0);
+  const ackTargets = cohort.filter((m) => m.requires_reply || m.kind === "handoff");
+  const backlogs = rows.filter((m) => !TERMINAL_STATES.has(m.state));
+
+  const byKey = (m: MessageV2) => opts.by === "pair" ? `${m.from.session_id}→${m.to.session_id}` : opts.by === "class" ? `P${m.class_snapshot ?? 2}` : m.to.session_id;
+  const groups: Record<string, any> = {};
+  for (const m of cohort) {
+    const k = byKey(m);
+    const g = groups[k] ?? (groups[k] = { key: k, total: 0, delivered: 0, exposed: 0, acked: 0, replied: 0, reply_n: 0, reply_lags: [] as number[] });
+    g.total++;
+    if (m.delivered_at) g.delivered++;
+    if (m.exposed_at) g.exposed++;
+    if (m.acked_at) g.acked++;
+    if (m.replied_at) { g.replied++; const l = lag(m.created_at, m.replied_at); if (l !== null && l >= 0) { g.reply_n++; g.reply_lags.push(l); } }
+  }
+
+  return {
+    schema: 1,
+    as_of: new Date(nowMs).toISOString(),
+    since: since.toISOString(),
+    cohort: {
+      total: cohort.length,
+      deliver_lag_ms: { n: deliverLags.length, median: percentile(deliverLags, 50), p90: percentile(deliverLags, 90) },
+      delivered_rate: cohort.length ? round(cohort.filter((m) => m.delivered_at).length / cohort.length) : null,
+      exposed_rate: cohort.length ? round(cohort.filter((m) => m.exposed_at).length / cohort.length) : null,
+      ack_rate: ackTargets.length ? round(ackTargets.filter((m) => m.acked_at).length / ackTargets.length) : null,
+      reply_rate: replyTargets.length ? round(replyTargets.filter((m) => m.replied_at).length / replyTargets.length) : null,
+      reply_latency_ms: { n: replyLags.length, median: percentile(replyLags, 50), p90: percentile(replyLags, 90), censored: replyTargets.length - replyLags.length },
+    },
+    backlog: {
+      count: backlogs.length,
+      oldest_age_ms: backlogs.length ? nowMs - Math.min(...backlogs.map((m) => tsOf(m.created_at) ?? nowMs)) : 0,
+      orphan: backlogs.filter((m) => !liveSessions.has(m.to.session_id)).length,
+      by_class: countBy(backlogs, (m) => `P${m.class_snapshot ?? 2}`),
+    },
+    groups: Object.values(groups).map((g: any) => ({ ...g, reply_lags: undefined, reply_latency_ms: percentile(g.reply_lags, 50) })),
+    notes: ["reply_latency 仅统计已回复样本（右删失见 censored）", "delivered = dia in 成功输出；exposed = 宿主回执（--expose）"],
+  };
+}
+
+function round(x: number): number { return Math.round(x * 1000) / 1000; }
+function countBy<T>(xs: T[], k: (x: T) => string): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const x of xs) { const key = k(x); out[key] = (out[key] || 0) + 1; }
+  return out;
+}
+function readdirSyncSafe(dir: string, suffix: string): string[] {
+  try { return readdirSync(dir).filter((f) => f.endsWith(suffix)); } catch { return []; }
 }
 
 /** 旧 ~/.dia/msg → ~/.dia/collab/legacy：正文复制，不猜 session id，幂等。 */

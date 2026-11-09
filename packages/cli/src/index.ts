@@ -13,6 +13,7 @@ import * as graph from "../../../src/graph.ts";
 import * as graphTui from "../../../src/graph-tui.ts";
 import * as graphHtml from "../../../src/graph-html/render.ts";
 import * as plan from "../../../src/plan.ts";
+import * as msgPriority from "../../../src/msg-priority.ts";
 import * as defaultMsg from "../../../src/default-msg.ts";
 import * as paths from "../../../src/paths.ts";
 import * as agents from "../../../src/agents.ts";
@@ -185,8 +186,9 @@ usage:
   dia cmd <name> [args…]              # 只查 persona 声明的命令（可绕开同名内置）
   dia <persona-cmd> [args…]           # 一级委派（内置优先）
   dia collab status|enable|disable [--persona ID]   # dia-msg 默认能力开关（默认开）
+  dia collab stats [--since 7d] [--by session|pair|class] [--json]   # 只读聚合（送达/回复/积压）
   dia whoami [--json] [--name NAME]   # 当前会话身份（session id）
-  dia in [--unread] [--all] [--legacy] [--json]   # 会话收件箱（正文内联）
+  dia in [--unread] [--all] [--legacy] [--class P0,P1] [--sort priority|arrival] [--expose] [--json]   # 会话收件箱（正文内联）
   dia out --to <session_id> --subject S (--body B|--body-file F) [--kind K] [--touch p1,p2] [--reply-to ID]
   dia ack <id> | dia reply <id> --body B | dia close <id> --reason R | dia show <id>
   dia msg send|show|inbox|ack|delivered|deliver [--wait]|reply|needs-info|status|stuck|thread|escalate|agents|migrate
@@ -985,9 +987,9 @@ async function collabCli(argv: string[]): Promise<number> {
     ...(m.refs?.touches || "").split(","),
     ...(m.refs?.path ? [m.refs.path] : []),
   ].map((x) => x.trim()).filter(Boolean);
-  const view = (m: collab.MessageV2) => ({ ...m, body: collab.bodyOf(m) });
+  const view = (m: collab.MessageV2) => ({ ...m, class: m.class_snapshot !== undefined ? msgPriority.className(m.class_snapshot) : undefined, body: collab.bodyOf(m) });
   const print = (m: collab.MessageV2) => {
-    out(`${m.id}\t[${m.state}]\t${m.subject}`);
+    out(`${m.id}\t[${m.state}]${m.class_snapshot !== undefined ? `[${msgPriority.className(m.class_snapshot)}]` : ""}\t${m.subject}`);
     out(`  from: ${m.from.display_name || m.from.session_id} (${m.from.session_id})`);
     out(`  to:   ${m.to.display_name || m.to.session_id} (${m.to.session_id})`);
     out(`  kind: ${m.kind}${m.requires_reply ? "  需回复" : ""}${m.deadline ? `  deadline=${m.deadline}` : ""}  thread=${m.thread_id}#${m.seq}`);
@@ -1041,6 +1043,23 @@ async function collabCli(argv: string[]): Promise<number> {
       if (kitInfo && !kitInfo.ok) return 32;
       return 0;
     }
+    if (sub === "stats") {
+      const nowRaw = flag(args, "--now");
+      const now = nowRaw ? new Date(nowRaw) : undefined;
+      if (now && Number.isNaN(now.getTime())) { err("E_USAGE: 非法 --now"); return 2; }
+      const by = flag(args, "--by") as "session" | "pair" | "class" | undefined;
+      if (by && !["session", "pair", "class"].includes(by)) { err("E_USAGE: --by 必须是 session|pair|class"); return 2; }
+      const st = collab.messageStats({ since: flag(args, "--since"), by, now });
+      if (asJson) { out(JSON.stringify(st, null, 1)); return 0; }
+      const f = (v: number | null | undefined) => v === null || v === undefined ? "-" : String(v);
+      out(`cohort ${st.since} → ${st.as_of}  total=${st.cohort.total}`);
+      out(`  delivered=${f(st.cohort.delivered_rate)}  exposed=${f(st.cohort.exposed_rate)}  ack=${f(st.cohort.ack_rate)}  reply=${f(st.cohort.reply_rate)}`);
+      out(`  deliver_lag median=${f(st.cohort.deliver_lag_ms.median)}ms p90=${f(st.cohort.deliver_lag_ms.p90)}ms  (n=${st.cohort.deliver_lag_ms.n})`);
+      out(`  reply_latency median=${f(st.cohort.reply_latency_ms.median)}ms p90=${f(st.cohort.reply_latency_ms.p90)}ms  (n=${st.cohort.reply_latency_ms.n}, censored=${st.cohort.reply_latency_ms.censored})`);
+      out(`backlog count=${st.backlog.count} oldest=${st.backlog.oldest_age_ms}ms orphan=${st.backlog.orphan}`);
+      if (st.groups.length) { out("by " + (by || "session") + ":"); for (const g of st.groups) out(`  ${g.key}\ttotal=${g.total}\treplied=${g.replied}\treply_median=${f(g.reply_latency_ms)}ms`); }
+      return 0;
+    }
     if (sub === "whoami") {
       const rec = collab.whoami({ session, name: flag(args, "--name") });
       out(asJson ? JSON.stringify(rec, null, 1) : `${rec.session_id}\t${rec.display_name}\t${rec.host}\t${rec.cwd}`);
@@ -1055,33 +1074,72 @@ async function collabCli(argv: string[]): Promise<number> {
       }
       const sid = collab.resolveSessionId(session);
       collab.whoami({ session: sid });
-      const opts = { unread: has(args, "--unread"), all: has(args, "--all"), limit: Number(flag(args, "--limit") || 0) };
+      const classes = (flag(args, "--class") || "").split(",").map((x) => x.trim().toUpperCase()).map((x) => {
+        const m = /^P([0-3])$/.exec(x); return m ? Number(m[1]) : null;
+      }).filter((n): n is number => n !== null);
+      const opts = {
+        unread: has(args, "--unread"), all: has(args, "--all"), limit: Number(flag(args, "--limit") || 0),
+        sort: (flag(args, "--sort") === "arrival" ? "arrival" : "priority") as "arrival" | "priority",
+        classes: classes.length ? classes : undefined,
+      };
       const before = collab.inbox(sid, opts);
-      if (!has(args, "--no-mark")) for (const m of before) if (m.state === "pending") collab.markDelivered(sid, m.id);
-      const rows = has(args, "--no-mark") ? before : collab.inbox(sid, opts);
-      if (asJson) out(JSON.stringify(rows.map(view), null, 1));
-      else if (!rows.length) out("(empty)");
-      else rows.forEach(print);
+      const willMark = !has(args, "--no-mark");
+      const stamp = new Date().toISOString();
+      // 展示层先反映「即将送达」，真正落盘在 print 成功之后（EPIPE/截断不算送达）
+      const shown = willMark
+        ? before.map((m) => (m.state === "pending" && !m.delivered_at ? { ...m, state: "delivered" as const, delivered_at: stamp } : m))
+        : before;
+      if (asJson) out(JSON.stringify(shown.map(view), null, 1));
+      else if (!shown.length) out("(empty)");
+      else shown.forEach(print);
+      if (willMark) {
+        const pending = before.filter((m) => !m.delivered_at && m.state === "pending").map((m) => m.id);
+        if (pending.length) collab.markDeliveredBatch(sid, pending);
+      }
+      if (has(args, "--expose") && before.length) collab.markExposed(sid, before.map((m) => m.id));
       return 0;
     }
     if (sub === "out") {
       const to = flag(args, "--to");
       if (!to) { err("usage: dia out --to <session_id> --subject S (--body B|--body-file F) [--kind K]"); return 2; }
+      const kind = (flag(args, "--kind") || "notify") as collab.Kind;
+      const requiresReply = has(args, "--requires-reply") ? true : undefined;
+      const senderId = collab.resolveSessionId(session);
+      const baseInfo = (() => {
+        try {
+          const tasks = task.list();
+          const dr = plan.derive(tasks);
+          const mine = tasks.filter((t) => t.owner === senderId && t.status === "doing");
+          if (!mine.length) return { base: 2, why: "无 doing 任务" };
+          const best = mine.map((t) => dr.byId.get(t.id)?.eff_prio ?? "P99")
+            .sort((a, b) => plan.prioIndex(a) - plan.prioIndex(b))[0];
+          return { base: Math.min(3, plan.prioIndex(best)), why: `doing eff=${best}` };
+        } catch { return { base: 2, why: "任务账本不可读" }; }
+      })();
+      const cls = msgPriority.classify({
+        base: baseInfo.base, kind,
+        requiresReply: requiresReply ?? kind === "question",
+        hops: flag(args, "--hops") ? Number(flag(args, "--hops")) : 0,
+        deadline: flag(args, "--deadline"),
+      });
       const m = collab.send({
-        from: session,
+        from: senderId,
         to,
-        kind: (flag(args, "--kind") || "notify") as collab.Kind,
+        kind,
+        classSnapshot: cls.cls,
+        classWhy: [...cls.why, baseInfo.why],
         subject: flag(args, "--subject") || "",
         body: flag(args, "--body"),
         bodyFile: flag(args, "--body-file"),
         refs: Object.keys(refs).length ? refs : undefined,
-        requiresReply: has(args, "--requires-reply") ? true : undefined,
+        requiresReply,
         deadline: flag(args, "--deadline"),
         threadId: flag(args, "--thread"),
         replyTo: flag(args, "--reply-to"),
         idempotencyKey: flag(args, "--idempotency-key"),
         hops: flag(args, "--hops") ? Number(flag(args, "--hops")) : undefined,
       });
+      if (m.reply_to) { try { collab.markReplied(m.reply_to, m.id); } catch { /* 原消息可能已关闭/迁移 */ } }
       const overlaps = claims.list({}).filter((c) => touchPaths.includes(c.path) && c.holder !== m.from.session_id);
       if (asJson) out(JSON.stringify(overlaps.length ? { ...m, claim_overlaps: overlaps } : m, null, 1));
       else {

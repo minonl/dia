@@ -18,7 +18,7 @@ Agent 入口：[`llms.txt`](https://github.com/minonl/dia/blob/main/llms.txt)（
 | [用户入口：人在哪进，agent 叫什么](entrypoints.md) | 一句话：入口仍是 opencode/dsh（和 yan 一样），但 agent 名是 dabo，不是 dia；dia 是控制面命令，不是人格。 |
 | [进化：dia 的第一性定位](evolution-process.md) | 本文不是功能清单，是过程定义。 |
 | [宿主控制面：黑盒边界与内部 seam（2026-10）](host-control-surface.md) | 问题：把 opencode（含 v2）与 dsh 当"黑盒宿主"时，我们能在哪些边界上控制它们？ |
-| [安装防呆：脚本安装不许抢走 npm 全局安装](install-guard-design.md) | 日期：2026-11-06 ｜ 状态：已实现（D0.65） ｜ 触发：同一台 Linux 机器 3 次出现 ~/.local/bin/dia 被指回脚本安装 |
+| [安装防呆：脚本安装不许抢走 npm 全局安装](install-guard-design.md) | 日期：2026-11-06 ｜ 状态：已退役（2026-11-09：install.sh 删除，安装只走 npm） ｜ 触发：同一台 Linux 机器 3 次出现 ~/.local/bin/dia 被指回脚本安装 |
 | [Kit：内容包安装（persona 的第二个半边）](kit-install.md) | 前置：docs/persona-install.md（persona = 人格，kit = 内容）。 |
 | [Kit 层：把「经验」从 persona 里抽出来（设计 v0.1）](kit-layer.md) | 2026-11-06 用户定调：dws-hub 作为 channel 层重构，同时把 git / node 这类通用工程经验抽成 kit 层， |
 | [模型基准与 Sidecar 监控（A+B 一起）](model-baseline-sidecar.md) | A：首次使用先跑基准，用数据决定配置。 |

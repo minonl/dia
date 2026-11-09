@@ -1,7 +1,7 @@
 # worktree 纪律（`dia wt`）
 
 > 目标：把「任何 git 改动走 worktree」从**靠人记**变成**脚本可断言**。
-> 实现：`packages/wt/bin/dia-wt`（`install.sh` 分发到 `<install>/packages/wt`，`dia wt` 转发）。
+> 实现：`packages/wt/bin/dia-wt`（随 npm 包分发，`dia wt` 转发）。
 
 ## 1. 一条命令接管仓库
 

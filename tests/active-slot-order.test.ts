@@ -14,14 +14,13 @@ describe("版本槽位排序（同 semver、不同 commit）", () => {
     const id = "p";
     const oldV = "0.1.0+gebf44eb";   // 字符串更大
     const newV = "0.1.0+g564f4a4";   // 字符串更小但更新
-    for (const v of [oldV, newV]) {
+    const oldAt = new Date(Date.now() - 60000).toISOString();
+    const newAt = new Date().toISOString();
+    for (const [v, at] of [[oldV, oldAt], [newV, newAt]] as const) {
       const d = join(data, "personas", id, v);
       mkdirSync(d, { recursive: true });
-      writeFileSync(join(d, "dia.lock"), JSON.stringify({ id, version: "0.1.0" }));
+      writeFileSync(join(d, "dia.lock"), JSON.stringify({ id, version: "0.1.0", installedAt: at }));
     }
-    const t = new Date();
-    utimesSync(join(data, "personas", id, oldV), new Date(t.getTime() - 60000), new Date(t.getTime() - 60000));
-    utimesSync(join(data, "personas", id, newV), t, t);
     expect(active.effective(id)?.version).toBe(newV);
   });
 });

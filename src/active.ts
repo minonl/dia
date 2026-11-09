@@ -30,8 +30,14 @@ function versionCmp(dir: string) {
       const d = (ca[i] ?? 0) - (cb[i] ?? 0);
       if (d) return d;
     }
-    const mtime = (v: string) => { try { return statSync(join(dir, v)).mtimeMs; } catch { return 0; } };
-    return mtime(a) - mtime(b);
+    const stamp = (v: string) => {
+      try {
+        const lock = JSON.parse(readFileSync(join(dir, v, "dia.lock"), "utf8"));
+        if (lock?.installedAt) return Date.parse(lock.installedAt) || 0;
+      } catch { /* 老槽位无 installedAt → 退回 mtime */ }
+      try { return statSync(join(dir, v)).mtimeMs; } catch { return 0; }
+    };
+    return stamp(a) - stamp(b);
   };
 }
 

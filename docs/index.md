@@ -1,8 +1,161 @@
-# dia 文档菜单
+# dia（嗲）
 
-> 本文件由 `scripts/docs-index.mjs` 生成，**不要手改**；改完文档跑 `bun run docs:index`。
+> 轻量 agent 框架：预设注入 + 知识索引 + 审计/止血 + 会话采集。
+> 控制面是确定性 CLI，agent 面在独立 persona。
 
-Agent 入口：[`llms.txt`](https://github.com/minonl/dia/blob/main/llms.txt)（全量 `llms-full.txt` 本地生成，**不入库**：`bun run docs:index`）
+> 本页由 `scripts/docs-index.mjs` 生成（`bun run docs:gen`），**不要手改**。
+
+### 安装
+
+```bash
+# npm（推荐）。npm 12 起默认拦截全局包的安装脚本，需显式放行一次
+npm i -g @minonl/dia --allow-scripts=@minonl/dia
+
+# bun / pnpm 全局装不会自动跑 postinstall —— 装完补一条
+bun add -g @minonl/dia && dia postinstall
+pnpm add -g @minonl/dia && dia postinstall
+
+# 无论哪种方式，这一步都能让「内置能力」就位（幂等，可重复跑）
+dia postinstall
+dia version && dia doctor
+```
+
+- 要求 Node ≥ 24（kb/ingest 用 `node:sqlite`），或 Bun ≥ 1.2。
+- 安装只写磁盘：数据根 `~/.dia` + 3 个宿主 skill 软链（`~/.config/opencode/skill/dia-msg`、`~/.agents/skills/dia-msg`、`~/.dsh/skills/dia-msg`）；**不动** `default_agent`、不启停服务。
+- 用了 `--ignore-scripts` 或 npm 拦截了脚本 → 上面那条 `dia postinstall` 就是补初始化。
+- `dia doctor` 退出码：`0` 全绿｜`1` 有 warn（干净机器上 persona/job 未装属正常）｜`2` 有 fail。确认内置能力就看 `bootstrap` 项。
+
+#### 首次使用（最小可用）
+
+```bash
+dia postinstall                    # 内置能力就位（幂等；安装时放行了脚本可跳过）
+dia doctor                         # 看 bootstrap 是否为 ✓（有 warn 是正常的）
+dia persona add <id> --from <git URL|本地目录> --dry-run   # 先看会写哪些文件
+dia persona add <id> --from <git URL|本地目录>             # persona 是外部资产，必须显式装
+dia persona default <id>           # 可选：设成宿主默认 agent
+```
+
+- **persona 必须显式安装**（包里不带 persona）；内置能力不需要手动装。
+- 没有 persona 时 `dia kb` 以当前目录为知识根 —— 指定 `--root DIR` 或先装 persona。
+
+
+
+### 更新
+
+```bash
+dia update --check     # 有新版 → exit 1
+dia update             # npm 安装：自动 npm i -g，并在进程内补齐内置能力
+```
+
+- 其它包管理器：`bun add -g @minonl/dia@latest` / `pnpm add -g @minonl/dia@latest`，然后 `dia postinstall`。
+- `dia update` 只自动补内置 `dia-msg`；有新的内置能力时以 `dia postinstall` 收口（`dia doctor` 的 `bootstrap` 会提示）。
+
+### 卸载
+
+按顺序：**先让 dia 把自己的产物摘干净，再删 CLI 和数据**。
+
+```bash
+# 1) persona 与默认 agent
+dia persona default --show          # 若默认 agent 是 dia 装的 persona，先复位
+dia persona default --unset
+dia persona list                    # 逐个移除；手改过的产物会 skip，按提示手删
+dia persona remove <id>
+
+# 2) 内置能力（删 3 个 skill 软链 + ~/.dia/kits/dia-msg）
+dia collab disable
+
+# 3) CLI 本体（用当初安装它的那个包管理器）
+npm uninstall -g @minonl/dia        # bun remove -g / pnpm remove -g
+
+# 4) 数据根（不可逆；先看一眼里面有什么）
+ls ~/.dia && cp -a ~/.dia ~/dia-backup-$(date +%Y%m%d)
+rm -rf ~/.dia
+```
+
+- 数据根 `~/.dia` 里有 persona、kit、消息、审计、任务与索引；**删之前先备份**。
+- 宿主渲染产物（不随上一步删除）：`~/.config/opencode/agents/<id>.md`、`~/.dsh/profiles/<id>/`、persona 声明的 `~/.agents/skills/<name>`。
+- 旧机器残留可一并清理：`~/.local/share/dia`（已退役的脚本安装）、`~/.local/state/dia`、`~/.cache/dia`。
+
+### 命令
+
+`dia --help` 是完整清单（本节由它生成）。
+
+| 命令 | 用法 | 说明 |
+|---|---|---|
+| `kb` | `dia kb index [--root DIR] [--db PATH] [--json]` |  |
+| `kb` | `dia kb search <query> [--root DIR] [--db PATH] [--limit N] [--json]` |  |
+| `kb` | `dia kb query <query> [--root DIR] [--db PATH] [--limit N] [--json] [--full] [--bytes] [--auto-index]` |  |
+| `kb` | `dia kb review [--root DIR] [--db PATH] [--json]` |  |
+| `kb` | `dia kb path <doc:...|workflow:...|skill:...|tool:...` | mode> [--root DIR] [--repo DIR] [--json] |
+| `kb` | `dia kb lint [--root DIR] [--db PATH] [--stale-days N] [--json] [--strict]` |  |
+| `kb` | `dia kb get <path> [--root DIR] [--section HEADING]` |  |
+| `--persona` | `dia --persona ID kb <cmd>` | persona 作用域：知识根/数据根/域命令委派 |
+| `ingest` | `dia ingest sessions [--source dsh|opencode|all] [--domain dabo|yan] [--since ISO] [--full] [--limit N] [--dry-run] [--out DIR] [--project ID] [--json]` |  |
+| `ingest` | `dia ingest git --repo DIR [--since DATE] [--limit N] [--json]` |  |
+| `audit` | `dia audit append --session S --tool T [--decision allow|deny|waive] [--params JSON] [--risk N] [--redline] [--note ...] [--json]` |  |
+| `audit` | `dia audit verify --session S --calls N [--chain] [--json]` |  |
+| `audit` | `dia audit score --session S [--json]` |  |
+| `audit` | `dia audit tail [--n 20] [--json]` |  |
+| `freeze` | `dia freeze --reason R [--auto] [--last-episode ID] [--json]` |  |
+| `freeze` | `dia freeze status` |  |
+| `freeze` | `dia freeze thaw --reason R --i-am-human` |  |
+| `guard` | `dia guard [--once] [--json]` |  |
+| `run` | `dia run --session S [--tool T] [--agent A] [--waive --risk N] [--redline] -- <cmd> [args...]` |  |
+| `resume` | `dia resume --session S [--json]` |  |
+| `persona` | `dia persona add <id|--from SRC> [--ref REF] [--host opencode|dsh|codex] [--home DIR] [--dry-run] [--force] [--json]` |  |
+| `persona` | `dia persona create <id> --dir DIR [--host opencode|dsh|codex] [--no-msg] [--dry-run] [--json]` |  |
+| `persona` | `dia persona render <id> [--host opencode|dsh|codex] [--home DIR] [--check] [--json]` |  |
+| `persona` | `dia persona list|verify|remove|show <id>|use <id>[@ver]` |  |
+| `persona` | `dia persona path [<id>[@<ver>]] [--json]` | 打印生效版本目录（服务/脚本取代码入口） |
+| `persona` | `dia persona check <id>|update <id> [--ref REF]` |  |
+| `doctor` | `dia doctor [--persona ID] [--paths] [--json]` |  |
+| `deps` | `dia deps list [--json] [--file PATH]` | 派生视图：登记 + 实测 |
+| `deps` | `dia deps record --id ID --kind K --version V [--resolved R] [--role required|optional] [--result pass|fail|unknown] [--evidence P]` |  |
+| `env` | `dia env list|check [KEY…] | env [--dry-run] [--redact] <cmd…>` |  |
+| `env` | `dia env bw status|unlock [--passwordfile P]|lock` |  |
+| `env` | `dia env bw run --map KEY=item [--map …] [--task T] -- <cmd…>` | 只注入映射键；BW_SESSION 不进子进程 |
+| `env` | `dia env bw serve [--socket PATH] [--passwordfile P]` | 常驻 broker（可启动时解锁） |
+| `env` | `dia env bw get --item ITEM [--env KEY] [--task T] [--json]` |  |
+| `persona` | `dia persona default <id>|--unset|--show [--host opencode]` |  |
+| `kit` | `dia kit add --from SRC [--ref REF] [--dry-run] [--json]` |  |
+| `kit` | `dia kit list|verify <id>|remove <id>` |  |
+| `service` | `dia service add (<--from SRC> | --dir DIR) [--ref REF] [--dry-run] [--json]` |  |
+| `service` | `dia service list [--json] | show <id> [--json] | verify <id|--dir DIR> [--json]` |  |
+| `service` | `dia service health <id> [--from-wrapper --exit N --gen G] [--json]` | 0 ok/30 degraded/1 fail/31 判据不可用/2 用法 |
+| `service` | `dia service remove <id> [--json]` |  |
+| `wt` | `dia wt create|form|list|status|check|route|scope|clean|prune-merged …` |  |
+| `cmd` | `dia cmd <name> [args…]` | 只查 persona 声明的命令（可绕开同名内置） |
+| `<persona-cmd>` | `dia <persona-cmd> [args…]` | 一级委派（内置优先） |
+| `collab` | `dia collab status|enable|disable [--persona ID]` | dia-msg 默认能力开关（默认开） |
+| `collab` | `dia collab stats [--since 7d] [--by session|pair|class] [--json]` | 只读聚合（送达/回复/积压） |
+| `whoami` | `dia whoami [--json] [--name NAME]` | 当前会话身份（session id） |
+| `in` | `dia in [--unread] [--all] [--legacy] [--class P0,P1] [--sort priority|arrival] [--expose] [--json]` | 会话收件箱（正文内联） |
+| `out` | `dia out --to <session_id> --subject S (--body B|--body-file F) [--kind K] [--touch p1,p2] [--reply-to ID]` |  |
+| `ack` | `dia ack <id> | dia reply <id> --body B | dia close <id> --reason R | dia show <id>` |  |
+| `msg` | `dia msg send|show|inbox|ack|delivered|deliver [--wait]|reply|needs-info|status|stuck|thread|escalate|agents|migrate` |  |
+| `agents` | `dia agents list|register|unregister|discover` |  |
+| `msg` | `dia msg deliver <agent> <id> [--transport tmux|acp]` |  |
+| `task` | `dia task add|list|link|plan|split|status|done [--owner S] [--depends a,b] [--touches p1,p2] [--prio P1] [--start D] [--due D] [--progress 0-100]` |  |
+| `task` | `dia task split <id> --into "切片A,切片B" [--slice 切片A] [--role R] [--judge J] [--touches p] [--force]` |  |
+| `graph` | `dia graph [--json] [--task t-...] [--tui [--watch] [--status S] [--owner S] [--width N] [--no-color]]` |  |
+| `graph` | `dia graph --export-html [path] [--out path] [--now ISO] [--redact] [--all] [--limit N] [--force]` |  |
+| `graph` | `dia graph --next [n] | --explain <id> | --lint` | 只读编排建议（Kahn-v1） |
+| `claim` | `dia claim <path> [--reason R] [--ttl 4h] [--session S] | dia claims [--all] [--mine] [--gc [--days 7]] | dia unclaim <path|id> [--force]` |  |
+| `team` | `dia team run <id> --mock | --acp|--dsh --workspace DIR` |  |
+| `team` | `dia team gate|accept|reject|next` |  |
+| `team` | `dia team accept <id> [--note ...] [--pr N [--repo R] [--merge]]` | --pr：先验 CI，绿才接受/合并 |
+| `job` | `dia job <list|status|install|...>` | 调度适配器 |
+| `price` | `dia price list|--json` |  |
+| `postinstall` | `dia postinstall [--quiet]` | 装配内置能力（npm 拦截脚本 / ignore-scripts 时的兜底；幂等） |
+| `migrate` | `dia migrate data [--from DIR] [--dry-run]` | 旧数据根 → 数据根（只搬数据子目录，合并同名目录） |
+| `version` | `dia version` |  |
+| `update` | `dia update [--check]` | 查/装 npm 最新版 |
+
+更多文档见 [`docs/`](https://github.com/minonl/dia/blob/main/docs)
+
+## 文档菜单
+
+Agent 入口：[`llms.txt`](https://github.com/minonl/dia/blob/main/llms.txt)（全量 `llms-full.txt` 本地生成，**不入库**：`bun run docs:gen`）
 
 ## 现状
 

@@ -11,6 +11,7 @@
 //   node scripts/docs-index.mjs --check  # 只校验是否最新（CI 用，exit 1 = 需要重新生成）
 import { readdirSync, readFileSync, statSync, writeFileSync, existsSync } from "node:fs";
 import { join, relative, dirname } from "node:path";
+import { readUsage, renderBlocks } from "./lib/user-docs.mjs";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -18,6 +19,7 @@ const DOCS = join(ROOT, "docs");
 const REPO = process.env.DOCS_REPO || "minonl/dia";
 const BRANCH = process.env.DOCS_BRANCH || "main";
 
+const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
 const SKIP = new Set(["index.md", "deps.jsonl", "deps.yaml"]);
 const CATEGORY_ORDER = ["现状", "安装与配置", "平台与宿主", "团队与自动化", "安全与审计", "理论", "迁移", "留痕", "归档", "其他"];
 
@@ -80,9 +82,13 @@ function build() {
     groups.get(c).push(e);
   }
   const order = [...CATEGORY_ORDER.filter((c) => groups.has(c)), ...[...groups.keys()].filter((c) => !CATEGORY_ORDER.includes(c))];
-  let md = "# dia 文档菜单\n\n> 本文件由 `scripts/docs-index.mjs` 生成，**不要手改**；改完文档跑 `bun run docs:index`。\n\n";
+  const b = renderBlocks({ pkg, usage: readUsage(ROOT), linkMode: "pages", repo: REPO, branch: BRANCH, headingLevel: 3 });
   const repoBase = `https://github.com/${REPO}/blob/${BRANCH}`;
-  md += `Agent 入口：[\`llms.txt\`](${repoBase}/llms.txt)（全量 \`llms-full.txt\` 本地生成，**不入库**：\`bun run docs:index\`）\n\n`;
+  let md = `# dia（嗲）\n\n> 轻量 agent 框架：预设注入 + 知识索引 + 审计/止血 + 会话采集。\n> 控制面是确定性 CLI，agent 面在独立 persona。\n\n`;
+  md += `> 本页由 \`scripts/docs-index.mjs\` 生成（\`bun run docs:gen\`），**不要手改**。\n\n`;
+  md += `${b.install}\n\n${b.quickstart}\n\n${b.update}\n\n${b.uninstall}\n\n${b.commands}\n\n`;
+  md += `## 文档菜单\n\n`;
+  md += `Agent 入口：[\`llms.txt\`](${repoBase}/llms.txt)（全量 \`llms-full.txt\` 本地生成，**不入库**：\`bun run docs:gen\`）\n\n`;
   for (const c of order) {
     md += `## ${c}\n\n| 文档 | 一句话 |\n|---|---|\n`;
     for (const e of groups.get(c).sort((a, b) => a.rel.localeCompare(b.rel))) {

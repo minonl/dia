@@ -12,13 +12,15 @@ function slotDir(root: string, id: string, prefix = "0.1.0"): string {
 
 
 let persona: any;
-let data: string, agents: string, profiles: string, cache: string, work: string;
+let data: string, agents: string, profiles: string, cache: string, work: string, fakeHome: string;
 
 beforeAll(async () => {
   data = mkdtempSync(join(tmpdir(), "dia-cr-data-"));
   agents = mkdtempSync(join(tmpdir(), "dia-cr-agents-"));
   profiles = mkdtempSync(join(tmpdir(), "dia-cr-profiles-"));
   cache = mkdtempSync(join(tmpdir(), "dia-cr-cache-"));
+  fakeHome = mkdtempSync(join(tmpdir(), "dia-cr-home-"));
+  process.env.DIA_HOME = fakeHome; // 技能软链写进临时 HOME，别碰真机 ~/.agents
   process.env.DIA_DATA_DIR = data;
   process.env.DIA_OPENCODE_AGENTS_DIR = agents;
   process.env.DIA_DSH_PROFILES_DIR = profiles;

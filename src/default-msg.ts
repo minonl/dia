@@ -116,7 +116,7 @@ export function ensure(personaId?: string, opts: { force?: boolean } = {}): { ok
   const source = builtinKitDir();
   if (!existsSync(join(source, "dia.json"))) return { ok: false, reason: `missing-kit:${source}` };
   try {
-    const r = kit.install(source);
+    const r = kit.install(source, { force: true });
     writeStamp(r.id);
     return { ok: true, kit: `${r.id}@${r.version}` };
   } catch (e: any) {

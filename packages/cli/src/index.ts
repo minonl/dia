@@ -205,6 +205,8 @@ usage:
   dia team accept <id> [--note ...] [--pr N [--repo R] [--merge]]   # --pr：先验 CI，绿才接受/合并
   dia job <list|status|install|...>   # 调度适配器
   dia price list|--json
+  dia postinstall [--quiet]             # 装配内置能力（npm 拦截脚本 / ignore-scripts 时的兜底；幂等）
+  dia migrate data [--from DIR] [--dry-run]   # 旧数据根 → 数据根（只搬数据子目录，合并同名目录）
   dia version
   dia update [--check]                  # 查/装 npm 最新版`);
 }
@@ -1732,8 +1734,12 @@ export async function main(rawArgv: string[]): Promise<number> {
       out(`（仍要脚本安装：cd ${source || "<dia 仓库>"} && git pull && bun run build && bash install.sh —— 已降级为开发/离线通道）`);
       return 0;
     }
-    const r = spawnSync("npm", ["i", "-g", "@minonl/dia@latest"], { stdio: "inherit" });
-    if (r.status !== 0) { err("E_UPDATE: npm 安装失败（可能需要 sudo 或调整 npm prefix）"); return r.status || 1; }
+    // npm 12 起默认拦截全局包的安装脚本 → 带上 allow-scripts；老 npm 不认这个 flag 时退回普通安装
+    let r = spawnSync("npm", ["i", "-g", "@minonl/dia@latest", "--allow-scripts=@minonl/dia"], { stdio: "inherit" });
+    if (r.status !== 0) {
+      r = spawnSync("npm", ["i", "-g", "@minonl/dia@latest"], { stdio: "inherit" });
+      if (r.status !== 0) { err("E_UPDATE: npm 安装失败（可能需要 sudo 或调整 npm prefix）"); return r.status || 1; }
+    }
     out(`已更新到 ${latest}（重新打开终端/会话生效）`);
     // npm 11 起默认屏蔽安装脚本（allowScripts）→ 升级后在本进程内补一次自举，保证「装完即用」
     try {

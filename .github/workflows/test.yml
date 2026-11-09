@@ -51,6 +51,7 @@ jobs:
       # 文档检查：docs-only 也要跑（快）
       - run: node scripts/docs-link-check.mjs
       - run: node scripts/docs-index.mjs --check
+      - run: node scripts/gen-user-docs.mjs --check
 
       # 以下仅代码改动才跑（docs-only → 跳过，节省 ~80s × 2 系统）
       - if: needs.changes.outputs.code == 'true'

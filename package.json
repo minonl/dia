@@ -2,7 +2,7 @@
   "name": "@minonl/dia",
   "version": "0.0.20",
   "type": "module",
-  "description": "dia (嗲) — lightweight agent framework: knowledge index, audit, session ingest",
+  "description": "dia (\u55f2) \u2014 lightweight agent framework: knowledge index, audit, session ingest",
   "bin": {
     "dia": "bin/dia.js"
   },
@@ -31,9 +31,10 @@
     "bench:kb": "bun experiments/kb-bench.ts",
     "golden:kb": "bun experiments/kb-golden.ts",
     "docs:index": "node scripts/docs-index.mjs",
-    "docs:check": "node scripts/docs-index.mjs --check",
+    "docs:check": "node scripts/docs-index.mjs --check && node scripts/gen-user-docs.mjs --check",
     "docs:links": "node scripts/docs-link-check.mjs",
-    "postinstall": "node scripts/postinstall.mjs"
+    "postinstall": "node scripts/postinstall.mjs",
+    "docs:gen": "node scripts/docs-index.mjs && node scripts/gen-user-docs.mjs"
   },
   "license": "MIT",
   "packageManager": "pnpm@12.5.1",

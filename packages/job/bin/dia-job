@@ -571,7 +571,15 @@ LABEL_OVERRIDE=""
 label_for() {  # 有覆盖用覆盖，否则按默认规则推导
   if [ -n "$LABEL_OVERRIDE" ]; then printf '%s' "$LABEL_OVERRIDE"; else label_of "$1"; fi
 }
-plist_path() { echo "$HOME/Library/LaunchAgents/$(label_for "$1").plist"; }
+plist_path() {
+  # 测试隔离（DIA_JOB_NO_LAUNCHD=1）：plist 落 job 根内，**绝不**写真实 ~/Library/LaunchAgents
+  #（实测事故：in-process 测试用临时 job 根却把 plist 写到真机，launchd 指向 /var/folders 的脏任务）
+  if [ "${DIA_JOB_NO_LAUNCHD:-0}" = 1 ]; then
+    echo "$YAN_DATA_ROOT/launchagents/$(label_for "$1").plist"
+  else
+    echo "$HOME/Library/LaunchAgents/$(label_for "$1").plist"
+  fi
+}
 
 # ── 星期限定（2026-10-21 新增，需求：工作日 18:30）───────────────────────────
 # `--weekdays 1-5`（周一~周五）或 `1,3,5`；launchd 的 Weekday 0/7=周日、1=周一。

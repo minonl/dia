@@ -3,6 +3,7 @@
 // 约束：一次只跑一个 tick（定时交给 dia job）；不写消息状态；不常驻；不联网。
 import { accessSync, appendFileSync, chmodSync, constants, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { delimiter } from "node:path";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import * as collab from "./collab.ts";
 import * as paths from "./paths.ts";
@@ -230,10 +231,14 @@ export function readBoard(opts: ObserveOptions = {}): Board {
 export function ensureJob(desired = DEFAULT_INTERVAL_S): string | null {
   const NAME = "collab-observe";
   try {
-    // 临时数据根（测试/CI）不注册持久定时，避免把 launchd/cron 指向 /tmp 的脏任务
-    const dataRoot = paths.diaHome();
-    const ephemeral = dataRoot.startsWith("/tmp") || dataRoot.includes("/var/folders/");
-    if (ephemeral && process.env.DIA_JOB_NO_LAUNCHD !== "1") return "临时数据根，跳过定时注册";
+    // 临时根（数据根 / DIA_HOME / job 根任一在 tmp）不注册持久定时：
+    // 否则测试会把 launchd 指向 /var/folders 的脏任务（实测事故），且 cmd 里还会固化临时 DIA_HOME
+    const jobRootNow = job.jobRootResolved();
+    const sandboxRoots = [process.env.DIA_ROOT, process.env.DIA_DATA_DIR, process.env.DIA_HOME, jobRootNow].filter(Boolean) as string[];
+    const ephemeral = sandboxRoots.some((p) => job.isEphemeralPath(p));
+    if (ephemeral && process.env.DIA_JOB_NO_LAUNCHD !== "1" && process.env.DIA_JOB_ALLOW_EPHEMERAL !== "1") {
+      return `E_JOB_ROOT_EPHEMERAL: 沙箱根（${sandboxRoots.find((p) => job.isEphemeralPath(p))}）在临时目录，跳过定时注册`;
+    }
     const bin = diaBin();
     // 定时器跑在 launchd/cron 里，PATH 不含 ~/.local/bin：裸 "dia" 必然 127 → 宁可注册失败
     if (!bin.startsWith("/")) return "E_NO_DIA_BIN: 找不到 dia 的绝对路径（设 DIA_BIN）";
@@ -252,7 +257,11 @@ export function ensureJob(desired = DEFAULT_INTERVAL_S): string | null {
       const reg = tasks[key] || {};
       const sameInterval = Number(String(reg.interval ?? "").trim()) === interval;
       const sameCmd = String(reg.cmd || "").includes("collab observe");
-      if (sameInterval && sameCmd) return null;
+      // 注册在但 plist 丢了（被手工删/被另一根 uninstall 误删）→ 必须重装，否则「注册在、没在跑」
+      const label = String(reg.label || `local.dia-job-${NAME}`);
+      const plist = join(homedir(), "Library", "LaunchAgents", `${label}.plist`);
+      const backendOk = process.platform !== "darwin" || process.env.DIA_JOB_NO_LAUNCHD === "1" || existsSync(plist);
+      if (sameInterval && sameCmd && backendOk) return null;
       // 校正：先卸载旧注册，再按当前口径重装（避免重复 label / 旧 interval 自锁）
       try { job.runJobCapture(["uninstall", NAME]); } catch { /* 旧注册不存在也无妨 */ }
     }

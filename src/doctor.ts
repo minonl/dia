@@ -195,11 +195,21 @@ function jobRootCheck(): Check {
     for (const [n, t] of Object.entries<any>(tasks)) {
       const label = String(t?.label || `local.dia-job-${n}`);
       const plist = join(homedir(), "Library", "LaunchAgents", `${label}.plist`);
-      if (!existsSync(plist)) continue;
+      if (!existsSync(plist)) {
+        // 注册在但 plist 缺失 = 「以为在跑、其实不会跑」（常因另一根 uninstall 误删）；
+        // 只看 periodic（service 型走别的手工/接管路径，label 不一定等于 plist 名）
+        if (String(t?.type || "periodic") === "periodic" && process.platform === "darwin" && process.env.DIA_JOB_NO_LAUNCHD !== "1") {
+          return { name, status: "warn", detail: `任务 ${n} 已注册但 plist 缺失；修复：dia collab enable` };
+        }
+        continue;
+      }
       const xml = readFileSync(plist, "utf8");
       const m = xml.match(/<key>ProgramArguments<\/key><array><string>[^<]*<\/string><string>([^<]*)<\/string>/);
       if (m && m[1].startsWith(join(legacy, "tasks") + "/")) {
         return { name, status: "fail", detail: `launchd 正在跑旧根脚本（${n} → ${m[1]}）；修复：dia job migrate --from ${legacy}` };
+      }
+      if (m && job.isEphemeralPath(m[1])) {
+        return { name, status: "fail", detail: `launchd 指向临时路径（${n} → ${m[1]}，疑似测试污染）；修复：dia collab enable 重注册` };
       }
     }
   } catch { /* 无 registry / 非 mac 忽略 */ }

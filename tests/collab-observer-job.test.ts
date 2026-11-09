@@ -82,6 +82,14 @@ describe("interval 单一事实源 = job registry", () => {
     expect(b.interval_s).toBe(300);
   });
 
+  test("沙箱数据根 + 未显式放开 → 拒绝注册（E_JOB_ROOT_EPHEMERAL）", () => {
+    const r = spawnSync("bun", ["-e", 'import { ensureJob } from "./src/observer.ts"; console.log(ensureJob() ?? "OK")'], {
+      encoding: "utf8", cwd: join(import.meta.dir, ".."),
+      env: { ...process.env, DIA_ROOT: root, DIA_JOB_ROOT: jobRoot, DIA_HOME: home, DIA_JOB_NO_LAUNCHD: "", DIA_JOB_ALLOW_EPHEMERAL: "" },
+    });
+    expect(r.stdout).toContain("E_JOB_ROOT_EPHEMERAL");
+  });
+
   test("非 60 倍数的 interval 归一为默认 300", () => {
     expect(ensureJob(90)).toBeNull();
     const reg = JSON.parse(readFileSync(join(jobRoot, "tasks", "registry.json"), "utf8")).tasks["collab-observe"];
@@ -135,7 +143,7 @@ describe("ensureJob 临时根保护", () => {
     const prev = process.env.DIA_JOB_NO_LAUNCHD;
     delete process.env.DIA_JOB_NO_LAUNCHD;
     const msg = ensureJob();
-    expect(msg).toContain("临时数据根");
+    expect(msg).toContain("E_JOB_ROOT_EPHEMERAL");
     if (prev === undefined) delete process.env.DIA_JOB_NO_LAUNCHD; else process.env.DIA_JOB_NO_LAUNCHD = prev;
   });
 });

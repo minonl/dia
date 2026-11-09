@@ -21,13 +21,28 @@ function readAll(): ActiveMap {
   try { return JSON.parse(readFileSync(activeFile(), "utf8")); } catch { return {}; }
 }
 
+/** 版本排序：先比 semver 主体，相同再比**安装时间**（槽位 `<ver>+g<sha>` 下字符串排序会把新槽位排到旧的后面前） */
+function versionCmp(dir: string) {
+  return (a: string, b: string) => {
+    const core = (v: string) => v.split("+")[0].split(".").map((n) => Number(n) || 0);
+    const ca = core(a), cb = core(b);
+    for (let i = 0; i < Math.max(ca.length, cb.length); i++) {
+      const d = (ca[i] ?? 0) - (cb[i] ?? 0);
+      if (d) return d;
+    }
+    const mtime = (v: string) => { try { return statSync(join(dir, v)).mtimeMs; } catch { return 0; } };
+    return mtime(a) - mtime(b);
+  };
+}
+
 export function installedVersions(id: string): string[] {
   const dir = join(dataDir(), "personas", id);
   if (!existsSync(dir)) return [];
+  const cmp = versionCmp(dir);
   const verRoot = join(dir, "versions");
-  if (existsSync(verRoot)) return readdirSync(verRoot).filter((v) => statSync(join(verRoot, v)).isDirectory()).sort();
+  if (existsSync(verRoot)) return readdirSync(verRoot).filter((v) => statSync(join(verRoot, v)).isDirectory()).sort(cmp);
   const skip = new Set(["current", "latest", "data", "repo", "repo.git", "worktrees", "versions", ".lock"]);
-  return readdirSync(dir).filter((v) => !skip.has(v) && !v.startsWith(".staging-") && statSync(join(dir, v)).isDirectory()).sort();
+  return readdirSync(dir).filter((v) => !skip.has(v) && !v.startsWith(".staging-") && statSync(join(dir, v)).isDirectory()).sort(cmp);
 }
 
 export function read(id: string): ActiveEntry | null {

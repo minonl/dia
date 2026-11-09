@@ -1,8 +1,9 @@
 import { describe, expect, test, beforeAll } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { indexStatus } from "@dia/kb";
 
 // persona 级（非 kit）内容：knowledge / data_root / bash 命令
 let home: string, data: string, agents: string, profiles: string, src: string;
@@ -20,6 +21,8 @@ const run = (args: string[]) => spawnSync("bun", [cli, ...args], {
 beforeAll(() => {
   home = mkdtempSync(join(tmpdir(), "dia-pc-home-"));
   data = mkdtempSync(join(tmpdir(), "dia-pc-data-"));
+  // 子进程与当前进程必须看到同一个 cache 根，否则 indexStatus 找不到 CLI 建的索引
+  process.env.DIA_CACHE_DIR = join(data, "cache");
   agents = mkdtempSync(join(tmpdir(), "dia-pc-agents-"));
   profiles = mkdtempSync(join(tmpdir(), "dia-pc-profiles-"));
   src = mkdtempSync(join(tmpdir(), "dia-pc-src-"));
@@ -42,6 +45,17 @@ beforeAll(() => {
   }));
   const r = run(["persona", "add", "--from", src]);
   if (r.status !== 0) throw new Error(r.stderr || r.stdout);
+});
+
+describe("persona 装/切换后自动建索引（派生物）", () => {
+  test("persona add 成功后索引已就绪", async () => {
+    const sc = run(["--persona", "x", "doctor", "--json"]);
+    // 直接查索引态：装完后不该是 missing
+    const slot = readdirSync(join(data, "personas", "x")).sort().pop()!;
+    const st = await indexStatus(join(data, "personas", "x", slot, "kb"));
+    expect(st.state).toBe("ok");
+    expect(sc.status === 0 || sc.status === 1 || sc.status === 2).toBe(true);
+  });
 });
 
 describe("persona 级内容：knowledge / data_root / bash 命令", () => {

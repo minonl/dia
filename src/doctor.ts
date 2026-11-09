@@ -201,9 +201,11 @@ async function knowledgeCheck(id: string, prefix: string, root: string): Promise
   try { st = await indexStatus(root); }
   catch (e: any) { return { name, status: "warn", detail: `${root}（索引不可读：${e?.message || String(e)}；重建：${rebuild}）` }; }
   if (st.state === "ok") return { name, status: "ok", detail: `${root}（索引 ${st.indexed} 篇，已是最新）` };
-  const why = st.state === "missing" ? "索引不存在"
-    : st.state === "foreign" ? `索引属于其它知识根（${st.db}）`
-    : describeStale(st);
+  if (st.state === "missing") {
+    // persona 装/切换后会自动建；这里只提示，不要求人手动跑（派生物原则）
+    return { name, status: "warn", detail: `${root}（索引未建：首次检索或下次 persona 装/切换会自动建；也可运行 ${rebuild}）` };
+  }
+  const why = st.state === "foreign" ? `索引属于其它知识根（${st.db}）` : describeStale(st);
   return { name, status: "warn", detail: `${root}（${why}；重建：${rebuild}）` };
 }
 

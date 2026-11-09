@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeAll } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -210,10 +210,21 @@ describe("dia doctor: 知识索引新鲜度", () => {
     expect(run(["persona", "add", "--from", ksrc]).status).toBe(0);
   });
 
-  test("知识目录在但索引还没建 → warn（不是 fail）", () => {
+  test("persona add 后索引自动就绪 → ok（派生物不需要人手动建）", () => {
     const r = run(["doctor", "--persona", "kbby", "--json"]);
     const k = kcheck(JSON.parse(r.stdout));
-    expect(k.status).toBe("warn"); // 索引还没建：warn 而不是 fail（缺失 ≠ 目录缺失）
+    expect(k.status).toBe("ok");
+    expect(k.detail).toContain(kroot);
+  });
+
+  test("索引被删 → warn，且文案说明会自动建（不是让人手跑）", () => {
+    // 子进程用的是 data/cache，测试进程 env 不同 → 直接按目录清，别跨环境比 DB 路径
+    const dir = join(data, "cache"); // DIA_CACHE_DIR=<data>/cache，DB 直接落在这一层
+    for (const f of readdirSync(dir)) if (f.endsWith(".db")) rmSync(join(dir, f), { force: true });
+    const r = run(["doctor", "--persona", "kbby", "--json"]);
+    const k = kcheck(JSON.parse(r.stdout));
+    expect(k.status).toBe("warn");
+    expect(k.detail).toMatch(/自动建/);
     expect(r.status).toBe(1);
   });
 

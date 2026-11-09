@@ -1029,6 +1029,19 @@ function migrateCli(argv: string[]): number {
   return failed ? 1 : 0;
 }
 
+/** persona 装完/切换后 best-effort 建索引：索引是派生物，不该等人手跑（失败只提示，不阻断）。 */
+async function autoIndexPersona(id: string) {
+  try {
+    const sc = scope.current(id);
+    if (!sc?.knowledgeRoot) return;
+    if ((await indexStatus(sc.knowledgeRoot)).state === "ok") return;
+    await buildIndex(sc.knowledgeRoot);
+    out(`  ↳ 已建知识索引：${sc.knowledgeRoot}`);
+  } catch (e: any) {
+    err(`warn: 知识索引未建（${e?.message || e}）；可稍后运行 dia kb index --persona ${id}`);
+  }
+}
+
 async function collabCli(argv: string[]): Promise<number> {
   const [sub, ...args] = argv;
   const asJson = has(args, "--json");
@@ -1369,6 +1382,7 @@ async function personaCli(argv: string[]): Promise<number> {
       out(asJson ? JSON.stringify(r) : `installed ${r.id}@${r.version} -> ${r.rendered.join(", ") || "(dry-run)"}` +
         (r.overwrites?.length ? `\n  ⚠ 覆盖 ${r.overwrites.length} 个已存在产物（已备份）：${r.overwrites.join(", ")}` : "") +
         (r.msgKit && !r.msgKit.ok ? `\n  ⚠ dia-msg 未启用：${r.msgKit.reason}` : ""));
+      if (!has(args, "--dry-run")) await autoIndexPersona(r.id);
       return 0;
     } catch (e: any) {
       err(e?.message || String(e));
@@ -1400,6 +1414,7 @@ async function personaCli(argv: string[]): Promise<number> {
       const resolved = ver ? persona.resolveVersion(id, ver) : null;
       const r = active.use(id, resolved || (has(args, "--latest") ? null : null), { reason: flag(args, "--reason") });
       out(asJson ? JSON.stringify(r) : `${id}: ${r.previous ?? "(未设置)"} → ${r.current.version}（${r.current.commit ?? "?"}, by ${r.current.by}）`);
+      await autoIndexPersona(id);
       return 0;
     } catch (e: any) {
       err(e?.message || String(e));
@@ -1475,6 +1490,7 @@ async function personaCli(argv: string[]): Promise<number> {
     try {
       const r = persona.update(id, { ref: flag(args, "--ref"), force: has(args, "--force") });
       out(asJson ? JSON.stringify(r) : `updated ${id} → ${r.installed.version}（${String(r.installed.commit || r.installed.hash || "?").slice(0, 8)}, 原 ${r.previous ?? "-"}）`);
+      await autoIndexPersona(id);
       return 0;
     } catch (e: any) {
       const m = e?.message || String(e);

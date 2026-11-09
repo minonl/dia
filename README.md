@@ -196,6 +196,7 @@ bun src/cli.ts version  # 直接跑源码
 | `<persona-cmd>` | `dia <persona-cmd> [args…]` | 一级委派（内置优先） |
 | `collab` | `dia collab status|enable|disable [--persona ID]` | dia-msg 默认能力开关（默认开） |
 | `collab` | `dia collab stats [--since 7d] [--by session|pair|class] [--json]` | 只读聚合（送达/回复/积压） |
+| `collab` | `dia collab board [--json] | observe [--once] [--interval 60] [--json]` | 只读看板/观察器（不写消息状态） |
 | `whoami` | `dia whoami [--json] [--name NAME]` | 当前会话身份（session id） |
 | `in` | `dia in [--unread] [--all] [--legacy] [--class P0,P1] [--sort priority|arrival] [--expose] [--json]` | 会话收件箱（正文内联） |
 | `out` | `dia out --to <session_id> --subject S (--body B|--body-file F) [--kind K] [--touch p1,p2] [--reply-to ID]` |  |

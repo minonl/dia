@@ -74,12 +74,17 @@ dia collab stats [--since 7d] [--by session|pair|class] [--now ISO] [--json]
   dia job install collab-observe --desc 'collab board 刷新' --interval 300 --cmd 'dia collab observe'
   ```
 
+  `dia collab enable` 会**幂等**注册这条 job（已存在则跳过；job 门控判 class=unknown 时按
+  `--allow-unstable` 重试一次）；注册失败只告警，不阻塞消息能力。
+
 - 产出 `collab/state/board.json`（0600、原子写）/ `metrics/<day>.json` / `escalations.jsonl`
   （去重：同一 `id:class` 只追加一次；只含 id/class/age，无正文）；
 - `dia collab board` 默认**只读**：缓存新鲜直接用；缺失/过期时**内存现算**（`stale:true`），不写盘；
   `--refresh` 才落盘，`--cached` 只看缓存（缺失 exit 3，可与「0 未读」区分）；
 - 新鲜度：`TTL = 2×interval`，且必须 `> interval+60s`（上限 900s）；**interval 只认 board 里的声明值**，
   回退计算不会用 CLI 默认值覆盖；未来时间戳视为不可信；
+- `dia doctor` 增 `collab.observer` 检查：未注册定时 / board 未生成 / board 与 job 的 interval 不一致 /
+  board 或 state 权限过宽 / board 超过 TTL 未刷新（均为 warn，不判红）；
 - **M3b 已提供**：OpenCode 插件 `dia-inbox`（`ctx.session.hook("context")`）只读 board，
   每轮最多注入一行计数提示（新鲜 5 分钟节流 / 过期 1 小时并标注「可能不准」），
   **不调 `dia in`、不标 delivered/exposed、不写盘**；dsh 无 hook 时退化为 SKILL 规则；

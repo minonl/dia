@@ -1067,10 +1067,12 @@ async function collabCli(argv: string[]): Promise<number> {
         }
       }
       const kitInfo = sub === "enable" ? defaultMsg.ensure(personaId, { force: true }) : null;
+      const jobWarn = sub === "enable" ? observer.ensureJob() : null;
       out(asJson ? JSON.stringify({ ...c, removed, kit: kitInfo }, null, 1)
         : `${sub}d: enabled=${c.enabled}${c.disabled_personas.length ? ` disabled_personas=${c.disabled_personas.join(",")}` : ""}` +
           (removed.length ? `  removed=${removed.length}` : "") +
-          (kitInfo ? (kitInfo.ok ? `  kit=${kitInfo.kit}` : `  ⚠ ${kitInfo.reason}`) : ""));
+          (kitInfo ? (kitInfo.ok ? `  kit=${kitInfo.kit}` : `  ⚠ ${kitInfo.reason}`) : "") +
+          (jobWarn ? `  ⚠ 观察器定时未注册：${jobWarn}（手动：dia job install collab-observe --interval 300 --cmd 'dia collab observe'）` : ""));
       // enable 装不上内置 kit 时必须非 0：否则 CI/脚本无法判断「消息能力是否真的可用」
       if (kitInfo && !kitInfo.ok) return 32;
       return 0;

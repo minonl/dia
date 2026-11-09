@@ -2,9 +2,17 @@
   "schema": 1,
   "kind": "kit",
   "id": "git",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "root": ".",
-  "tags": ["git", "worktree", "hooks"],
-  "knowledge": ["knowledge"],
-  "requires": { "dia": ">=0.0.2" }
+  "tags": [
+    "git",
+    "worktree",
+    "hooks"
+  ],
+  "knowledge": [
+    "knowledge"
+  ],
+  "requires": {
+    "dia": ">=0.0.2"
+  }
 }

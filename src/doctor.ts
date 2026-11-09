@@ -182,7 +182,10 @@ function jobRootCheck(): Check {
   const name = "job.root";
   const source = job.jobRootSource();
   const cur = job.jobRootResolved();
-  if (job.isEphemeralPath(cur) && process.env.DIA_JOB_NO_LAUNCHD !== "1") {
+  const sandbox = Boolean(process.env.DIA_ROOT || process.env.DIA_DATA_DIR || process.env.DIA_HOME || process.env.DIA_JOB_ROOT);
+  if (job.isEphemeralPath(cur)) {
+    // 显式覆盖了数据根/任务根 = 测试或沙箱：不判红（写入门控已挡住真调度注册）
+    if (sandbox || process.env.DIA_JOB_NO_LAUNCHD === "1") return { name, status: "ok", detail: `沙箱/临时根 ${cur}（跳过一致性判定）` };
     return { name, status: "fail", detail: `job 根在临时目录：${cur}（设 DIA_JOB_ROOT 到稳定目录）` };
   }
   const legacy = job.legacyJobRoot();

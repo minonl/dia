@@ -62,6 +62,7 @@ describe("dia job migrate", () => {
       },
     }));
     const r = run(["job", "migrate", "--from", legacy, "--to", jobRoot]);
+    if (r.status !== 0) console.error("MIGRATE FAILED:", r.stdout, r.stderr);
     expect(r.status).toBe(0);
     expect(r.stdout).toContain("跳过");
     const to = JSON.parse(readFileSync(join(jobRoot, "tasks", "registry.json"), "utf8")).tasks;

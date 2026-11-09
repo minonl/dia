@@ -258,7 +258,14 @@ async function kb(argv: string[]): Promise<number> {
         kitHits++;
       }
     }
-    if (kitHits) rows.sort((a: any, b: any) => (b.score ?? 0) - (a.score ?? 0)).splice(limit);
+    // 合并策略：kit 命中至少保留一半名额，避免被 persona 结果按分数挤掉（否则"装了解析不到"）
+    if (kitHits) {
+      const kitRows = rows.filter((r: any) => r.source);
+      const personaRows = rows.filter((r: any) => !r.source);
+      const kitQuota = Math.min(kitRows.length, Math.max(1, Math.floor(limit / 2)));
+      const picked = [...personaRows.slice(0, limit - kitQuota), ...kitRows.slice(0, kitQuota)];
+      rows = picked.sort((a: any, b: any) => (b.score ?? 0) - (a.score ?? 0)).slice(0, limit);
+    }
 
     const full = sub === "query" && has(args, "--full");
     const bytes = sub === "query" && has(args, "--bytes");

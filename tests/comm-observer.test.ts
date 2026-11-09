@@ -55,16 +55,56 @@ describe("dia collab observer（M3a：只读看板）", () => {
     expect(existsSync(join(root, "collab", "metrics", "2026-11-09.json"))).toBe(true);
   });
 
-  test("board 读缓存；缺失时现算", () => {
+  test("board 读缓存；缺失时内存现算且不写盘", () => {
     run(["collab", "observe", "--once", "--now", now]);
-    const b1 = json(run(["collab", "board", "--json"]).stdout);
+    const b1 = json(run(["collab", "board", "--json", "--now", now]).stdout);
     expect(b1.open).toBe(2);
-    // 手工删除缓存后 board 仍可用（现算）
+    expect(b1.stale).toBe(false);
+    // 删除缓存：board 仍可用，但不得写盘（hook 只读）
     const board = join(root, "collab", "state", "board.json");
     const fs = require("node:fs");
     fs.rmSync(board);
-    const b2 = json(run(["collab", "board", "--json"]).stdout);
+    const b2 = json(run(["collab", "board", "--json", "--now", now]).stdout);
     expect(b2.open).toBe(2);
+    expect(b2.missing).toBe(true);
+    expect(existsSync(board)).toBe(false);
+    // --cached 缺失时可区分于「0 未读」
+    expect(run(["collab", "board", "--cached"]).status).toBe(3);
+  });
+
+  test("过期快照标 stale；未来时间戳不可信", () => {
+    run(["collab", "observe", "--once", "--now", now]);
+    const board = join(root, "collab", "state", "board.json");
+    const raw = JSON.parse(readFileSync(board, "utf8"));
+    writeFileSync(board, JSON.stringify({ ...raw, generated_at: "2026-11-09T00:00:00Z" }));
+    const st = json(run(["collab", "board", "--json", "--now", now]).stdout);
+    expect(st.stale).toBe(true);
+    writeFileSync(board, JSON.stringify({ ...raw, generated_at: "2030-01-01T00:00:00Z" }));
+    expect(json(run(["collab", "board", "--json", "--now", now]).stdout).missing).toBe(true);
+  });
+
+  test("escalations 去重：重复 tick 不重复追加", () => {
+    run(["collab", "observe", "--once", "--now", now]);
+    run(["collab", "observe", "--once", "--now", now]);
+    const lines = readFileSync(join(root, "collab", "escalations.jsonl"), "utf8").trim().split("\n");
+    expect(lines.length).toBe(1);
+  });
+
+  test("无常驻：--watch/--daemon 明确拒绝；observe 仍是一次", () => {
+    const r = run(["collab", "observe", "--watch"]);
+    expect(r.status).toBe(2);
+    expect(r.stderr || r.stdout).toContain("E_NO_DAEMON");
+    expect(run(["collab", "observe", "--wath"]).status).toBe(2);
+  });
+
+  test("interval 单一来源：显式 300 落盘；board 回退不会把 60 写回", () => {
+    run(["collab", "observe", "--interval", "300", "--now", now]);
+    const board = join(root, "collab", "state", "board.json");
+    expect(JSON.parse(readFileSync(board, "utf8")).interval_s).toBe(300);
+    const fs = require("node:fs");
+    fs.rmSync(board);
+    run(["collab", "board", "--json", "--now", now]); // 内存现算，不写
+    expect(existsSync(board)).toBe(false);
   });
 
   test("观察器不改消息状态", () => {

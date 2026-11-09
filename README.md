@@ -51,12 +51,16 @@ Python 原型已完成使命（行为对齐后删除）；其基线数字保留�
 ### npm（全局 CLI）
 
 ```bash
-npm i -g @minonl/dia
+npm i -g @minonl/dia --allow-scripts=@minonl/dia   # npm ≥ 11 默认屏蔽安装脚本，显式放行一次
 dia version && dia doctor
-dia update --check     # 查 npm 最新版；dia update 按安装方式升级（npm 包 / 脚本安装）
+dia update --check     # 查 npm 最新版；dia update 走 npm 升级并补齐内置能力
 ```
 
-> 包里带 `dist` + `packages/{wt,job}`；persona 仍需单独 `dia persona add …`。
+> npm ≥ 11 起默认不跑依赖的安装脚本（allowScripts）。放行后 `postinstall` 自动装配内置能力；
+> 没放行也没关系，补一条 `dia postinstall` 即可（幂等）。也可长期放行：
+> `npm config set allow-scripts=@minonl/dia --location=user`。
+>
+> 包里带 `dist` + `packages/{wt,job}` + `kits`；persona 仍需单独 `dia persona add …`。
 >
 > **发布方式**：GitHub Actions + npm **Trusted Publishing**（OIDC，仓库里不放 token）；
 > 打 release 即触发 `.github/workflows/publish.yml`。npmjs 侧需配 Trusted Publisher：

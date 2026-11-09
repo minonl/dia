@@ -141,9 +141,9 @@ function installShadowCheck(): Check {
 function bootstrapCheck(): Check {
   const stamp = defaultMsg.readStamp();
   const pkg = defaultMsg.pkgVersion();
-  if (!stamp) return { name: "bootstrap", status: "warn", detail: "内置能力尚未装配（首次 persona add/render 或 dia collab enable 会自动装）" };
+  if (!stamp) return { name: "bootstrap", status: "warn", detail: "内置能力尚未装配（修复：dia postinstall；或安装时允许脚本 --allow-scripts=@minonl/dia）" };
   if (stamp.pkg !== pkg) {
-    return { name: "bootstrap", status: "warn", detail: `内置能力可能过期：自举戳 pkg=${stamp.pkg}，当前 ${pkg}；修复：dia collab enable` };
+    return { name: "bootstrap", status: "warn", detail: `内置能力可能过期：自举戳 pkg=${stamp.pkg}，当前 ${pkg}；修复：dia postinstall` };
   }
   return { name: "bootstrap", status: "ok", detail: `内置能力已装配（pkg=${pkg}，kit=${stamp.kit ?? "-"}）` };
 }

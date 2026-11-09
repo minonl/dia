@@ -89,6 +89,26 @@ function autoInstallAllowed(): boolean {
 }
 
 /** 装配默认 kit；失败不阻断 persona 安装，返回 reason 供 CLI/doctor 显示。 */
+/** 包版本（installDir/package.json）；取不到返回 "unknown"。 */
+export function pkgVersion(): string {
+  try { return String(JSON.parse(readFileSync(join(paths.installDir(), "package.json"), "utf8")).version || "unknown"); }
+  catch { return "unknown"; }
+}
+
+const stampFile = () => join(paths.stateDir(), "bootstrap.json");
+
+/** 自举戳：包版本 + 内置 kit 版本（升级 dia 后能看出「包内的内置能力是否需要刷新」）。 */
+export function readStamp(): { pkg?: string; kit?: string; at?: string } | null {
+  try { return JSON.parse(readFileSync(stampFile(), "utf8")); } catch { return null; }
+}
+
+function writeStamp(kitId?: string) {
+  try {
+    mkdirSync(paths.stateDir(), { recursive: true });
+    writeFileSync(stampFile(), JSON.stringify({ pkg: pkgVersion(), kit: kitId ?? null, at: new Date().toISOString() }, null, 1));
+  } catch { /* 自举戳写不了不影响功能 */ }
+}
+
 export function ensure(personaId?: string, opts: { force?: boolean } = {}): { ok: boolean; reason?: string; kit?: string } {
   const gate = isEnabled(personaId);
   if (!gate.enabled && !opts.force) return { ok: false, reason: gate.reason };
@@ -97,6 +117,7 @@ export function ensure(personaId?: string, opts: { force?: boolean } = {}): { ok
   if (!existsSync(join(source, "dia.json"))) return { ok: false, reason: `missing-kit:${source}` };
   try {
     const r = kit.install(source);
+    writeStamp(r.id);
     return { ok: true, kit: `${r.id}@${r.version}` };
   } catch (e: any) {
     return { ok: false, reason: `kit-install:${e?.message || String(e)}` };

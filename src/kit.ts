@@ -4,14 +4,17 @@
 // 约束：**不执行安装脚本**、来源白名单、路径不得越界、每产物 sha256 记账、手改过的拒绝删除。
 import { createHash } from "node:crypto";
 import {
+  closeSync,
   cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readFileSync,
   readdirSync,
   readlinkSync,
   realpathSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -106,6 +109,55 @@ function assertInside(base: string, p: string): string {
   const real = realpathSync(abs);
   if (real !== rootReal && !real.startsWith(rootReal + sep)) throw new Error(`E_MANIFEST: source escapes kit: ${p}`);
   return abs;
+}
+
+const EMPTY_TREE_HASH = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+/** semver 比较（不足位补 0；预发布段按字典序）。避免 `0.1.10` 被 `0.1.9` 盖住。 */
+export function cmpVersion(a: string, b: string): number {
+  const pa = a.split(/[.+-]/), pb = b.split(/[.+-]/);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = pa[i] ?? "0", y = pb[i] ?? "0";
+    const nx = Number(x), ny = Number(y);
+    const both = !Number.isNaN(nx) && !Number.isNaN(ny);
+    if (both ? nx !== ny : x !== y) return both ? nx - ny : (x < y ? -1 : 1);
+  }
+  return 0;
+}
+
+/** 版本目录按 semver 排序（升序）；忽略隐藏目录（`.staging` / `.install.lock`）。 */
+function versionDirs(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true })
+    .filter((e) => e.isDirectory() && !e.name.startsWith("."))
+    .map((e) => e.name)
+    .sort(cmpVersion);
+}
+
+/** 同步睡眠（锁重试用；不引入定时器/异步） */
+function sleepSync(ms: number) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
+
+/** 数据根级安装锁：跨进程互斥（O_EXCL），超过 DIA_KIT_LOCK_MS 抛 E_KIT_BUSY；陈旧锁（>120s）自动清理。 */
+function withInstallLock<T>(lockFile: string, fn: () => T): T {
+  const budget = Number(process.env.DIA_KIT_LOCK_MS || 5000);
+  const start = Date.now();
+  mkdirSync(dirname(lockFile), { recursive: true });
+  for (;;) {
+    try {
+      const fd = openSync(lockFile, "wx");
+      writeFileSync(fd, JSON.stringify({ pid: process.pid, at: Date.now() }));
+      closeSync(fd);
+      break;
+    } catch (e: any) {
+      if (e?.code !== "EEXIST") throw e;
+      try {
+        const st = statSync(lockFile);
+        if (Date.now() - st.mtimeMs > 120_000) { rmSync(lockFile, { force: true }); continue; }
+      } catch { continue; }
+      if (Date.now() - start > budget) throw new Error(`E_KIT_BUSY: 另一个 dia 进程正在安装 kit（锁 ${lockFile}；可用 DIA_KIT_LOCK_MS 调整等待）`);
+      sleepSync(50);
+    }
+  }
+  try { return fn(); } finally { rmSync(lockFile, { force: true }); }
 }
 
 /** 不算「内容」的目录：版本库、依赖、运行时数据（`.data` 是人格的数据根，运行时写入会污染内容哈希） */
@@ -284,8 +336,9 @@ export function renderContent(
 export function install(from: string, opts: { ref?: string; dryRun?: boolean; json?: boolean } = {}): KitInstallResult {
   const src = resolveSource(from, opts.ref);
   const m = readKitManifest(src.dir);
-  const target = resolve(dataDir(), "kits", m.id, m.version);
-  if (!target.startsWith(resolve(dataDir(), "kits") + sep)) throw new Error("E_MANIFEST: version escapes install dir");
+  const kitsRoot = resolve(dataDir(), "kits");
+  const target = resolve(kitsRoot, m.id, m.version);
+  if (!target.startsWith(kitsRoot + sep)) throw new Error("E_MANIFEST: version escapes install dir");
   const kitRootRel = m.root ?? ".";
   const kitRoot = resolve(target, kitRootRel);
   if (!kitRoot.startsWith(target + sep) && kitRoot !== target) throw new Error("E_MANIFEST: root escapes kit");
@@ -297,26 +350,46 @@ export function install(from: string, opts: { ref?: string; dryRun?: boolean; js
   const planned = renderContent(src.dir, target, m, { dryRun: true }) ?? [];
   if (opts.dryRun) return { id: m.id, version: m.version, dir: target, root: kitRoot, rendered: planned, hash: null, changed: false };
 
-  // 落盘：先复制内容树（bin/skills 的软链指向它），再渲染
-  const alreadyInstalled = existsSync(join(target, "kit.lock"));
-  if (!alreadyInstalled || hashTree(src.dir) !== hashTree(target)) {
-    rmSync(target, { recursive: true, force: true });
-    mkdirSync(target, { recursive: true });
-    cpSync(src.dir, target, { recursive: true, dereference: true, filter: copyFilter(src.dir) });
-  }
-  const rendered = renderContent(src.dir, target, m) ?? planned;
-  const appliedConfig = config.apply(m.config ?? []);
+  return withInstallLock(join(kitsRoot, ".install.lock"), () => {
+    const alreadyInstalled = existsSync(join(target, "kit.lock"));
+    const changed = !alreadyInstalled || hashTree(src.dir) !== hashTree(target);
 
-  const hash = hashTree(target);
-  if (hash === "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855") {
-    rmSync(target, { recursive: true, force: true });
-    throw new Error(`E_KIT_EMPTY: kit ${m.id}@${m.version} 内容为空（检查 source 与清单路径）`);
-  }
-  writeFileSync(join(target, "kit.lock"), JSON.stringify({
-    id: m.id, version: m.version, commit: src.commit, root: kitRootRel, hash,
-    rendered, commands: m.commands ?? [], knowledge: m.knowledge ?? [], dataRoot: m.data_root ?? null, env: m.env ?? null, config: appliedConfig,
-  }, null, 1));
-  return { id: m.id, version: m.version, dir: target, root: kitRoot, rendered, hash, changed: true };
+    if (changed) {
+      // 原子：先在同级 .staging 建完整树 + kit.lock，再 rename 换入；中途失败不会破坏旧安装
+      const staging = join(kitsRoot, ".staging", `${m.id}-${m.version}-${process.pid}-${Date.now()}`);
+      mkdirSync(staging, { recursive: true });
+      try {
+        cpSync(src.dir, staging, { recursive: true, dereference: true, filter: copyFilter(src.dir) });
+        const stagedHash = hashTree(staging);
+        if (stagedHash === EMPTY_TREE_HASH) throw new Error(`E_KIT_EMPTY: kit ${m.id}@${m.version} 内容为空（检查 source 与清单路径）`);
+        writeFileSync(join(staging, "kit.lock"), JSON.stringify({
+          id: m.id, version: m.version, commit: src.commit, root: kitRootRel, hash: stagedHash,
+          rendered: [], commands: m.commands ?? [], knowledge: m.knowledge ?? [], dataRoot: m.data_root ?? null, env: m.env ?? null, config: [],
+        }, null, 1));
+        mkdirSync(dirname(target), { recursive: true });
+        if (existsSync(target)) {
+          const bak = `${target}.old-${process.pid}-${Date.now()}`;
+          renameSync(target, bak);
+          try { renameSync(staging, target); rmSync(bak, { recursive: true, force: true }); }
+          catch (e) { try { renameSync(bak, target); } catch { /* 回滚失败也要把原错误抛出去 */ } throw e; }
+        } else {
+          renameSync(staging, target);
+        }
+      } finally {
+        rmSync(staging, { recursive: true, force: true });
+      }
+    }
+
+    // 渲染（软链必须指向最终 target，不能在 staging 里建）
+    const rendered = renderContent(src.dir, target, m) ?? planned;
+    const appliedConfig = config.apply(m.config ?? []);
+    const hash = hashTree(target);
+    writeFileSync(join(target, "kit.lock"), JSON.stringify({
+      id: m.id, version: m.version, commit: src.commit, root: kitRootRel, hash,
+      rendered, commands: m.commands ?? [], knowledge: m.knowledge ?? [], dataRoot: m.data_root ?? null, env: m.env ?? null, config: appliedConfig,
+    }, null, 1));
+    return { id: m.id, version: m.version, dir: target, root: kitRoot, rendered, hash, changed };
+  });
 }
 
 /** 已安装 kit（每个 id 取最新版本），含 tags 与落盘目录 —— 供 kb 聚合检索/doctor 使用 */
@@ -325,8 +398,8 @@ export function installed(): { id: string; version: string; dir: string; tags: s
   if (!existsSync(root)) return [];
   const out: { id: string; version: string; dir: string; tags: string[] }[] = [];
   for (const e of readdirSync(root, { withFileTypes: true })) {
-    if (!e.isDirectory()) continue;
-    const versions = readdirSync(join(root, e.name)).filter((v) => statSync(join(root, e.name, v)).isDirectory()).sort();
+    if (!e.isDirectory() || e.name.startsWith(".")) continue;
+    const versions = versionDirs(join(root, e.name));
     const version = versions[versions.length - 1];
     if (!version) continue;
     const dir = join(root, e.name, version);
@@ -341,9 +414,9 @@ export function list(): { id: string; versions: string[]; tags: string[] }[] {
   const root = join(dataDir(), "kits");
   if (!existsSync(root)) return [];
   return readdirSync(root, { withFileTypes: true })
-    .filter((e) => e.isDirectory())
+    .filter((e) => e.isDirectory() && !e.name.startsWith("."))
     .map((e) => {
-      const versions = readdirSync(join(root, e.name)).filter((v) => statSync(join(root, e.name, v)).isDirectory()).sort();
+      const versions = versionDirs(join(root, e.name));
       const latest = versions[versions.length - 1];
       let tags: string[] = [];
       if (latest) {
@@ -356,7 +429,7 @@ export function list(): { id: string; versions: string[]; tags: string[] }[] {
 export function readLock(id: string, version?: string) {
   const idDir = join(dataDir(), "kits", id);
   if (!existsSync(idDir)) throw new Error("E_NOT_INSTALLED");
-  const v = version || readdirSync(idDir).sort().pop()!;
+  const v = version || versionDirs(idDir).pop()!;
   const lockFile = join(idDir, v, "kit.lock");
   if (!existsSync(lockFile)) throw new Error("E_NOT_INSTALLED");
   return { version: v, lock: JSON.parse(readFileSync(lockFile, "utf8")) };

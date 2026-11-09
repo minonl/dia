@@ -121,7 +121,7 @@ updated: 2026-11-09
   - 可复用收拾清单与完整复盘：`docs/compose/reports/retro-worktree-pollution.md`（hummus）、
     `docs/knowledge/testwin.md`「主 worktree 污染」条目。
 
-- 教训（2026-09-15，`[WSL]`）：hummus「知识库图片上传：key 重复及临时 URL 请求失败」排查会话（agent=yan，会话启动目录 = 主 checkout `/home/min/repos/leyan/hummus`）为验证 jsdom 环境是否打印 key 重复警告，用 edit 工具写了临时 `libs/experimental/reply-editor/src/key-dupe.spec.tsx` 后未清理 → 主 worktree 留 untracked 污染。
+- 教训（2026-09-15，`[WSL]`）：hummus「知识库图片上传：key 重复及临时 URL 请求失败」排查会话（agent=yan，会话启动目录 = 主 checkout `/home/<user>/repos/leyan/hummus`）为验证 jsdom 环境是否打印 key 重复警告，用 edit 工具写了临时 `libs/experimental/reply-editor/src/key-dupe.spec.tsx` 后未清理 → 主 worktree 留 untracked 污染。
 
 - 教训（2026-09-14）：testwin-spu-overflow 验证会话对 worktree 的 dev server（localhost:4320）跑了 14 次 playwright-cli（open/snapshot/screenshot）全没 cd，9 个产物落进主 checkout（`.playwright-cli/`，console log 页面路径指向 worktree 而产物在主 checkout）；同功能另一会话每次先 `cd ~/repos/leyan/hummus-worktree--testwin-spu-overflow` 再跑，零污染。
 

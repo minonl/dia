@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated": "2026-11-03",
+  "updated": "2026-11-10",
   "note": "单一事实源：平台支持范围、实测版本、已知坑。人读视图由 dia doctor 派生，不要手抄进 md。",
   "platforms": {
     "opencode": {
@@ -8,7 +8,7 @@
       "render": "~/.config/opencode/agents/<id>.md",
       "probe": ["--version"],
       "range": ">=2.0.0 <3.0.0",
-      "tested": ["2.2.5"],
+      "tested": ["2.2.5", "2.2.6"],
       "notes": [
         "V1 → V2 断代：V1 实现不在 V2 运行，配置键与 hook API 全变",
         "配置文件 opencode.json / opencode.jsonc 二选一；两者都在时宿主先读 .json"

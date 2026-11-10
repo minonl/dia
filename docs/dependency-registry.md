@@ -29,7 +29,7 @@
 字段即上表；没有的字段省略，不写占位。
 
 ```json
-{"id":"host_cli:opencode@2.2.5","kind":"host_cli","version":"2.2.5","resolved":"command:opencode","integrity":"unknown","role":"required","verified_at":"2026-11-03","verified_by":"min","method":"smoke","result":"pass","support":"active","evidence":"docs/platforms/registry.json"}
+{"id":"host_cli:opencode@2.2.6","kind":"host_cli","version":"2.2.6","resolved":"command:opencode","integrity":"unknown","role":"required","verified_at":"2026-11-10","verified_by":"min","method":"manual","result":"pass","support":"active","evidence":"docs/platforms/registry.json"}
 ```
 
 规则：

@@ -41,6 +41,7 @@ describe("dia msg push", () => {
   test("无 pane → mailbox-only，不调用 tmux", () => {
     session("ses_a");
     const r = run(["msg", "send", "--to", "ses_a", "--from", "ses_b", "--subject", "hi"]);
+    if (r.status !== 0) console.error("SEND FAILED:", r.status, r.stdout, r.stderr);
     expect(r.status).toBe(0);
     expect(r.stdout).toContain("notified=mailbox-only(no-pane)");
     expect(existsSync(log)).toBe(false);

@@ -483,7 +483,7 @@ function tryWebhook(msg: MessageV2, url: string): MessageV2 {
   const attempt = (msg.attempts || 0) + 1;
   events.log({ event: "inject.attempted", msg_id: msg.id, thread_id: msg.thread_id, transport: "webhook", attempt });
   try {
-    const res = spawnSync("curl", ["-sS", "-m", "10", "-o", "/dev/null", "-w", "%{http_code}", "-X", "POST", url,
+    const res = spawnSync("curl", ["-sS", "-m", "8", "--connect-timeout", "3", "-o", "/dev/null", "-w", "%{http_code}", "-X", "POST", url,
       "-H", "content-type: application/json", "-d", JSON.stringify({ id: msg.id, thread: msg.thread_id, from: msg.from.session_id, to: msg.to.session_id, subject: msg.subject, kind: msg.kind })],
       { encoding: "utf8" });
     const code = Number((res.stdout || "").trim());

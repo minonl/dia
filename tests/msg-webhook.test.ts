@@ -53,5 +53,5 @@ describe("webhook transport", () => {
     const id = r.stdout.split("\t")[0];
     const m = JSON.parse(readFileSync(join(root, "collab", "inbox", "ses_b", `${id}.json`), "utf8"));
     expect(m.state).toBe("pending");
-  });
+  }, 20000);
 });

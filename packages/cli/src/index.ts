@@ -1031,7 +1031,7 @@ async function msgCli(argv: string[]): Promise<number> {
     if (m.startsWith("E_USAGE") || m.startsWith("E_SESSION") || m.startsWith("E_NO_SESSION") || m.startsWith("E_LEGACY") || m.startsWith("E_KIND")) return 2;
     return 31;
   }
-  err("usage: dia msg send|inbox|ack|delivered|reply|thread|escalate|agents|trace|stats|seen|retry|dsh");
+  err("usage: dia msg send|inbox|ack|delivered|reply|close|thread|escalate|agents|trace|stats|seen|retry|dsh");
   return 2;
 }
 

@@ -40,3 +40,25 @@ describe("dia msg <sub> --session 路由到 v2", () => {
     expect(JSON.parse(r.stdout).id).toBe("m-x");
   });
 });
+
+describe("close 权限：收件人 done / 发送人撤回", () => {
+  test("收件人 close --reason done → closed", () => {
+    const r = run(["msg", "close", "m-x", "--session", "ses_b", "--reason", "done"]);
+    if (r.status !== 0) console.error(r.stdout, r.stderr);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(readFileSync(join(root, "collab", "inbox", "ses_b", "m-x.json"), "utf8")).closure_reason).toBe("done");
+  });
+
+  test("发送人可撤回（dropped），但不能用 done", () => {
+    const ok = run(["msg", "close", "m-x", "--session", "ses_a", "--reason", "dropped"]);
+    expect(ok.status).toBe(0);
+    const m = JSON.parse(readFileSync(join(root, "collab", "inbox", "ses_b", "m-x.json"), "utf8"));
+    expect(m.state).toBe("closed");
+    expect(m.closure_reason).toBe("dropped");
+  });
+
+  test("发送人用 done → 拒绝", () => {
+    const r = run(["msg", "close", "m-x", "--session", "ses_a", "--reason", "done"]);
+    expect(r.status).not.toBe(0);
+  });
+});

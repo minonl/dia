@@ -76,6 +76,22 @@ function versionOf(text: string): string | null {
   return m ? `${m[1]}.${m[2]}.${m[3]}` : null;
 }
 
+/** 登记版本支持通配：`2.2.5`（精确）、`2.2.x`/`2.2.*`/`2.2`（主.次匹配，容忍补丁漂移）。 */
+export interface VerSpec { major: number; minor?: number; patch?: number }
+export function parseSpec(v: string): VerSpec | null {
+  const m = String(v || "").trim().match(/^(\d+)(?:\.(\d+|x|\*))?(?:\.(\d+|x|\*))?$/i);
+  if (!m) return null;
+  const num = (s?: string) => (s && s !== "x" && s !== "*" ? Number(s) : undefined);
+  return { major: Number(m[1]), minor: num(m[2]), patch: num(m[3]) };
+}
+export function matchesSpec(actual: string, spec: VerSpec): boolean {
+  const [a, b, c] = actual.split(".").map(Number);
+  if (a !== spec.major) return false;
+  if (spec.minor !== undefined && b !== spec.minor) return false;
+  if (spec.patch !== undefined && c !== spec.patch) return false;
+  return true;
+}
+
 function probeVersion(bin: string): string | null {
   try {
     const out = execFileSync(bin, ["--version"], { encoding: "utf8", timeout: 2000, stdio: ["ignore", "pipe", "ignore"] });
@@ -97,8 +113,8 @@ export function check(e: DepEntry): DepCheck {
     const raw = probeVersion(bin);
     if (!raw) return missing(`${bin} 不在 PATH`);
     const actual = versionOf(raw);
-    const want = versionOf(e.version);
-    if (actual && want && actual !== want) {
+    const want = parseSpec(e.version);
+    if (actual && want && !matchesSpec(actual, want)) {
       return { id: e.id, status: "warn", detail: `${e.id}：实测 ${actual}，登记 ${e.version}`, note: !required };
     }
     return { id: e.id, status: "ok", detail: `${e.id}：${raw}` };

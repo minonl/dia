@@ -66,3 +66,15 @@ describe("msg escalate / retry", () => {
     expect(m.attempts).toBe(1);
   });
 });
+
+
+describe("msg upkeep", () => {
+  test("一次跑完 retry + escalate，--json 有两者", () => {
+    seed({ id: "m-old", sid: "ses_a", ageMs: 5 * 3600_000 });
+    const r = run(["msg", "upkeep", "--json"]);
+    expect(r.status).toBe(0);
+    const d = JSON.parse(r.stdout);
+    expect(Array.isArray(d.retried)).toBe(true);
+    expect(d.escalated.some((x: any) => x.id === "m-old")).toBe(true);
+  });
+});

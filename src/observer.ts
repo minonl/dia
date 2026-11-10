@@ -229,7 +229,15 @@ export function readBoard(opts: ObserveOptions = {}): Board {
  * 返回错误信息或 null。由 `dia collab enable` 调用。
  */
 export function ensureJob(desired = DEFAULT_INTERVAL_S): string | null {
-  const NAME = "collab-observe";
+  return ensureTask("collab-observe", `collab observe --interval ${normInterval(desired)}`, "collab board 刷新（dia collab enable 注册）", desired);
+}
+
+/** 消息维护定时：重投到期消息 + 超时升级（同属 dia collab enable 注册）。 */
+export function ensureUpkeepJob(desired = DEFAULT_INTERVAL_S): string | null {
+  return ensureTask("msg-upkeep", "msg upkeep", "dia msg 重投/超时升级（dia collab enable 注册）", desired);
+}
+
+function ensureTask(NAME: string, subcmd: string, desc: string, desired = DEFAULT_INTERVAL_S): string | null {
   try {
     // 临时根（数据根 / DIA_HOME / job 根任一在 tmp）不注册持久定时：
     // 否则测试会把 launchd 指向 /var/folders 的脏任务（实测事故），且 cmd 里还会固化临时 DIA_HOME
@@ -248,7 +256,7 @@ export function ensureJob(desired = DEFAULT_INTERVAL_S): string | null {
       .filter((k) => process.env[k])
       .map((k) => `${k}='${String(process.env[k]).replace(/'/g, "'\\''")}'`)
       .join(" ");
-    const cmd = `${envPrefix ? envPrefix + " " : ""}'${bin}' collab observe --interval ${interval}`;
+    const cmd = `${envPrefix ? envPrefix + " " : ""}'${bin}' ${subcmd}`;
 
     let tasks: Record<string, any> = {};
     try { tasks = JSON.parse(readFileSync(join(job.jobRootResolved(), "tasks", "registry.json"), "utf8"))?.tasks || {}; } catch { /* none */ }
@@ -256,7 +264,7 @@ export function ensureJob(desired = DEFAULT_INTERVAL_S): string | null {
     if (key) {
       const reg = tasks[key] || {};
       const sameInterval = Number(String(reg.interval ?? "").trim()) === interval;
-      const sameCmd = String(reg.cmd || "").includes("collab observe");
+      const sameCmd = String(reg.cmd || "").includes(subcmd.split(" ")[0] === "msg" ? "msg upkeep" : "collab observe");
       // 注册在但 plist 丢了（被手工删/被另一根 uninstall 误删）→ 必须重装，否则「注册在、没在跑」
       const label = String(reg.label || `local.dia-job-${NAME}`);
       const plist = join(homedir(), "Library", "LaunchAgents", `${label}.plist`);
@@ -269,7 +277,7 @@ export function ensureJob(desired = DEFAULT_INTERVAL_S): string | null {
       try { job.runJobCapture(["uninstall", NAME]); } catch { /* 旧注册不存在也无妨 */ }
     }
 
-    const base = ["install", NAME, "--desc", "collab board 刷新（dia collab enable 注册）", "--interval", String(interval), "--cmd", cmd];
+    const base = ["install", NAME, "--desc", desc, "--interval", String(interval), "--cmd", cmd];
     let r = job.runJobCapture(base);
     // 门控 rc=4：npm 全局的 `dia` 不是 git checkout，class=unknown。命令本身固定且稳定，按逃生舱重试一次。
     if (r.status === 4) r = job.runJobCapture([...base, "--allow-unstable"]);
@@ -282,7 +290,9 @@ export function ensureJob(desired = DEFAULT_INTERVAL_S): string | null {
 
 /** 对称清理：卸载定时注册 + 删派生的 board/escalated（metrics/escalations 历史保留）。 */
 export function removeJob(): void {
-  try { job.runJobCapture(["uninstall", "collab-observe"]); } catch { /* 未注册也无妨 */ }
+  for (const n of ["collab-observe", "msg-upkeep"]) {
+    try { job.runJobCapture(["uninstall", n]); } catch { /* 未注册也无妨 */ }
+  }
   for (const f of [boardFile({}), escalatedFile({})]) { try { rmSync(f, { force: true }); } catch { /* ignore */ } }
 }
 

@@ -63,7 +63,7 @@ dia show <id>                          # 看完整正文
 ```bash
 dia collab status               # 是否启用、kit 是否安装、配置路径
 dia collab disable              # 全局关闭：移除 kit + 停自动行为（手动命令仍可用）
-dia collab enable               # 全局开启：装配 kit + 校正 300s 观察器定时 + 刷新 board（幂等，可反复跑）
+dia collab enable               # 全局开启：装配 kit + 注册/校正 300s 定时（collab-observe + msg-upkeep）+ 刷新 board
 dia collab disable --persona X  # 只对该 persona 关闭自动装配/更新（硬关闭用全局）
 DIA_MSG=0 dia in                # 临时关闭自动行为（skill 保留）
 ```

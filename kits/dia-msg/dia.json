@@ -2,7 +2,7 @@
   "schema": 1,
   "kind": "kit",
   "id": "dia-msg",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "root": ".",
   "skills": [
     {

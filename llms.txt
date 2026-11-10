@@ -92,6 +92,6 @@
 - [dia graph Web（M1）设计：真实数据 → 单文件静态导出](https://github.com/minonl/dia/blob/main/docs/design/graph-web-m1.md): 状态：M1 设计（2026-11-06）｜前置：graph-web.md（视觉稿 v0.3）、graph-web-mockup.html（交互原型）
 - [graph live 服务（M2 设计，可选包）](https://github.com/minonl/dia/blob/main/docs/design/graph-web-m2.md): 状态：M2a 已实现（2026-11-09）：packages/graph-web + dia graph --serve
 - [dia graph Web 视觉设计稿（v0.3）](https://github.com/minonl/dia/blob/main/docs/design/graph-web.md): 落地状态（2026-11-06）：M1 已实现 dia graph --export-html（真实账本 → 单文件静态 HTML，无网络）；
-- [dia msg 重新设计：从「能发」到「可证送达、可复盘」](https://github.com/minonl/dia/blob/main/docs/design/msg-reliability-redesign.md): 日期：2026-11-10 ｜ 状态：P0–P2 + webhook 已实现；dsh 插件待做 ｜ 触发：用户实测「对方在处理完等我回复时，完全没收到我们消息的迹象」；团队三角色复核（现状口径 / 传输层 / 指标与测试）
+- [dia msg 重新设计：从「能发」到「可证送达、可复盘」](https://github.com/minonl/dia/blob/main/docs/design/msg-reliability-redesign.md): 日期：2026-11-10 ｜ 状态：P0–P3 已实现（dsh 插件：包 + 安装器 + dump-config 校验；真机 dsh 启动未实跑） ｜ 触发：用户实测「对方在处理完等我回复时，完全没收到我们消息的迹象」；团队三角色复核（现状口径 / 传输层 / 指标与测试）
 - [固定席位 + 上下文亲和（M2 设计）](https://github.com/minonl/dia/blob/main/docs/design/seat-scheduling-m2.md): 状态：M2a 已实现（2026-11-09）：dia graph --next --seats N｜src/seats.ts
 

@@ -1,6 +1,6 @@
 # dia msg 重新设计：从「能发」到「可证送达、可复盘」
 
-> 日期：2026-11-10 ｜ 状态：**P0–P2 + webhook 已实现；dsh 插件待做** ｜ 触发：用户实测「对方在处理完等我回复时，完全没收到我们消息的迹象」；团队三角色复核（现状口径 / 传输层 / 指标与测试）
+> 日期：2026-11-10 ｜ 状态：**P0–P3 已实现**（dsh 插件：包 + 安装器 + dump-config 校验；真机 dsh 启动未实跑） ｜ 触发：用户实测「对方在处理完等我回复时，完全没收到我们消息的迹象」；团队三角色复核（现状口径 / 传输层 / 指标与测试）
 
 ## 0. 先把事实对齐
 
@@ -148,7 +148,7 @@ dia msg deliver <handle> <id> [--transport tmux|acp]   # 显式重投
 | **P0** | 事件流 `events.jsonl` + `dia msg trace` + `stats` 加 attempt 分母 + fake-tmux e2e + 修 `escalated` 不在 TERMINAL、`in` 先输出后落盘两个语义坑 | 低（不改消息路径） |
 | **P1** | session→pane 绑定（注册采集 `TMUX_PANE`+pid+start+cwd，带 TTL 心跳）；`dia msg send` best-effort 注入一次（5s 超时，失败不阻断，打印 `notified: tmux|mailbox-only(reason)`） | 中（误投/重复注入，必须有指纹与幂等） |
 | **P2** | 退避重投（job 300s 扫 pending，≤3 次）+ escalate 接线 + `context.exposed`（hook/`seen`） | 中 |
-| **P3** | ~~独立消息服务 webhook transport~~（已实现：`DIA_MSG_WEBHOOK_URL`，2xx 才算注入）；**dsh cordis 插件未做** | 高（新面） |
+| **P3** | webhook transport（`DIA_MSG_WEBHOOK_URL`）；dsh 插件 `kits/dia-msg/dsh/dia-inbox` + `dia msg dsh install --profile <p>`（复制包 → pnpm add → 追加 patch → dump-config 校验，dry-run 默认） | 中（真机启动未实跑） |
 
 ## 8. 不做的
 

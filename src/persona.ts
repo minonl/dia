@@ -160,7 +160,7 @@ function hashTree(root: string): string {
   return h.digest("hex");
 }
 
-export function install(from: string, opts: { ref?: string; host?: string; home?: string; dryRun?: boolean; force?: boolean } = {}): Installed {
+export function install(from: string, opts: { ref?: string; host?: string; home?: string; dryRun?: boolean; force?: boolean; ownedFrom?: string } = {}): Installed {
   const src = resolveSource(from, opts.ref);
   const m = readManifest(src.dir);
   if (m.kind !== "persona") throw new Error("E_MANIFEST: not a persona");
@@ -172,15 +172,17 @@ export function install(from: string, opts: { ref?: string; host?: string; home?
   const rendered: string[] = [];
   const overwrites: string[] = [];
 
-  // 上一版 lock 记录过的渲染产物 = dia 托管：内容变化属于正常升级，可覆盖（先备份）
+  // 升级（update 传入 ownedFrom）时：上一版 lock 记录过的渲染产物 = dia 托管，
+  // 内容变化属于正常升级 → 可覆盖（先备份）。普通 add/重装不带 ownedFrom，仍按冲突拒绝（保护手改）。
   const ownedRendered = new Set<string>();
-  try {
-    const prev = active.effective(m.id);
-    const prevDir = join(dataDir(), "personas", m.id, prev?.version ?? "");
-    const prevLock = JSON.parse(readFileSync(join(prevDir, "dia.lock"), "utf8"));
-    for (const p of Object.keys(prevLock.renderedHashes ?? {})) ownedRendered.add(resolve(p));
-    for (const p of prevLock.rendered ?? []) ownedRendered.add(resolve(p));
-  } catch { /* 首次安装/无 lock */ }
+  if (opts.ownedFrom) {
+    try {
+      const prevDir = join(dataDir(), "personas", m.id, opts.ownedFrom);
+      const prevLock = JSON.parse(readFileSync(join(prevDir, "dia.lock"), "utf8"));
+      for (const p of Object.keys(prevLock.renderedHashes ?? {})) ownedRendered.add(resolve(p));
+      for (const p of prevLock.rendered ?? []) ownedRendered.add(resolve(p));
+    } catch { /* 无 lock：按首次安装 */ }
+  }
 
   // 先检查宿主冲突，避免破坏已安装目录
   const entry = hosts.includes("opencode") ? m.entry?.opencode : undefined;
@@ -1053,7 +1055,7 @@ export function update(id: string, opts: { ref?: string; force?: boolean } = {})
   const lock = JSON.parse(readFileSync(join(idDir, cur, "dia.lock"), "utf8"));
   if (!lock.source) throw new Error("E_SOURCE: 该 persona 由本地目录安装，无法 update（重新 persona add）");
   // 不传 host：按 manifest 的 hosts 全量重渲染（旧实现用 rendered[0] 推断 host → 多 host 的 dsh profile 永不刷新）
-  const r = install(lock.source, { ref: opts.ref ?? lock.ref ?? undefined, force: opts.force });
+  const r = install(lock.source, { ref: opts.ref ?? lock.ref ?? undefined, force: opts.force, ownedFrom: cur });
   const u = active.use(id, r.version, { reason: `update from ${lock.source}` });
   return { installed: r, previous: u.previous };
 }

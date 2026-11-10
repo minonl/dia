@@ -22,15 +22,18 @@ export function pluginSource(): string {
   return join(paths.installDir(), "kits", "dia-msg", "dsh", "dia-inbox");
 }
 
+export const MANAGED_BEGIN = "# >>> dia-managed:dia-inbox";
+export const MANAGED_END = "# <<< dia-managed:dia-inbox";
+
 export function patchSnippet(): string {
-  return `- insert:\n    - id: ${PLUGIN_ID}\n      name: '${PLUGIN_PKG}'\n`;
+  return `${MANAGED_BEGIN}\n- insert:\n    - id: ${PLUGIN_ID}\n      name: '${PLUGIN_PKG}'\n${MANAGED_END}\n`;
 }
 
 /** 幂等追加：已包含 `id: dia-inbox` 就原样返回。 */
 export function applyPatch(yaml: string): string {
-  if (new RegExp(`^\\s*-\\s*id:\\s*${PLUGIN_ID}\\s*$`, "m").test(yaml)) return yaml;
+  if (yaml.includes(MANAGED_BEGIN)) return yaml;
   const sep = yaml.endsWith("\n") ? "" : "\n";
-  return `${yaml}${sep}\n# dia-inbox（dia msg dsh install 追加；幂等）\n${patchSnippet()}`;
+  return `${yaml}${sep}\n${patchSnippet()}`;
 }
 
 export interface DshInstallResult {

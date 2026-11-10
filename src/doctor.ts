@@ -16,6 +16,8 @@ import * as platforms from "./platforms.ts";
 import * as deps from "./deps.ts";
 import * as paths from "./paths.ts";
 import * as observer from "./observer.ts";
+import * as collab from "./collab.ts";
+import * as msgEvents from "./msg-events.ts";
 import * as job from "./job.ts";
 import { indexStatus, type IndexStatus } from "./kb.ts";
 
@@ -221,6 +223,19 @@ function jobRootCheck(): Check {
   return { name, status: "ok", detail: `根 ${cur}（source=${source}）` };
 }
 
+/** collab.inbox：有未读但本机 24h 没跑过 `dia msg inbox`（对应「两天没 in」的事故形态）。 */
+function collabInboxCheck(): Check {
+  const name = "collab.inbox";
+  try {
+    const st = collab.messageStats({});
+    if (!st.backlog.count) return { name, status: "ok", detail: "无未读积压" };
+    const since = Date.now() - 24 * 3600_000;
+    const reads = msgEvents.readAll().filter((e) => e.event === "read.observed" && Date.parse(e.ts) >= since);
+    if (reads.length) return { name, status: "ok", detail: `backlog=${st.backlog.count}，24h 内有 ${reads.length} 次读取` };
+    return { name, status: "warn", detail: `backlog=${st.backlog.count}（最早 ${Math.round(st.backlog.oldest_age_ms / 3600000)}h）且 24h 无任何读取；开工先 \`dia msg inbox --unread\`` };
+  } catch { return { name, status: "ok", detail: "collab 未启用（跳过）" }; }
+}
+
 function bootstrapCheck(): Check {
   const stamp = defaultMsg.readStamp();
   const pkg = defaultMsg.pkgVersion();
@@ -403,6 +418,7 @@ export async function run(opts: { persona?: string } = {}): Promise<{
   checks.push(installShadowCheck());
   checks.push(bootstrapCheck());
   checks.push(jobRootCheck());
+  checks.push(collabInboxCheck());
 
   const wt = join(install, "packages/wt/bin/dia-wt");
   checks.push({ name: "wt", status: existsSync(wt) ? "ok" : "warn", detail: existsSync(wt) ? wt : "dia wt 未安装（npm 包不完整？npm i -g @minonl/dia@latest 重装）" });

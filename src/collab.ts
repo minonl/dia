@@ -10,6 +10,8 @@ import { createHash, randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import * as paths from "./paths.ts";
+import * as events from "./msg-events.ts";
+import { paneBinding, pushPointer } from "./tmux.ts";
 
 export type Kind = "question" | "handoff" | "notify" | "reply";
 export type State = "pending" | "delivered" | "acked" | "replied" | "needs_info" | "closed" | "escalated";
@@ -17,7 +19,7 @@ export type CloseReason = "done" | "dropped" | "duplicate" | "escalated" | "no-f
 
 const KINDS: Kind[] = ["question", "handoff", "notify", "reply"];
 const CLOSE_REASONS: CloseReason[] = ["done", "dropped", "duplicate", "escalated", "no-follow-on"];
-const TERMINAL: State[] = ["replied", "closed"];
+const TERMINAL: State[] = ["replied", "closed", "escalated"];
 const MAX_BODY = 256 * 1024;
 const INLINE_BODY = 64 * 1024;
 const SESSION_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
@@ -63,7 +65,16 @@ export interface MessageV2 {
   closed_at?: string;
   closure_reason?: CloseReason;
   reply_id?: string;
-  transport: "file";
+  transport: "file" | "tmux" | "acp" | "webhook";
+  /** 传输层确认注入的时间（≠ 被模型看到；exposed_at 才是） */
+  injected_at?: string;
+  /** 本次发送的投递结果（不持久化语义，仅返回给调用方显示） */
+  notify?: { channel: "tmux" | "mailbox-only"; reason?: string };
+  /** 投递尝试（P2：重投/复盘用） */
+  attempts?: number;
+  last_attempt_at?: string;
+  next_retry_at?: string;
+  escalated_at?: string;
   legacy?: boolean;
   legacy_to?: string;
 }
@@ -78,6 +89,11 @@ export interface SessionRecord {
   last_seen: string;
   capabilities: string[];
   address: string;
+  /** tmux 可达性（可失效的提示通道；身份以 pane+pid+cwd 指纹校验） */
+  pane?: string;
+  pane_pid?: string;
+  pane_start?: string;
+  pane_cwd?: string;
 }
 
 export interface SendOptions {
@@ -239,6 +255,7 @@ export function whoami(opts: { session?: string; name?: string; cwd?: string } =
       last_seen: now(),
       capabilities: ["msg:v2"],
       address: `session:${id}`,
+      ...(paneBinding() || {}),
     };
     writeAtomic(sessionFile(id), JSON.stringify(rec, null, 1) + "\n");
     return rec;
@@ -354,7 +371,7 @@ export function send(opts: SendOptions): MessageV2 {
   const threadId = opts.threadId || newId("th");
   const body = readBody(opts);
 
-  return withLock(`thread-${threadId}`, () => {
+  const saved = withLock(`thread-${threadId}`, () => {
     const existing = threadMessages(threadId);
     const seq = existing.length ? Math.max(...existing.map((m) => m.seq)) + 1 : 1;
     const idempotencyKey = opts.idempotencyKey || `${threadId}#${seq}`;
@@ -392,9 +409,95 @@ export function send(opts: SendOptions): MessageV2 {
       ...(opts.classSnapshot !== undefined ? { class_snapshot: opts.classSnapshot, class_why: opts.classWhy } : {}),
       transport: "file",
     };
-    writeAtomic(messageFile(to, id), JSON.stringify(msg, null, 1) + "\n");
+    try {
+      writeAtomic(messageFile(to, id), JSON.stringify(msg, null, 1) + "\n");
+    } catch (e: any) {
+      events.log({ event: "send.failed", msg_id: id, thread_id: threadId, actor: from, error_code: e?.code || "E_WRITE" });
+      throw e;
+    }
+    events.log({ event: "send.accepted", msg_id: id, thread_id: threadId, actor: from, to_state: "pending", transport: "file" });
     return msg;
   });
+
+  // push 只做「叫醒一轮」：失败/无 pane 都不阻断发送，结果只记录（不写 acked）
+  return notify(saved);
+}
+
+/** 记录一次投递尝试（失败按 60s×2^n 退避，封顶 10min；成功后清空退避）。 */
+function recordAttempt(msg: MessageV2, attempt: number, errorCode?: string) {
+  const hit = findIn(msg.to.session_id, msg.id);
+  if (!hit || hit.msg.legacy) return;
+  hit.msg.attempts = attempt;
+  hit.msg.last_attempt_at = now();
+  if (errorCode) hit.msg.next_retry_at = new Date(Date.now() + Math.min(600_000, 60_000 * 2 ** (attempt - 1))).toISOString();
+  else delete hit.msg.next_retry_at;
+  writeAtomic(hit.path, JSON.stringify(hit.msg, null, 1) + "\n");
+}
+
+/** 尽力注入一次消息指针；返回带 notify 结果的消息快照。 */
+function notify(msg: MessageV2): MessageV2 {
+  const rec = readSession(msg.to.session_id);
+  const mark = (channel: "tmux" | "mailbox-only", reason?: string): MessageV2 => {
+    msg.notify = { channel, reason: reason || undefined };
+    return msg;
+  };
+  if (rec?.pane) {
+    const r = tryTmux(msg, rec.pane);
+    if (r.ok) return r.msg;
+    // tmux 失败（忙/离线/未验证）但仍配置了 webhook → 继续走 webhook
+    if (!process.env.DIA_MSG_WEBHOOK_URL) return r.msg;
+  }
+  if (process.env.DIA_MSG_WEBHOOK_URL) return tryWebhook(msg, process.env.DIA_MSG_WEBHOOK_URL);
+  return mark("mailbox-only", "no-pane");
+}
+
+function tryTmux(msg: MessageV2, pane: string): { ok: boolean; msg: MessageV2 } {
+  const attempt = (msg.attempts || 0) + 1;
+  events.log({ event: "inject.attempted", msg_id: msg.id, thread_id: msg.thread_id, transport: "tmux", attempt });
+  const r = pushPointer(pane, { id: msg.id, subject: msg.subject, session: msg.to.session_id });
+  if (!r.ok) {
+    events.log({ event: "inject.failed", msg_id: msg.id, thread_id: msg.thread_id, transport: "tmux", attempt, error_code: r.code });
+    recordAttempt(msg, attempt, r.code);
+    msg.notify = { channel: "mailbox-only", reason: r.code };
+    return { ok: false, msg };
+  }
+  events.log({ event: "inject.verified", msg_id: msg.id, thread_id: msg.thread_id, transport: "tmux", attempt });
+  recordAttempt(msg, attempt);
+  const hit = findIn(msg.to.session_id, msg.id);
+  if (hit && !hit.msg.legacy && !hit.msg.injected_at) {
+    hit.msg.injected_at = now();
+    hit.msg.transport = "tmux";
+    writeAtomic(hit.path, JSON.stringify(hit.msg, null, 1) + "\n");
+  }
+  msg.notify = { channel: "tmux" };
+  return { ok: true, msg };
+}
+
+/** P3：webhook transport（独立消息服务/网关）。2xx 才算注入成功；失败只记录不重试。 */
+function tryWebhook(msg: MessageV2, url: string): MessageV2 {
+  const attempt = (msg.attempts || 0) + 1;
+  events.log({ event: "inject.attempted", msg_id: msg.id, thread_id: msg.thread_id, transport: "webhook", attempt });
+  try {
+    const res = spawnSync("curl", ["-sS", "-m", "10", "-o", "/dev/null", "-w", "%{http_code}", "-X", "POST", url,
+      "-H", "content-type: application/json", "-d", JSON.stringify({ id: msg.id, thread: msg.thread_id, from: msg.from.session_id, to: msg.to.session_id, subject: msg.subject, kind: msg.kind })],
+      { encoding: "utf8" });
+    const code = Number((res.stdout || "").trim());
+    if (res.status === 0 && code >= 200 && code < 300) {
+      events.log({ event: "inject.verified", msg_id: msg.id, thread_id: msg.thread_id, transport: "webhook", attempt });
+      recordAttempt(msg, attempt);
+      msg.notify = { channel: "tmux" as any }; // 语义：已通过外部通道叫醒
+      return msg;
+    }
+    events.log({ event: "inject.failed", msg_id: msg.id, thread_id: msg.thread_id, transport: "webhook", attempt, error_code: `E_WEBHOOK_${code || res.status}` });
+    recordAttempt(msg, attempt, `E_WEBHOOK`);
+    msg.notify = { channel: "mailbox-only", reason: `E_WEBHOOK_${code || res.status}` };
+    return msg;
+  } catch (e: any) {
+    events.log({ event: "inject.failed", msg_id: msg.id, thread_id: msg.thread_id, transport: "webhook", attempt, error_code: "E_WEBHOOK" });
+    recordAttempt(msg, attempt, "E_WEBHOOK");
+    msg.notify = { channel: "mailbox-only", reason: "E_WEBHOOK" };
+    return msg;
+  }
 }
 
 export function inbox(sessionId: string, opts: InboxOptions = {}): MessageV2[] {
@@ -478,6 +581,11 @@ export function markDeliveredBatch(sessionId: string, ids: string[]): number {
       msg.delivered_at = at; msg.first_touch_at = at;
       if (msg.state === "pending") msg.state = "delivered";
       writeAtomic(f, JSON.stringify(msg, null, 1) + "\n");
+      events.log({
+        event: "read.observed", msg_id: msg.id, thread_id: msg.thread_id, actor: sid,
+        from_state: "pending", to_state: "delivered",
+        latency_ms: Math.max(0, Date.parse(at) - Date.parse(msg.created_at)),
+      });
       n++;
     }
     return n;
@@ -498,6 +606,7 @@ export function markExposed(sessionId: string, ids: string[]): number {
       if (!msg.exposed_at) { msg.exposed_at = at; n++; }
       if (msg.state === "pending") msg.state = "delivered";
       writeAtomic(f, JSON.stringify(msg, null, 1) + "\n");
+      events.log({ event: "context.exposed", msg_id: msg.id, thread_id: msg.thread_id, actor: sid, to_state: "exposed" });
     }
     return n;
   });
@@ -524,6 +633,7 @@ export function ack(sessionId: string, id: string): MessageV2 {
     touchDelivered(m);
     m.state = "acked";
     m.acked_at = now();
+    events.log({ event: "acked", msg_id: id, thread_id: m.thread_id, actor: normalizeSessionId(sessionId), to_state: "acked", latency_ms: Math.max(0, Date.now() - Date.parse(m.delivered_at || m.created_at)) });
   });
 }
 
@@ -554,6 +664,7 @@ export function reply(sessionId: string, id: string, body: string, refs?: Record
       m.state = "replied";
       m.replied_at = now();
       m.reply_id = r.id;
+      events.log({ event: "replied", msg_id: id, thread_id: m.thread_id, actor: idNorm, from_state: "acked", to_state: "replied", latency_ms: Math.max(0, Date.now() - Date.parse(m.created_at)) });
     });
     return { reply: r, original };
   });
@@ -571,6 +682,7 @@ export function close(sessionId: string, id: string, reason: string): MessageV2 
     m.state = "closed";
     m.closure_reason = why;
     m.closed_at = now();
+    events.log({ event: "closed", msg_id: id, thread_id: m.thread_id, actor: normalizeSessionId(sessionId), to_state: "closed", error_code: why });
   });
 }
 
@@ -747,3 +859,51 @@ export function stats(sessionId: string): { total: number; unread: number; pendi
 }
 
 export const limits = { MAX_BODY, INLINE_BODY };
+
+/** 超时升级：requires_reply 30min / 其它 4h；只改状态 + 事件，不发正文。 */
+export function escalateDue(opts: { now?: Date; ackTtlMs?: number; ttlMs?: number } = {}): { id: string; session: string; age_ms: number }[] {
+  const nowMs = (opts.now ?? new Date()).getTime();
+  const ackTtl = opts.ackTtlMs ?? Number(process.env.DIA_MSG_ACK_TTL_MS || 30 * 60_000);
+  const ttl = opts.ttlMs ?? Number(process.env.DIA_MSG_TTL_MS || 4 * 3600_000);
+  const out: { id: string; session: string; age_ms: number }[] = [];
+  for (const rec of listSessions()) {
+    const sid = rec.session_id;
+    for (const f of listInboxFiles(sid)) {
+      const m = readJson<MessageV2>(f);
+      if (!m || m.legacy || TERMINAL.includes(m.state) || m.state === "escalated") continue;
+      const created = Date.parse(m.created_at);
+      if (Number.isNaN(created)) continue;
+      const limit = m.requires_reply ? ackTtl : ttl;
+      const age = nowMs - created;
+      if (age <= limit) continue;
+      mutate(sid, m.id, (x) => {
+        x.state = "escalated";
+        x.escalated_at = now();
+        events.log({ event: "escalated", msg_id: x.id, thread_id: x.thread_id, actor: "escalate-due", to_state: "escalated", latency_ms: age });
+      });
+      out.push({ id: m.id, session: sid, age_ms: age });
+    }
+  }
+  return out;
+}
+
+/** 到期重投：只挑「还没注入成功、未终态、过了 next_retry_at、attempts<3」的消息。 */
+export function retryDue(opts: { now?: Date; max?: number } = {}): { id: string; session: string; channel: string; reason?: string }[] {
+  const nowMs = (opts.now ?? new Date()).getTime();
+  const maxAttempts = opts.max ?? 3;
+  const out: { id: string; session: string; channel: string; reason?: string }[] = [];
+  for (const rec of listSessions()) {
+    const sid = rec.session_id;
+    for (const f of listInboxFiles(sid)) {
+      const m = readJson<MessageV2>(f);
+      if (!m || m.legacy || TERMINAL.includes(m.state) || m.state === "escalated") continue;
+      if (m.injected_at) continue;
+      if ((m.attempts || 0) >= maxAttempts) continue;
+      const next = m.next_retry_at ? Date.parse(m.next_retry_at) : 0;
+      if (next && next > nowMs) continue;
+      const r = notify(m);
+      out.push({ id: m.id, session: sid, channel: r.notify?.channel || "mailbox-only", reason: r.notify?.reason });
+    }
+  }
+  return out;
+}

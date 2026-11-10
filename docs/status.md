@@ -91,6 +91,7 @@
 | D0.21 | worktree 抽取 `packages/wt` | **完成** | 7 处 python→node；`dia wt`；4 套测试原样迁移全绿 |
 | D0.23 | doctor 平台版本自检 | **完成** | `platform:opencode` / `platform:dsh` 报版本（缺宿主 = warn，不判红）；`tests/active-doctor.test.ts` |
 | D0.44 | 配置迁移走 LLM 任务 | **完成** | `docs/migrations/llm-migration.md`：升级只改声明；迁移=任务+判据+回滚；禁止代码里堆版本分支（安全敏感/原子场景例外） |
+| D0.85 | deps 版本通配（2.2.x） | **完成** | `parseSpec/matchesSpec`：登记 `2.2.x`/`2.2` 容忍补丁漂移，主.次不匹配仍 warn；`opencode` 登记改为 `host_cli:opencode@2.2.x`（实测 2.2.5 → ok） |
 | D0.84 | dsh 插件运行时验证 | **完成** | 用 `dia-test` profile（headless 模板 + `dsh-llm-pi-ai` 接乐言网关 `ai-models.infra.leyantech.com/v1`，key 走 `LEYAN_AI_MODELS_AUTH_TOKEN`）+ `dia msg dsh install`；`dsh headless` 实跑输出 `[dia-inbox] 有 7 条未读…`，证明 `systemPrompt.context` 注入生效 |
 | D0.83 | 托管产物变化免 --force | **完成** | `update` 收集上一版 lock 的 `renderedHashes`/`rendered` 作为「dia 托管」集合；托管文件内容变化自动覆盖（备份到 `backups/force-*`），非托管仍拒绝；测试：git 源改配方后 `update` 免 --force |
 | D0.82 | persona update 全 host 重渲染；冲突提示 --force | **完成** | `update()` 不再用 `rendered[0]` 推断单 host（多 host 的 dsh profile 以前永不刷新）；`E_CONFLICT` 文案补「--force 覆盖，先备份」；测试：opencode+dsh 双 host 更新 |

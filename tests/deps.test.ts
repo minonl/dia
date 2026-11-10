@@ -53,6 +53,26 @@ describe("依赖校验", () => {
     } finally { process.env.PATH = old; }
   });
 
+  test("登记 2.2.x 容忍补丁漂移（实测 2.2.5 → ok）", () => {
+    const { dir } = fakeBin("2.2.5");
+    const old = process.env.PATH;
+    process.env.PATH = `${dir}:${old}`;
+    try {
+      const r = deps.check({ id: "host_cli:fakehost@2.2.x", kind: "host_cli", version: "2.2.x", role: "required" });
+      expect(r.status).toBe("ok");
+    } finally { process.env.PATH = old; }
+  });
+
+  test("主.次不匹配（登记 2.3.x，实测 2.2.5）→ warn", () => {
+    const { dir } = fakeBin("2.2.5");
+    const old = process.env.PATH;
+    process.env.PATH = `${dir}:${old}`;
+    try {
+      const r = deps.check({ id: "host_cli:fakehost@2.3.x", kind: "host_cli", version: "2.3.x", role: "required" });
+      expect(r.status).toBe("warn");
+    } finally { process.env.PATH = old; }
+  });
+
   test("版本不符 → warn", () => {
     const { dir } = fakeBin("2.2.5");
     const old = process.env.PATH;

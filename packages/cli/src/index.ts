@@ -117,10 +117,15 @@ function delegatePersonaCommand(name: string, args: string[], opts: { onlyExtern
       : c.runtime === "bun" ? "bun"
       : (typeof (globalThis as any).Bun !== "undefined" ? "bun" : "node");
     const argv = isBash ? [entry, ...args] : [entry, name, ...args];
-    const r = spawnSync(runtime, argv, {
-      stdio: "inherit",
-      env: { ...process.env, ...scope.scopeEnv(sc, c.env ?? {}) },
-    });
+    const env = { ...process.env, ...scope.scopeEnv(sc, c.env ?? {}) };
+    // 写操作必须落在**源码仓**，不能写进生效快照（kb claims/baseline 支持 YAN_REPO_DIR）：
+    // 快照被写 → persona.verify 哈希漂移（gaps.md:179 的反复假红）。
+    try {
+      const lock = JSON.parse(readFileSync(join(sc.dir, "dia.lock"), "utf8"));
+      const src = String(lock.source || "");
+      if (src && !src.startsWith("git+") && !/^https?:/.test(src)) env.YAN_REPO_DIR = resolvePath(src);
+    } catch { /* 无 lock/无 source（git 安装）时保持原行为 */ }
+    const r = spawnSync(runtime, argv, { stdio: "inherit", env });
     if (r.error) { err(`E_DELEGATE: ${name}: ${r.error.message}`); return 31; }
     return r.status ?? 1;
   }

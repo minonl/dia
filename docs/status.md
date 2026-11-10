@@ -91,6 +91,7 @@
 | D0.21 | worktree 抽取 `packages/wt` | **完成** | 7 处 python→node；`dia wt`；4 套测试原样迁移全绿 |
 | D0.23 | doctor 平台版本自检 | **完成** | `platform:opencode` / `platform:dsh` 报版本（缺宿主 = warn，不判红）；`tests/active-doctor.test.ts` |
 | D0.44 | 配置迁移走 LLM 任务 | **完成** | `docs/migrations/llm-migration.md`：升级只改声明；迁移=任务+判据+回滚；禁止代码里堆版本分支（安全敏感/原子场景例外） |
+| D0.82 | persona update 全 host 重渲染；冲突提示 --force | **完成** | `update()` 不再用 `rendered[0]` 推断单 host（多 host 的 dsh profile 以前永不刷新）；`E_CONFLICT` 文案补「--force 覆盖，先备份」；测试：opencode+dsh 双 host 更新 |
 | D0.81 | webhook 实测 + dsh 插件健壮性 | **完成** | webhook：修 `spawnSync` 缺失、channel 标注 `webhook`，本地 HTTP 服务端实测 2xx/不可达两态；dsh 安装器支持空 patch 层 `[]`（headless 默认），否则 YAML 双顶层节点解析失败；插件拆出纯函数 `board.js` 并加单测 |
 | D0.80 | msg 自动维护 + 回执口径 | **完成** | `msg-upkeep` 定时（`dia collab enable` 注册，300s：retry+escalate；disable 一并卸载）；`dia msg upkeep` 手动入口；SKILL 更新（`msg inbox --expose`/`seen`、`notified=` 语义、trace/stats、`--session`）；kit `dia-msg@0.2.1` |
 | D0.79 | dsh 版 dia-inbox 插件 + 安装器 | **完成** | `kits/dia-msg/dsh/dia-inbox`（`systemPrompt.context` 注入未读行，只读 board、失败静默）；`dia msg dsh install --profile <p>`（默认 dry-run；复制 → `dsh plugin add` → 追加 cordis.patch.yml → `--dump-config` 校验，改前备份）；测试 3 例 |

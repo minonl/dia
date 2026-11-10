@@ -40,7 +40,7 @@ function msgFiles(id: string): string[] {
 describe("dia msg push", () => {
   test("无 pane → mailbox-only，不调用 tmux", () => {
     session("ses_a");
-    const r = run(["msg", "send", "--to", "ses_a", "--from", "ses_b", "--subject", "hi"]);
+    const r = run(["msg", "send", "--to", "ses_a", "--session", "ses_b", "--subject", "hi"]);
     if (r.status !== 0) console.error("SEND FAILED:", r.status, r.stdout, r.stderr);
     expect(r.status).toBe(0);
     expect(r.stdout).toContain("notified=mailbox-only(no-pane)");
@@ -49,7 +49,7 @@ describe("dia msg push", () => {
 
   test("有 pane + 回读命中 → notified=tmux，写 inject.verified 事件", () => {
     session("ses_a", "%1");
-    const r = run(["msg", "send", "--to", "ses_a", "--from", "ses_b", "--subject", "hi"], { FAKE_TMUX_SCENARIO: "idle" });
+    const r = run(["msg", "send", "--to", "ses_a", "--session", "ses_b", "--subject", "hi"], { FAKE_TMUX_SCENARIO: "idle" });
     expect(r.status).toBe(0);
     expect(r.stdout).toContain("notified=tmux");
     const ev = readFileSync(join(root, "collab", "events", new Date().toISOString().slice(0, 7) + ".jsonl"), "utf8");
@@ -58,7 +58,7 @@ describe("dia msg push", () => {
 
   test("忙 → mailbox-only(E_BUSY) 且从未 paste", () => {
     session("ses_a", "%1");
-    const r = run(["msg", "send", "--to", "ses_a", "--from", "ses_b", "--subject", "hi"], { FAKE_TMUX_SCENARIO: "busy" });
+    const r = run(["msg", "send", "--to", "ses_a", "--session", "ses_b", "--subject", "hi"], { FAKE_TMUX_SCENARIO: "busy" });
     expect(r.stdout).toContain("notified=mailbox-only(E_BUSY)");
     const calls = existsSync(log) ? readFileSync(log, "utf8") : "";
     expect(calls).not.toContain("paste-buffer");
@@ -66,7 +66,7 @@ describe("dia msg push", () => {
 
   test("回读失败 → E_INJECT_UNVERIFIED，消息仍 pending", () => {
     session("ses_a", "%1");
-    const r = run(["msg", "send", "--to", "ses_a", "--from", "ses_b", "--subject", "hi"], { FAKE_TMUX_SCENARIO: "no-readback", DIA_TMUX_INJECT_TIMEOUT_MS: "300" });
+    const r = run(["msg", "send", "--to", "ses_a", "--session", "ses_b", "--subject", "hi"], { FAKE_TMUX_SCENARIO: "no-readback", DIA_TMUX_INJECT_TIMEOUT_MS: "300" });
     expect(r.stdout).toContain("notified=mailbox-only(E_INJECT_UNVERIFIED)");
     const id = r.stdout.split("\t")[0];
     const shown = JSON.parse(run(["show", id, "--json"]).stdout);

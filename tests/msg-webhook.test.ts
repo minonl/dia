@@ -23,15 +23,16 @@ beforeEach(async () => {
   // 独立进程做服务端（in-process 会被 spawnSync 阻塞，5s 超时）
   const port = 18800 + Math.floor(Math.random() * 100);
   url = `http://127.0.0.1:${port}/`;
-  srv = spawn("python3", ["-c", `
-import http.server
-class H(http.server.BaseHTTPRequestHandler):
-    def do_POST(self):
-        n=int(self.headers.get('content-length',0)); open(${JSON.stringify(log)},'a').write(self.rfile.read(n).decode()+"\\n")
-        self.send_response(200); self.end_headers(); self.wfile.write(b'ok')
-    def log_message(self,*a): pass
-http.server.HTTPServer(('127.0.0.1',${port}),H).serve_forever()
-`], { stdio: "ignore" });
+  // 独立 bun 进程做服务端（in-process 会被 spawnSync 阻塞；python3 在部分 CI 镜像不可用）
+  const script = `
+    const http = require("node:http");
+    const fs = require("node:fs");
+    http.createServer((req, res) => {
+      let b = ""; req.on("data", (c) => b += c);
+      req.on("end", () => { fs.appendFileSync(process.env.WH_LOG, b + "\\n"); res.writeHead(200); res.end("ok"); });
+    }).listen(Number(process.env.WH_PORT), "127.0.0.1");
+  `;
+  srv = spawn(process.execPath, ["-e", script], { stdio: "ignore", env: { ...process.env, WH_PORT: String(port), WH_LOG: log } });
   for (let i = 0; i < 50; i++) {
     const p = spawnSync("curl", ["-s", "-o", "/dev/null", url]);
     if (p.status === 0) break;

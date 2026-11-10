@@ -18,6 +18,7 @@ import * as observer from "../../../src/observer.ts";
 import * as seats from "../../../src/seats.ts";
 import { buildNext } from "../../../src/graph-next.ts";
 import * as defaultMsg from "../../../src/default-msg.ts";
+import * as msgEvents from "../../../src/msg-events.ts";
 import * as paths from "../../../src/paths.ts";
 import * as agents from "../../../src/agents.ts";
 import * as tmux from "../../../src/tmux.ts";
@@ -810,6 +811,54 @@ async function msgCli(argv: string[]): Promise<number> {
   const asJson = has(args, "--json");
   const looksSession = (s?: string) => !!s && /^ses_[A-Za-z0-9]+$/.test(s);
   // v2 兼容入口：显式 --to / 位置参数是 session id 时走会话级 collab；旧 agent 名路径保持原样。
+  if (sub === "escalate" && has(args, "--due")) {
+    const due = collab.escalateDue();
+    if (asJson) { out(JSON.stringify({ escalated: due }, null, 1)); return 0; }
+    if (!due.length) out("(nothing due)");
+    for (const d of due) out(`${d.id}\t${d.session}\tage=${Math.round(d.age_ms / 60000)}min`);
+    return 0;
+  }
+  if (sub === "retry") {
+    const r = collab.retryDue();
+    if (asJson) { out(JSON.stringify({ retried: r }, null, 1)); return 0; }
+    if (!r.length) out("(nothing to retry)");
+    for (const x of r) out(`${x.id}\t${x.session}\tnotified=${x.channel}${x.reason ? `(${x.reason})` : ""}`);
+    return 0;
+  }
+  if (sub === "trace") {
+    const id = positional(args)[0];
+    if (!id) { err("usage: dia msg trace <id> [--json]"); return 2; }
+    const rows = msgEvents.timeline(id);
+    if (asJson) { out(JSON.stringify({ id, events: msgEvents.forMessage(id), timeline: rows }, null, 1)); return 0; }
+    if (!rows.length) { out(`(no events for ${id})`); return 1; }
+    for (const r of rows) out(`${r.ts}  +${r.delta_ms}ms  ${r.event}${r.detail ? `  ${r.detail}` : ""}`);
+    return 0;
+  }
+  if (sub === "stats") {
+    const since = flag(args, "--since");
+    const st = collab.messageStats({ since });
+    const sinceMs = (() => {
+      if (!since) return 7 * 86400000;
+      const m = /^(\d+)([dhm])$/.exec(since.trim());
+      return m ? Number(m[1]) * ({ d: 86400000, h: 3600000, m: 60000 }[m[2] as "d" | "h" | "m"]) : undefined;
+    })();
+    const inj = msgEvents.injectStats(sinceMs);
+    if (asJson) { out(JSON.stringify({ ...st, inject: inj }, null, 1)); return 0; }
+    const f = (v: number | null | undefined) => v === null || v === undefined ? "-" : String(v);
+    out(`cohort total=${st.cohort.total}  delivered=${f(st.cohort.delivered_rate)}  exposed=${f(st.cohort.exposed_rate)}  ack=${f(st.cohort.ack_rate)}  reply=${f(st.cohort.reply_rate)}`);
+    out(`  inject=${f(inj.rate)}（attempted=${inj.attempted} verified=${inj.verified}）`);
+    out(`  deliver_lag median=${f(st.cohort.deliver_lag_ms.median)}ms  reply_latency median=${f(st.cohort.reply_latency_ms.median)}ms（censored=${st.cohort.reply_latency_ms.censored}）`);
+    out(`backlog=${st.backlog.count}  oldest=${st.backlog.oldest_age_ms}ms  orphan=${st.backlog.orphan}`);
+    return 0;
+  }
+  if (sub === "seen") {
+    const ids = positional(args);
+    if (!ids.length) { err("usage: dia msg seen <id…>"); return 2; }
+    const sid = collab.resolveSessionId(undefined);
+    const n = collab.markExposed(sid, ids);
+    out(asJson ? JSON.stringify({ session: sid, exposed: n }, null, 1) : `exposed ${n}/${ids.length}（${sid}）`);
+    return 0;
+  }
   if (sub === "send") {
     const toFlag = flag(args, "--to");
     const pos = positional(args)[0];
@@ -964,7 +1013,7 @@ async function msgCli(argv: string[]): Promise<number> {
     if (m.startsWith("E_USAGE") || m.startsWith("E_SESSION") || m.startsWith("E_NO_SESSION") || m.startsWith("E_LEGACY") || m.startsWith("E_KIND")) return 2;
     return 31;
   }
-  err("usage: dia msg send|inbox|ack|delivered|reply|thread|escalate|agents");
+  err("usage: dia msg send|inbox|ack|delivered|reply|thread|escalate|agents|trace|stats|seen|retry");
   return 2;
 }
 
@@ -1323,7 +1372,8 @@ async function collabCli(argv: string[]): Promise<number> {
       const overlaps = claims.list({}).filter((c) => touchPaths.includes(c.path) && c.holder !== m.from.session_id);
       if (asJson) out(JSON.stringify(overlaps.length ? { ...m, claim_overlaps: overlaps } : m, null, 1));
       else {
-        out(`${m.id}\t${m.thread_id}#${m.seq}\t${m.from.session_id} → ${m.to.session_id}\t${m.kind}\t${m.subject}`);
+        const nt = m.notify ? `\tnotified=${m.notify.channel}${m.notify.reason ? `(${m.notify.reason})` : ""}` : "";
+        out(`${m.id}\t${m.thread_id}#${m.seq}\t${m.from.session_id} → ${m.to.session_id}\t${m.kind}\t${m.subject}${nt}`);
         for (const c of overlaps) out(`  ⚠ claim overlap: ${c.path} 由 ${c.holder} 持有（${c.reason || "no reason"}）`);
       }
       return 0;

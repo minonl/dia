@@ -91,6 +91,7 @@
 | D0.21 | worktree 抽取 `packages/wt` | **完成** | 7 处 python→node；`dia wt`；4 套测试原样迁移全绿 |
 | D0.23 | doctor 平台版本自检 | **完成** | `platform:opencode` / `platform:dsh` 报版本（缺宿主 = warn，不判红）；`tests/active-doctor.test.ts` |
 | D0.44 | 配置迁移走 LLM 任务 | **完成** | `docs/migrations/llm-migration.md`：升级只改声明；迁移=任务+判据+回滚；禁止代码里堆版本分支（安全敏感/原子场景例外） |
+| D0.78 | dia msg 可靠性：事件流 + 收据 + push | **完成** | `src/msg-events.ts`（append-only）；`dia msg trace/stats/seen`；`stats` 加 inject_rate；`send` 有 pane 尽力注入（5s，busy/未验证不阻断，输出 `notified=`）；`retry --due`/`escalate --due`；webhook transport（`DIA_MSG_WEBHOOK_URL`）；`doctor collab.inbox`；fake-tmux e2e |
 | D0.76 | 沙箱永不污染真定时 | **完成** | `ensureJob` 对「数据根/DIA_HOME/job 根任一在 tmp」直接拒绝注册；`DIA_JOB_NO_LAUNCHD=1` 时 plist 落 job 根内（绝不写 `~/Library/LaunchAgents`）；注册在但 plist 缺失（periodic）→ doctor warn；split-brain 增加「plist 指向临时路径」fail |
 | D0.75 | job 根双份收敛 | **完成** | `jobRootResolved` 沙箱永不回退 legacy；`dia-job` 目录缺失不再静默换根；`job install` 拒绝临时根注册（`E_JOB_ROOT_EPHEMERAL`）；uninstall 校验 plist 归属（防误删另一根）；`dia job migrate --from … [--dry-run]` 逐条重建+校验+清旧；doctor 新增 `job.root`（split-brain fail / 旧根残留 warn） |
 | D0.74 | collab enable 顺带首刷 board | **完成** | enable 在注册/校正定时后立即 `observe` 一次，board.interval_s 当场对齐 job（否则要等 300s，doctor 先报不一致）；测试覆盖 |

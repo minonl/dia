@@ -1333,7 +1333,7 @@ async function collabCli(argv: string[]): Promise<number> {
       if (!to) { err("usage: dia out --to <session_id> --subject S (--body B|--body-file F) [--kind K]"); return 2; }
       const kind = (flag(args, "--kind") || "notify") as collab.Kind;
       const requiresReply = has(args, "--requires-reply") ? true : undefined;
-      const senderId = collab.resolveSessionId(session);
+      const senderId = collab.resolveSessionId(flag(args, "--from") || session);
       const baseInfo = (() => {
         try {
           const tasks = task.list();

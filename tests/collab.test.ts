@@ -20,6 +20,22 @@ const json = (s: string) => JSON.parse(s);
 
 beforeAll(() => { root = mkdtempSync(join(tmpdir(), "dia-collab-")); });
 
+describe("whoami 保留 pane 绑定", () => {
+  test("外部再跑 whoami（无 TMUX_PANE）不清掉已有 pane", () => {
+    const home = mkdtempSync(join(tmpdir(), "dia-pane-keep-"));
+    const env = { ...process.env, DIA_ROOT: home, DIA_HOME: home, TMUX_PANE: "" };
+    const sdir = join(home, "collab", "sessions"); mkdirSync(sdir, { recursive: true });
+    writeFileSync(join(sdir, "ses_p.json"), JSON.stringify({
+      schema: 1, session_id: "ses_p", host: "opencode", display_name: "p", cwd: "/tmp",
+      started_at: new Date().toISOString(), last_seen: new Date().toISOString(),
+      capabilities: ["msg:v2"], address: "session:ses_p", pane: "%9", pane_pid: "1", pane_cwd: "/tmp",
+    }));
+    const r = spawnSync("bun", [cli, "whoami", "--session", "ses_p"], { encoding: "utf8", env });
+    expect(r.status).toBe(0);
+    expect(JSON.parse(readFileSync(join(sdir, "ses_p.json"), "utf8")).pane).toBe("%9");
+  });
+});
+
 describe("dia collab M0：会话身份与送达", () => {
   test("whoami 解析 --session 并注册两个不同会话", () => {
     const a = json(run(["whoami", "--json"], "ses_a").stdout);

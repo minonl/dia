@@ -9,6 +9,7 @@ case "$cmd" in
     case "$*" in
       *pane_in_mode*) echo 0 ;;
       *pane_current_path*) echo "${FAKE_TMUX_CWD:-/tmp}" ;;
+      *pane_current_command*) echo "${FAKE_TMUX_CMD:-opencode}" ;;
       *) echo "" ;;
     esac ;;
   capture-pane)

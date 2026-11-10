@@ -263,7 +263,7 @@ export function renderContent(
   baseDir: string,
   targetDir: string,
   m: ContentFields,
-  opts: { dryRun?: boolean; force?: boolean } = {},
+  opts: { dryRun?: boolean; force?: boolean; owned?: Set<string> } = {},
 ): RenderedEntry[] | null {
   type Plan = { entry: RenderedEntry; dest: string; linkTarget?: string; content?: string };
   const plans: Plan[] = [];
@@ -291,7 +291,8 @@ export function renderContent(
   const dirs = (m.dirs ?? []).map((d) => assertInsideHome(d));
 
   // 冲突检查：写盘前全部过一遍，避免半装；--force 时备份后覆盖
-  const backupDir = opts.force ? join(dataDir(), "backups", `force-${new Date().toISOString().replace(/[:.]/g, "-")}`) : "";
+  const backupDir = opts.force || opts.owned?.size ? join(dataDir(), "backups", `force-${new Date().toISOString().replace(/[:.]/g, "-")}`) : "";
+  const allowedByOwnership = (dest: string) => Boolean(opts.owned?.has(dest));
   for (const p of plans) {
     let conflict = false;
     try {
@@ -302,7 +303,8 @@ export function renderContent(
       }
     } catch { conflict = true; }
     if (!conflict) continue;
-    if (!opts.force) {
+    // force 或「上一版 lock 记录过的托管产物」→ 允许覆盖（都会先备份）
+    if (!opts.force && !allowedByOwnership(p.dest)) {
       if (p.entry.type === "file") throw new Error(`E_CONFLICT: ${p.dest} exists and differs`);
       throw new Error(`E_CONFLICT: ${p.dest} exists and is not managed`);
     }

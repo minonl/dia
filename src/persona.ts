@@ -160,7 +160,7 @@ function hashTree(root: string): string {
   return h.digest("hex");
 }
 
-export function install(from: string, opts: { ref?: string; host?: string; home?: string; dryRun?: boolean; force?: boolean } = {}): Installed {
+export function install(from: string, opts: { ref?: string; host?: string; home?: string; dryRun?: boolean; force?: boolean; ownedFrom?: string } = {}): Installed {
   const src = resolveSource(from, opts.ref);
   const m = readManifest(src.dir);
   if (m.kind !== "persona") throw new Error("E_MANIFEST: not a persona");
@@ -171,6 +171,18 @@ export function install(from: string, opts: { ref?: string; host?: string; home?
   for (const h of hosts) assertHost(h);
   const rendered: string[] = [];
   const overwrites: string[] = [];
+
+  // 升级（update 传入 ownedFrom）时：上一版 lock 记录过的渲染产物 = dia 托管，
+  // 内容变化属于正常升级 → 可覆盖（先备份）。普通 add/重装不带 ownedFrom，仍按冲突拒绝（保护手改）。
+  const ownedRendered = new Set<string>();
+  if (opts.ownedFrom) {
+    try {
+      const prevDir = join(dataDir(), "personas", m.id, opts.ownedFrom);
+      const prevLock = JSON.parse(readFileSync(join(prevDir, "dia.lock"), "utf8"));
+      for (const p of Object.keys(prevLock.renderedHashes ?? {})) ownedRendered.add(resolve(p));
+      for (const p of prevLock.rendered ?? []) ownedRendered.add(resolve(p));
+    } catch { /* 无 lock：按首次安装 */ }
+  }
 
   // 先检查宿主冲突，避免破坏已安装目录
   const entry = hosts.includes("opencode") ? m.entry?.opencode : undefined;
@@ -185,7 +197,7 @@ export function install(from: string, opts: { ref?: string; host?: string; home?
     const dest = join(opencodeAgents(), `${m.id}.md`);
     if (existsSync(dest) && !readFileSync(dest).equals(readFileSync(entryAbs))) {
       // 手改/旧版本的产物：默认拒绝；--force 才覆盖，且覆盖前先备份（覆盖不丢东西）
-      if (!opts.force) throw new Error("E_CONFLICT: agent file exists and differs; remove it first (或 --force 覆盖，覆盖前会备份)");
+      if (!opts.force && !ownedRendered.has(resolve(dest))) throw new Error("E_CONFLICT: agent file exists and differs; remove it first (或 --force 覆盖，覆盖前会备份)");
       overwrites.push(dest);
     }
   }
@@ -322,7 +334,7 @@ export function install(from: string, opts: { ref?: string; host?: string; home?
   // persona 自带内容（内联 kit 语义）：baseDir = target，链接指向 persona 树自身
   // codex-only persona 的 skills 由下面的 codex 分支落到假 HOME；不要同时链到真实 ~/.agents/skills
   const inlineManifest = hosts.some((h) => h === "opencode" || h === "dsh") ? m : { ...m, skills: [] };
-  const inline = [...(kit.renderContent(target, target, inlineManifest, { force: opts.force }) ?? []), ...codexLinks];
+  const inline = [...(kit.renderContent(target, target, inlineManifest, { force: opts.force, owned: ownedRendered }) ?? []), ...codexLinks];
   const appliedConfig = config.apply((m.config ?? []) as any);
 
   // kits：包内相对路径，装完树后逐个分发（内容归 kit，人格只引用）
@@ -1043,7 +1055,7 @@ export function update(id: string, opts: { ref?: string; force?: boolean } = {})
   const lock = JSON.parse(readFileSync(join(idDir, cur, "dia.lock"), "utf8"));
   if (!lock.source) throw new Error("E_SOURCE: 该 persona 由本地目录安装，无法 update（重新 persona add）");
   // 不传 host：按 manifest 的 hosts 全量重渲染（旧实现用 rendered[0] 推断 host → 多 host 的 dsh profile 永不刷新）
-  const r = install(lock.source, { ref: opts.ref ?? lock.ref ?? undefined, force: opts.force });
+  const r = install(lock.source, { ref: opts.ref ?? lock.ref ?? undefined, force: opts.force, ownedFrom: cur });
   const u = active.use(id, r.version, { reason: `update from ${lock.source}` });
   return { installed: r, previous: u.previous };
 }

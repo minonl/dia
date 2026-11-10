@@ -36,6 +36,15 @@ describe("dia msg dsh install", () => {
     expect(existsSync(join(dshHome, "profiles", "demo", "cordis.patch.yml"))).toBe(false);
   });
 
+  test("空 patch 层 [] → 整体替换为 insert（不产生两个顶层节点）", () => {
+    writeFileSync(join(dshHome, "profiles", "demo", "cordis.patch.yml"), "# comment\n[]\n");
+    const r = run(["msg", "dsh", "install", "--profile", "demo"]);
+    expect(r.status).toBe(0);
+    const patch = readFileSync(join(dshHome, "profiles", "demo", "cordis.patch.yml"), "utf8");
+    expect(patch).not.toMatch(/\[\]/);
+    expect(patch).toContain("id: dia-inbox");
+  });
+
   test("install 复制插件 + 追加 patch（幂等）", () => {
     writeFileSync(join(dshHome, "profiles", "demo", "cordis.patch.yml"), "- insert: []\n");
     const r = run(["msg", "dsh", "install", "--profile", "demo"]);

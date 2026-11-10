@@ -32,6 +32,13 @@ export function patchSnippet(): string {
 /** 幂等追加：已包含 `id: dia-inbox` 就原样返回。 */
 export function applyPatch(yaml: string): string {
   if (yaml.includes(MANAGED_BEGIN)) return yaml;
+  // 空 patch 层（shipped profile 的默认 `[]`，可能重复出现）：整体替换为 insert；
+  // 直接追加会变成「两个顶层节点」→ YAML 解析失败（实测 headless）
+  const meaningful = yaml.split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
+  if (meaningful.length === 0 || meaningful.every((l) => l === "[]")) {
+    const comments = yaml.split("\n").filter((l) => l.trim().startsWith("#")).join("\n");
+    return `${comments ? comments + "\n" : ""}${patchSnippet()}`;
+  }
   const sep = yaml.endsWith("\n") ? "" : "\n";
   return `${yaml}${sep}\n${patchSnippet()}`;
 }

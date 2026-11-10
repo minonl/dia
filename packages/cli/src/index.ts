@@ -19,6 +19,7 @@ import * as seats from "../../../src/seats.ts";
 import { buildNext } from "../../../src/graph-next.ts";
 import * as defaultMsg from "../../../src/default-msg.ts";
 import * as msgEvents from "../../../src/msg-events.ts";
+import * as msgDsh from "../../../src/msg-dsh.ts";
 import * as paths from "../../../src/paths.ts";
 import * as agents from "../../../src/agents.ts";
 import * as tmux from "../../../src/tmux.ts";
@@ -825,6 +826,20 @@ async function msgCli(argv: string[]): Promise<number> {
     for (const x of r) out(`${x.id}\t${x.session}\tnotified=${x.channel}${x.reason ? `(${x.reason})` : ""}`);
     return 0;
   }
+  if (sub === "dsh") {
+    const act = positional(args)[0] || "check";
+    const profile = flag(args, "--profile");
+    const r = msgDsh.install({ profile, dryRun: act !== "install" || has(args, "--dry-run") });
+    if (asJson) out(JSON.stringify(r, null, 1));
+    else {
+      out(`profile=${r.profile || "-"}  plugin=${r.pluginDir}`);
+      out(`  源：${msgDsh.pluginSource()}`);
+      if (r.error) out(`  ! ${r.error}`);
+      else if (!r.applied) { out("  计划："); for (const s of r.steps) out(`   - ${s}`); out(`  patch 片段：\n${r.snippet}`); }
+      else out(`  完成：${r.steps.join(" → ")}`);
+    }
+    return r.error ? 1 : 0;
+  }
   if (sub === "trace") {
     const id = positional(args)[0];
     if (!id) { err("usage: dia msg trace <id> [--json]"); return 2; }
@@ -1014,7 +1029,7 @@ async function msgCli(argv: string[]): Promise<number> {
     if (m.startsWith("E_USAGE") || m.startsWith("E_SESSION") || m.startsWith("E_NO_SESSION") || m.startsWith("E_LEGACY") || m.startsWith("E_KIND")) return 2;
     return 31;
   }
-  err("usage: dia msg send|inbox|ack|delivered|reply|thread|escalate|agents|trace|stats|seen|retry");
+  err("usage: dia msg send|inbox|ack|delivered|reply|thread|escalate|agents|trace|stats|seen|retry|dsh");
   return 2;
 }
 

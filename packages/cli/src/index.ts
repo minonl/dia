@@ -885,6 +885,8 @@ async function msgCli(argv: string[]): Promise<number> {
   }
   // 无位置参数（或显式 --session）时走 v2 收件箱：doctor/SKILL 都只教 `dia msg inbox --unread`
   if (sub === "inbox" && (flag(args, "--session") || positional(args).length === 0)) return collabCli(["in", ...args]);
+  // ack/reply/close/show 带 --session 时同样走 v2：v1 要求 <agent> <id>，而 agent 不该知道 v1 存储
+  if (["ack", "reply", "close", "show"].includes(sub) && flag(args, "--session")) return collabCli([sub, ...args]);
   const refs: Record<string, string> = {};
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--ref" && args[i + 1]) { const [k, ...v] = args[i + 1].split("="); if (k && v.length) refs[k] = v.join("="); i++; }

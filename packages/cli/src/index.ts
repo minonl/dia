@@ -868,7 +868,8 @@ async function msgCli(argv: string[]): Promise<number> {
       return collabCli(["out", "--to", to, ...rest]);
     }
   }
-  if (sub === "inbox" && flag(args, "--session")) return collabCli(["in", ...args]);
+  // 无位置参数（或显式 --session）时走 v2 收件箱：doctor/SKILL 都只教 `dia msg inbox --unread`
+  if (sub === "inbox" && (flag(args, "--session") || positional(args).length === 0)) return collabCli(["in", ...args]);
   const refs: Record<string, string> = {};
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--ref" && args[i + 1]) { const [k, ...v] = args[i + 1].split("="); if (k && v.length) refs[k] = v.join("="); i++; }
@@ -1326,6 +1327,8 @@ async function collabCli(argv: string[]): Promise<number> {
         if (pending.length) collab.markDeliveredBatch(sid, pending);
       }
       if (has(args, "--expose") && before.length) collab.markExposed(sid, before.map((m) => m.id));
+      // 记录「本机跑过收件箱」：doctor 用它区分「没人开工」与「读了但没读这条」
+      msgEvents.log({ event: "inbox.checked", msg_id: "-", actor: sid, latency_ms: before.length });
       return 0;
     }
     if (sub === "out") {

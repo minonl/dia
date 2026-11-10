@@ -70,6 +70,7 @@ backlog=4（oldest 3.7d，orphan=2）
 | `read.observed` | by=`dia in` pid | 接收方 CLI 真的输出过 |
 | `context.exposed` | by=hook turn_id / `--expose` | 进了模型上下文（**最强收据**） |
 | `acked` / `replied` / `closed` | actor, body_hash | 人/agent 自述（唯一权威的「已处理」） |
+| `inbox.checked` | actor, latency_ms=本次条数 | 本机跑过收件箱（doctor 用它区分「没人开工」） |
 | `deliver.uncertain` | reason, last_known | 状态未知本身是事实 |
 
 ### 2.2 状态机

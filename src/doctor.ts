@@ -234,7 +234,7 @@ function collabInboxCheck(): Check {
     const st = collab.messageStats({});
     if (!st.backlog.count) return { name, status: "ok", detail: "无未读积压" };
     const since = Date.now() - 24 * 3600_000;
-    const reads = msgEvents.readAll().filter((e) => e.event === "read.observed" && Date.parse(e.ts) >= since);
+    const reads = msgEvents.readAll().filter((e) => (e.event === "read.observed" || e.event === "inbox.checked") && Date.parse(e.ts) >= since);
     if (reads.length) return { name, status: "ok", detail: `backlog=${st.backlog.count}，24h 内有 ${reads.length} 次读取` };
     return { name, status: "warn", detail: `backlog=${st.backlog.count}（最早 ${Math.round(st.backlog.oldest_age_ms / 3600000)}h）且 24h 无任何读取；开工先 \`dia msg inbox --unread\`` };
   } catch { return { name, status: "ok", detail: "collab 未启用（跳过）" }; }

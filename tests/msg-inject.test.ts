@@ -64,6 +64,14 @@ describe("dia msg push", () => {
     expect(calls).not.toContain("paste-buffer");
   });
 
+  test("pane 前台是 shell → E_NOT_DIA（绝不往 shell 里打字）", () => {
+    session("ses_a", "%1");
+    const r = run(["msg", "send", "--to", "ses_a", "--session", "ses_b", "--subject", "hi"], { FAKE_TMUX_CMD: "zsh" });
+    expect(r.stdout).toContain("notified=mailbox-only(E_NOT_DIA(zsh))");
+    const calls = existsSync(log) ? readFileSync(log, "utf8") : "";
+    expect(calls).not.toContain("paste-buffer");
+  });
+
   test("回读失败 → E_INJECT_UNVERIFIED，消息仍 pending", () => {
     session("ses_a", "%1");
     const r = run(["msg", "send", "--to", "ses_a", "--session", "ses_b", "--subject", "hi"], { FAKE_TMUX_SCENARIO: "no-readback", DIA_TMUX_INJECT_TIMEOUT_MS: "300" });

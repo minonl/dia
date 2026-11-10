@@ -24,7 +24,7 @@ export function paneTail(pane: string, lines = 8): string {
 export function isBusy(pane: string): boolean {
   const inMode = (() => { try { return tmux(["display-message", "-p", "-t", pane, "#{pane_in_mode}"]); } catch { return "0"; } })();
   if (inMode === "1") return true;
-  const tail = paneTail(pane, 10);
+  const tail = paneTail(pane, 5);
   return /esc to interrupt|esc·to·interrupt|Thinking|Working…|running…/i.test(tail);
 }
 
@@ -93,6 +93,12 @@ export function pushPointer(pane: string, msg: { id: string; subject: string; se
   try {
     const info = tmux(["display-message", "-p", "-t", pane, "#{pane_current_path}"]);
     if (!info) return { ok: false, code: "E_OFFLINE" };
+  } catch { return { ok: false, code: "E_OFFLINE" }; }
+  // 前台必须是「agent 进程」：注入到 shell 会被当命令执行（实测 zsh: bad pattern）
+  try {
+    const current = tmux(["display-message", "-p", "-t", pane, "#{pane_current_command}"]);
+    const allow = (process.env.DIA_TMUX_AGENT_CMDS || "opencode,dsh,codex,claude,node,bun,python,python3").split(",").map((s) => s.trim()).filter(Boolean);
+    if (!allow.includes(current)) return { ok: false, code: `E_NOT_DIA(${current})` };
   } catch { return { ok: false, code: "E_OFFLINE" }; }
   if (!opts.force && isBusy(pane)) return { ok: false, code: "E_BUSY" };
   const text = [

@@ -255,7 +255,11 @@ export function whoami(opts: { session?: string; name?: string; cwd?: string } =
       last_seen: now(),
       capabilities: ["msg:v2"],
       address: `session:${id}`,
-      ...(paneBinding() || {}),
+      // 只有本进程确实在 tmux 里才覆盖 pane 绑定；否则保留上次的（否则任意 `dia msg inbox` 都会把绑定抹掉，
+      // 实测：注册后从外部读一次收件箱，push 就退化成 no-pane）
+      ...(paneBinding() || {
+        pane: prev?.pane, pane_pid: prev?.pane_pid, pane_start: prev?.pane_start, pane_cwd: prev?.pane_cwd,
+      }),
     };
     writeAtomic(sessionFile(id), JSON.stringify(rec, null, 1) + "\n");
     return rec;

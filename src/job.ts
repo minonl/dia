@@ -58,7 +58,9 @@ export function readJobPin(): { root: string; at?: string } | null {
 
 /** 落钉（幂等）：记录当前权威根；临时根不落钉。 */
 export function pinJobRoot(root = paths.jobRoot()): void {
-  if (isEphemeralPath(root)) return;
+  // 沙箱根默认不落钉；显式指定了根（测试/多 profile）或 escape hatch 才写
+  const explicit = Boolean(process.env.DIA_ROOT || process.env.DIA_DATA_DIR || process.env.DIA_JOB_ROOT);
+  if (isEphemeralPath(root) && !explicit && process.env.DIA_JOB_ALLOW_EPHEMERAL !== "1") return;
   try {
     mkdirSync(dirname(jobPinFile()), { recursive: true });
     writeFileSync(jobPinFile(), JSON.stringify({ root: resolve(root), at: new Date().toISOString() }, null, 1) + "\n");

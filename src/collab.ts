@@ -6,6 +6,7 @@
 import {
   closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync,
 } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
@@ -69,7 +70,7 @@ export interface MessageV2 {
   /** 传输层确认注入的时间（≠ 被模型看到；exposed_at 才是） */
   injected_at?: string;
   /** 本次发送的投递结果（不持久化语义，仅返回给调用方显示） */
-  notify?: { channel: "tmux" | "mailbox-only"; reason?: string };
+  notify?: { channel: "tmux" | "webhook" | "mailbox-only"; reason?: string };
   /** 投递尝试（P2：重投/复盘用） */
   attempts?: number;
   last_attempt_at?: string;
@@ -489,7 +490,7 @@ function tryWebhook(msg: MessageV2, url: string): MessageV2 {
     if (res.status === 0 && code >= 200 && code < 300) {
       events.log({ event: "inject.verified", msg_id: msg.id, thread_id: msg.thread_id, transport: "webhook", attempt });
       recordAttempt(msg, attempt);
-      msg.notify = { channel: "tmux" as any }; // 语义：已通过外部通道叫醒
+      msg.notify = { channel: "webhook" };
       return msg;
     }
     events.log({ event: "inject.failed", msg_id: msg.id, thread_id: msg.thread_id, transport: "webhook", attempt, error_code: `E_WEBHOOK_${code || res.status}` });

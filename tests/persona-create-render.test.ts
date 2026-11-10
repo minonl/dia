@@ -111,6 +111,19 @@ describe("persona render", () => {
     persona.remove("rbot");
   });
 
+  test("cordis.patch.yml 的 dia 管理块：render 保留、不算 drift", () => {
+    const src = setup();
+    const prof = join(profiles, "rbot");
+    const patchFile = join(prof, "cordis.patch.yml");
+    const before = readFileSync(patchFile, "utf8");
+    writeFileSync(patchFile, before + "# >>> dia-managed:dia-inbox\n- insert:\n    - id: dia-inbox\n      name: '@dia/dsh-inbox'\n# <<< dia-managed:dia-inbox\n");
+    expect(persona.render("rbot", { check: true }).drift).toEqual([]);
+    persona.render("rbot");
+    expect(readFileSync(patchFile, "utf8")).toContain("dia-managed:dia-inbox");
+    expect(persona.render("rbot", { check: true }).drift).toEqual([]);
+    persona.remove("rbot");
+  });
+
   test("宿主改写 cordis.yml 不算 drift（dsh 运行时自写）", () => {
     setup();
     const prof = join(profiles, "rbot");

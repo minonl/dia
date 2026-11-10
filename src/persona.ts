@@ -278,9 +278,16 @@ export function install(from: string, opts: { ref?: string; host?: string; home?
     if (existsSync(dshDest) && !existsSync(join(dshDest, ".dia-managed"))) {
       throw new Error("E_CONFLICT: dsh profile exists and is not managed by dia");
     }
+    const keptBlocks = (() => {
+      try { return managedBlocks(readFileSync(join(dshDest, "cordis.patch.yml"), "utf8")); } catch { return ""; }
+    })();
     rmSync(dshDest, { recursive: true, force: true });
     mkdirSync(dshDest, { recursive: true });
     cpSync(resolve(target, dshEntry!), dshDest, { recursive: true });
+    if (keptBlocks) {
+      const f = join(dshDest, "cordis.patch.yml");
+      writeFileSync(f, readFileSync(f, "utf8").replace(/\n?$/, "\n") + keptBlocks);
+    }
     writeFileSync(join(dshDest, ".dia-managed"), JSON.stringify({ id: m.id, version: m.version }, null, 1));
     // hash 只是安装时快照（诊断用）；校验不比对它——宿主会重写自己 profile 里的文件。
     renderedDirs.push({ path: dshDest, hash: hashTree(dshDest) });
@@ -623,6 +630,17 @@ export interface RenderResult { id: string; version: string; check: boolean; dri
 // `dsh plugin --profile <id> add <pkg>` 会改 package.json 与锁文件），它们不属于渲染产物：
 // 比对时跳过、写回时不覆盖，否则 --check 永远报 drift，且 re-render 会回退宿主运行态。
 // 与 docs/persona-install.md §5.3 一致：profile 目录是宿主领地，dia 只关心自己写的字节。
+const MANAGED_BLOCK_RE = /# >>> dia-managed:[^\n]*\n[\s\S]*?# <<< dia-managed:[^\n]*\n/g;
+/** 提取宿主侧「dia 管理块」（如 dsh 插件 insert）：persona 更新时保留，不当作漂移。 */
+export function managedBlocks(text: string): string {
+  return (text.match(MANAGED_BLOCK_RE) || []).join("");
+}
+/** 期望内容 = 源文件 + 实际文件里的管理块（渲染与 compareDir 共用）。 */
+function withManagedBlocks(srcText: string, actualText: string): string {
+  const blocks = managedBlocks(actualText);
+  return blocks ? `${srcText.replace(/\n?$/, "\n")}${blocks}` : srcText;
+}
+
 const HOST_OWNED_FILES = new Set([
   "cordis.yml",
   "package.json",
@@ -639,8 +657,13 @@ function compareDir(expected: string, actual: string): RenderDrift[] {
     const rel = relative(expected, f);
     if (HOST_OWNED_FILES.has(rel)) continue;
     const dest = join(actual, rel);
-    if (!existsSync(dest)) out.push({ path: dest, action: "missing" });
-    else if (shaFile(dest) !== shaFile(f)) out.push({ path: dest, action: "changed" });
+    if (!existsSync(dest)) { out.push({ path: dest, action: "missing" }); continue; }
+    if (rel === "cordis.patch.yml") {
+      const want = withManagedBlocks(readFileSync(f, "utf8"), readFileSync(dest, "utf8"));
+      if (want !== readFileSync(dest, "utf8")) out.push({ path: dest, action: "changed" });
+      continue;
+    }
+    if (shaFile(dest) !== shaFile(f)) out.push({ path: dest, action: "changed" });
   }
   return out;
 }
@@ -737,12 +760,19 @@ export function render(id: string, opts: { host?: string; home?: string; check?:
     // 只覆盖 persona 自己写入的文件，绝不整树重建：profile 目录是宿主领地，
     // 宿主装的插件目录/改动过的 package.json 不在 drift 名单里，删掉就再也回不来。
     mkdirSync(dshDest, { recursive: true });
+    const keptBlocks = (() => {
+      try { return managedBlocks(readFileSync(join(dshDest, "cordis.patch.yml"), "utf8")); } catch { return ""; }
+    })();
     for (const f of walkFiles(dshSrc)) {
       const rel = relative(dshSrc, f);
       if (HOST_OWNED_FILES.has(rel)) continue;
       const dest = join(dshDest, rel);
       mkdirSync(dirname(dest), { recursive: true });
       cpSync(f, dest);
+    }
+    if (keptBlocks) {
+      const f = join(dshDest, "cordis.patch.yml");
+      writeFileSync(f, readFileSync(f, "utf8").replace(/\n?$/, "\n") + keptBlocks);
     }
     writeFileSync(join(dshDest, ".dia-managed"), JSON.stringify({ id, version }, null, 1));
   }

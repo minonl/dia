@@ -44,6 +44,23 @@ describe("job 根解析与门控", () => {
   });
 });
 
+describe("落钉（.rootpin）", () => {
+  test("pinJobRoot 写钉；source=pin；pin 与显式根冲突 → E_JOB_ROOT_PINNED", () => {
+    const env = { ...process.env, HOME: home, DIA_ROOT: data, DIA_JOB_ROOT: "" };
+    const r1 = spawnSync("bun", ["-e", `
+      import { pinJobRoot, readJobPin, jobRootSource, assertWritableJobRoot } from "./src/job.ts";
+      pinJobRoot();
+      console.log("SRC", jobRootSource());
+      console.log("PIN", JSON.stringify(readJobPin()));
+      process.env.DIA_JOB_ROOT = "/tmp/other-root";
+      try { assertWritableJobRoot("/tmp/other-root"); console.log("ALLOW") }
+      catch (e:any) { console.log(e.message) }
+    `], { encoding: "utf8", cwd: join(import.meta.dir, ".."), env: { ...env, DIA_ROOT: join(data, "real") } });
+    expect(r1.stdout).toContain("SRC pin");
+    expect(r1.stdout).toContain("E_JOB_ROOT_PINNED");
+  });
+});
+
 describe("dia job migrate", () => {
   test("dry-run 只列计划，不动 registry", () => {
     regTask(legacy, "demo", { type: "periodic", cmd: "echo hi", interval: "300", desc: "demo" });

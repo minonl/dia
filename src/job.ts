@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -44,11 +44,31 @@ export function dataRootPath(): string {
   return process.env.DIA_ROOT || process.env.DIA_HOME || join(homedir(), ".dia");
 }
 
-export type JobRootSource = "env" | "legacy" | "next";
+export type JobRootSource = "env" | "pin" | "legacy" | "next";
+
+/** 落钉文件：一旦存在，根就固定在新根，**永不回退 legacy**（迁移完成后由 `job install`/`migrate` 写入）。 */
+export const jobPinFile = () => join(paths.jobRoot(), ".rootpin");
+
+export function readJobPin(): { root: string; at?: string } | null {
+  try {
+    const d = JSON.parse(readFileSync(jobPinFile(), "utf8"));
+    return d?.root ? { root: String(d.root), at: d.at } : null;
+  } catch { return null; }
+}
+
+/** 落钉（幂等）：记录当前权威根；临时根不落钉。 */
+export function pinJobRoot(root = paths.jobRoot()): void {
+  if (isEphemeralPath(root)) return;
+  try {
+    mkdirSync(dirname(jobPinFile()), { recursive: true });
+    writeFileSync(jobPinFile(), JSON.stringify({ root: resolve(root), at: new Date().toISOString() }, null, 1) + "\n");
+  } catch { /* 落钉失败不影响主流程（doctor 会提示） */ }
+}
 /** 根来源：env 显式 > legacy 兼容 > 新根。沙箱（临时数据根/HOME）**永不回退 legacy**。 */
 export function jobRootSource(): JobRootSource {
   if (process.env.DIA_JOB_ROOT) return "env";
   const next = paths.jobRoot();
+  if (readJobPin()) return "pin"; // 已落钉：固定新根，永不回退 legacy
   if (isEphemeralPath(dataRootPath()) || isEphemeralPath(homedir())) return "next";
   return !existsSync(next) && existsSync(legacyJobRoot()) ? "legacy" : "next";
 }
@@ -61,6 +81,10 @@ export function jobRootResolved(): string {
 /** 写入门控：临时根 / legacy 根一律拒绝（测试用 DIA_JOB_NO_LAUNCHD=1 或 DIA_JOB_ALLOW_EPHEMERAL=1 放行）。 */
 export function assertWritableJobRoot(root = jobRootResolved()): void {
   if (process.env.DIA_JOB_ALLOW_EPHEMERAL === "1") return;
+  const pin = readJobPin();
+  if (pin && process.env.DIA_JOB_ROOT && resolve(root) !== resolve(pin.root)) {
+    throw new Error(`E_JOB_ROOT_PINNED: 已落钉到 ${pin.root}，拒绝写入 ${root}（确需切换：删 ${jobPinFile()} 或 DIA_JOB_ALLOW_EPHEMERAL=1）`);
+  }
   if (resolve(root) === resolve(legacyJobRoot())) {
     throw new Error(`E_JOB_ROOT_LEGACY: 当前解析到旧 job 根 ${root}（只读兼容）；修复：dia job migrate --from ${root}`);
   }
@@ -85,6 +109,8 @@ export function runJobCapture(argv: string[], opts: { root?: string } = {}): { s
     process.stderr.write(`dia job: ${r.error.message}\n`);
     return { status: 1, stdout: "", stderr: "" };
   }
+  // 首次成功写入即落钉：之后即使旧根还在，也不会再被 legacy fallback 抢走
+  if ((r.status ?? 1) === 0 && argv[0] === "install") pinJobRoot(opts.root || jobRootResolved());
   return { status: r.status ?? 1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 }
 

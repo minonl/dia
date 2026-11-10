@@ -261,7 +261,10 @@ export function ensureJob(desired = DEFAULT_INTERVAL_S): string | null {
       const label = String(reg.label || `local.dia-job-${NAME}`);
       const plist = join(homedir(), "Library", "LaunchAgents", `${label}.plist`);
       const backendOk = process.platform !== "darwin" || process.env.DIA_JOB_NO_LAUNCHD === "1" || existsSync(plist);
-      if (sameInterval && sameCmd && backendOk) return null;
+      if (sameInterval && sameCmd && backendOk) {
+        job.pinJobRoot(job.jobRootResolved()); // 已正确 → 顺手落钉，之后永不被 legacy 抢走
+        return null;
+      }
       // 校正：先卸载旧注册，再按当前口径重装（避免重复 label / 旧 interval 自锁）
       try { job.runJobCapture(["uninstall", NAME]); } catch { /* 旧注册不存在也无妨 */ }
     }

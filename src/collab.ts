@@ -673,6 +673,32 @@ export function reply(sessionId: string, id: string, body: string, refs?: Record
 export function close(sessionId: string, id: string, reason: string): MessageV2 {
   const why = reason as CloseReason;
   if (!CLOSE_REASONS.includes(why)) throw new Error(`E_USAGE: --reason 必须是 ${CLOSE_REASONS.join("|")}`);
+  const sid = normalizeSessionId(sessionId);
+  try {
+    return closeAsRecipient(sid, id, why);
+  } catch (e: any) {
+    if (!String(e?.message || "").startsWith("E_NOT_FOUND")) throw e;
+  }
+  // 发送方撤回：只能 dropped / duplicate / no-follow-on（done 代表处理完成，只有收件人有权说）
+  const hit = findAny(id);
+  if (!hit) throw new Error(`E_NOT_FOUND: ${id}`);
+  if (hit.msg.legacy) throw new Error(`E_LEGACY: ${id} 是迁移的旧消息，只读`);
+  if (hit.msg.from.session_id !== sid) throw new Error(`E_RECIPIENT: ${id} 不属于 ${sid}`);
+  if (!["dropped", "duplicate", "no-follow-on"].includes(why)) throw new Error(`E_USAGE: 发送方只能 --reason dropped|duplicate|no-follow-on（done 由收件人执行）`);
+  return withLock(`msg-${sid}-${id}`, () => {
+    const cur = readJson<MessageV2>(hit.path);
+    if (!cur) throw new Error(`E_NOT_FOUND: ${id}`);
+    if (cur.state === "closed") return cur;
+    cur.state = "closed";
+    cur.closure_reason = why;
+    cur.closed_at = now();
+    writeAtomic(hit.path, JSON.stringify(cur, null, 1) + "\n");
+    events.log({ event: "closed", msg_id: id, thread_id: cur.thread_id, actor: sid, from_state: cur.state, to_state: "closed", error_code: why });
+    return cur;
+  });
+}
+
+function closeAsRecipient(sessionId: string, id: string, why: CloseReason): MessageV2 {
   return mutate(sessionId, id, (m) => {
     if (m.state === "closed") {
       if (m.closure_reason === why) return;

@@ -90,7 +90,7 @@ pending → injected → exposed → acked → replied → closed
 | ACP 回合 | prompt 返回 **且** 对端有 ack/reply | 180s | 降级 mailbox-only + escalate |
 | 接收开工 | 产出 `read.observed`/`context.exposed` | 已注入未读 TTL：P0/P1 15min、P2/P3 60min | 只提示，不重注正文 |
 | requires_reply ack | `acked_at` | 30min（deadline 更早则用 deadline） | escalate 发送方 + 人 |
-| 邮箱软 TTL | 4h 未送达 → escalate；30d 归档 | — | — |
+| 邮箱软 TTL | 4h 未送达 → escalate；30d 归档 | — | `msg-upkeep` 定时（300s）执行 |
 
 每一项都可通过 `DIA_*_TIMEOUT_MS` / `DIA_MSG_ACK_TTL_MS` 覆盖，时钟可注入（单测断言用）。
 

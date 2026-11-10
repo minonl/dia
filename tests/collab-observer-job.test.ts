@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, chmodSync } from "
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { ensureJob } from "../src/observer.ts";
+import { ensureJob, ensureUpkeepJob } from "../src/observer.ts";
 
 let root: string, jobRoot: string, home: string;
 const cli = join(import.meta.dir, "..", "packages", "cli", "src", "index.ts");
@@ -88,6 +88,13 @@ describe("interval 单一事实源 = job registry", () => {
       env: { ...process.env, DIA_ROOT: root, DIA_JOB_ROOT: jobRoot, DIA_HOME: home, DIA_JOB_NO_LAUNCHD: "", DIA_JOB_ALLOW_EPHEMERAL: "" },
     });
     expect(r.stdout).toContain("E_JOB_ROOT_EPHEMERAL");
+  });
+
+  test("ensureUpkeepJob 注册 msg-upkeep（cmd=msg upkeep）", () => {
+    expect(ensureUpkeepJob()).toBeNull();
+    const reg = JSON.parse(readFileSync(join(jobRoot, "tasks", "registry.json"), "utf8")).tasks["msg-upkeep"];
+    expect(reg.interval).toBe("300");
+    expect(reg.cmd).toContain("msg upkeep");
   });
 
   test("非 60 倍数的 interval 归一为默认 300", () => {

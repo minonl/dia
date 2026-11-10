@@ -933,3 +933,11 @@ export function retryDue(opts: { now?: Date; max?: number } = {}): { id: string;
   }
   return out;
 }
+
+
+/** 定时维护入口：重投到期消息 + 超时升级（dia job 每 300s 调一次）。 */
+export function upkeep(opts: { now?: Date } = {}): { retried: ReturnType<typeof retryDue>; escalated: ReturnType<typeof escalateDue> } {
+  const retried = retryDue({ now: opts.now });
+  const escalated = escalateDue({ now: opts.now });
+  return { retried, escalated };
+}

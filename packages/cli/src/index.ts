@@ -812,6 +812,14 @@ async function msgCli(argv: string[]): Promise<number> {
   const asJson = has(args, "--json");
   const looksSession = (s?: string) => !!s && /^ses_[A-Za-z0-9]+$/.test(s);
   // v2 兼容入口：显式 --to / 位置参数是 session id 时走会话级 collab；旧 agent 名路径保持原样。
+  if (sub === "upkeep") {
+    const r = collab.upkeep();
+    if (asJson) { out(JSON.stringify(r, null, 1)); return 0; }
+    out(`retried=${r.retried.length}  escalated=${r.escalated.length}`);
+    for (const x of r.retried) out(`  retry ${x.id} notified=${x.channel}${x.reason ? `(${x.reason})` : ""}`);
+    for (const x of r.escalated) out(`  escalate ${x.id} age=${Math.round(x.age_ms / 60000)}min`);
+    return 0;
+  }
   if (sub === "escalate" && has(args, "--due")) {
     const due = collab.escalateDue();
     if (asJson) { out(JSON.stringify({ escalated: due }, null, 1)); return 0; }
@@ -1031,7 +1039,7 @@ async function msgCli(argv: string[]): Promise<number> {
     if (m.startsWith("E_USAGE") || m.startsWith("E_SESSION") || m.startsWith("E_NO_SESSION") || m.startsWith("E_LEGACY") || m.startsWith("E_KIND")) return 2;
     return 31;
   }
-  err("usage: dia msg send|inbox|ack|delivered|reply|close|thread|escalate|agents|trace|stats|seen|retry|dsh");
+  err("usage: dia msg send|inbox|ack|delivered|reply|close|thread|escalate|agents|trace|stats|seen|retry|upkeep|dsh");
   return 2;
 }
 
@@ -1232,7 +1240,7 @@ async function collabCli(argv: string[]): Promise<number> {
         }
       }
       const kitInfo = sub === "enable" ? defaultMsg.ensure(personaId, { force: true }) : null;
-      const jobWarn = sub === "enable" ? observer.ensureJob() : null;
+      const jobWarn = sub === "enable" ? (observer.ensureJob() || observer.ensureUpkeepJob()) : null;
       // enable 顺手跑一次 tick：board.interval_s 立即对齐 job（否则要等下一个调度周期，doctor 会先报「不一致」）
       if (sub === "enable" && !jobWarn) {
         try { observer.observe({}); } catch (e: any) { err(`warn: 观察器首刷失败（${e?.message || e}）；稍后 dia collab observe`); }

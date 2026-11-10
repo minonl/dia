@@ -220,7 +220,11 @@ function jobRootCheck(): Check {
   if (legacyCount && resolve(legacy) !== resolve(cur)) {
     return { name, status: "warn", detail: `旧 job 根仍有 ${legacyCount} 个注册：${legacy}（迁移：dia job migrate --from ${legacy} --dry-run）` };
   }
-  return { name, status: "ok", detail: `根 ${cur}（source=${source}）` };
+  const pin = job.readJobPin();
+  if (pin && resolve(pin.root) !== resolve(cur)) {
+    return { name, status: "warn", detail: `落钉根 ${pin.root} 与当前解析 ${cur} 不一致；修复：删 ${job.jobPinFile()} 或对其环境变量` };
+  }
+  return { name, status: "ok", detail: `根 ${cur}（source=${source}${pin ? "，已落钉" : ""}）` };
 }
 
 /** collab.inbox：有未读但本机 24h 没跑过 `dia msg inbox`（对应「两天没 in」的事故形态）。 */

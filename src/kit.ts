@@ -235,7 +235,7 @@ function checkTargetFree(path: string, kind: "file" | "link", expected: string) 
   if (!existsSync(path) && !isSymlink(path)) return;
   if (kind === "file") {
     if (!isSymlink(path) && statSync(path).isFile() && shaFile(path) === expected) return;
-    throw new Error(`E_CONFLICT: ${path} exists and differs`);
+    throw new Error(`E_CONFLICT: ${path} exists and differs（dia 托管产物可用 --force 覆盖，覆盖前会自动备份）`);
   }
   if (isSymlink(path)) {
     try { if (realpathSync(path) === realpathSync(expected)) return; } catch { /* 断链 */ }

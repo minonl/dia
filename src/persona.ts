@@ -1042,8 +1042,8 @@ export function update(id: string, opts: { ref?: string; force?: boolean } = {})
   const cur = active.effective(id)?.version ?? readdirSync(idDir).sort().pop()!;
   const lock = JSON.parse(readFileSync(join(idDir, cur, "dia.lock"), "utf8"));
   if (!lock.source) throw new Error("E_SOURCE: 该 persona 由本地目录安装，无法 update（重新 persona add）");
-  const host = (lock.rendered?.[0] ?? "").includes("agents") ? "opencode" : undefined;
-  const r = install(lock.source, { ref: opts.ref ?? lock.ref ?? undefined, host, force: opts.force });
+  // 不传 host：按 manifest 的 hosts 全量重渲染（旧实现用 rendered[0] 推断 host → 多 host 的 dsh profile 永不刷新）
+  const r = install(lock.source, { ref: opts.ref ?? lock.ref ?? undefined, force: opts.force });
   const u = active.use(id, r.version, { reason: `update from ${lock.source}` });
   return { installed: r, previous: u.previous };
 }

@@ -1942,6 +1942,13 @@ async function runCli(argv: string[]): Promise<number> {
   return r.exit;
 }
 
+const BUILTIN_COMMANDS = new Set([
+  "kb", "ingest", "audit", "freeze", "guard", "run", "resume", "persona", "doctor", "deps",
+  "env", "kit", "service", "wt", "cmd", "collab", "whoami", "in", "out", "ack", "reply", "close", "show",
+  "msg", "agents", "team", "job", "price", "version", "update", "postinstall", "migrate",
+  "graph", "task", "claim", "claims", "unclaim", "report",
+]);
+
 export async function main(rawArgv: string[]): Promise<number> {
   // 全局作用域参数：`dia --persona yan kb …` / `dia --persona=yan kb …`
   const argv = [...rawArgv];
@@ -1951,6 +1958,12 @@ export async function main(rawArgv: string[]): Promise<number> {
   if (peq) { process.env.DIA_PERSONA = peq.slice("--persona=".length); argv.splice(argv.indexOf(peq), 1); }
   const [cmd] = argv;
   if (!cmd || cmd === "-h" || cmd === "--help") { help(); return 0; }
+  // 内置命令永远优先；同名 persona 命令被遮蔽时给一行提示（否则会静默跑错，实测 `claims`）
+  if (cmd && process.env.DIA_PERSONA && BUILTIN_COMMANDS.has(cmd)) {
+    try {
+      if (personaCommandNames().includes(cmd)) err(`! note: 内置命令 ${cmd} 优先；persona 的同名命令请用 \`dia cmd ${cmd}\``);
+    } catch { /* scope 不可用时忽略 */ }
+  }
   if (cmd === "version" || cmd === "--version") { out(`dia ${cliVersion()}`); return 0; }
   if (cmd === "update") {
     const check = has(argv, "--check");

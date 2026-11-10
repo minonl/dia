@@ -1,4 +1,4 @@
-import { describe, expect, test, beforeEach, mock } from "bun:test";
+import { describe, expect, test, beforeEach, afterEach, mock } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +7,8 @@ import { join } from "node:path";
 mock.module("@deepseek-ai/schemastery", () => ({ default: { object: () => ({}) } }));
 
 let root: string;
+const prevRoot = process.env.DIA_ROOT;
+afterEach(() => { if (prevRoot === undefined) delete process.env.DIA_ROOT; else process.env.DIA_ROOT = prevRoot; });
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "dia-dshplug-"));
   mkdirSync(join(root, "collab", "state"), { recursive: true });

@@ -1384,7 +1384,14 @@ cmd_guard() {
   local name="${1:-}"
   case "$name" in
     pre-commit|pre-push|post-checkout) ;;
-    *) echo "usage: dia wt guard <pre-commit|pre-push|post-checkout>" >&2; return 2 ;;
+    "")
+      echo "usage: dia wt guard <pre-commit|pre-push|post-checkout>" >&2; return 2 ;;
+    *)
+      # 其它钩子（commit-msg / prepare-commit-msg / pre-merge-commit 等）：hook manager
+      # （如 simple-git-hooks 的 RC 注入）会对**每个**钩子都调用一次 `dia wt guard <name>`；
+      # 这些钩子不归守卫管 → 静默放行（2026-11-11 修复：此前按「用法错误」退出 2，
+      # 导致 commitlint 的 commit-msg 钩子永远失败、仓库无法提交）
+      return 0 ;;
   esac
   DIA_WT_HOOK_NAME="$name" eval "$(wt_guard_body)"
 }
@@ -1770,7 +1777,7 @@ dia wt —— worktree 目录形式选型 + 创建（唯一实现）
   dia wt status [repo-path]              # ★ 清理前必查：唯一工作副本 + 改动重叠（只读）
   dia wt check  [<repo>...] [--all] [--deep] [--quiet]
                                                # ★ 依赖体检（R20）：软链/逃逸/悬空；--all 扫全部仓
-  dia wt guard  <pre-commit|pre-push|post-checkout>   # 守卫本体（供 hook manager 调用）
+  dia wt guard  <pre-commit|pre-push|post-checkout>   # 守卫本体（供 hook manager 调用；其它钩子静默放行）
   dia wt adopt  <repo>|--all [--apply|--check|--revert] [--template T] [--default-branch B] [--json]
                                                # 配置路径模板 + 守卫钩子（默认 dry-run；--all 扫仓根）
                                                # 守卫含推送前敏感扫描（不提供关闭开关；误报修规则）

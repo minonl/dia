@@ -1192,23 +1192,110 @@ fi
 prot=" main master develop dev $def "
 prot="${prot//  / }"
 
+# 敏感内容扫描（pre-push）。只允许 POSIX sh + awk/sed/git/python3：
+# 不要在这里写 local / 数组 / [[ ]]（生成物可能被 sh/dash 跑，非 bash 会直接崩）。
+#
+# 判定顺序**固定**，不得调换（2026-11-11 两遍法）：
+#   ① 凭证：私钥 BEGIN … PRIVATE KEY / AKIA[0-9A-Z]{16} / ghp_… / github_pat_…
+#      → 任何文件类型（含 .md）一律阻断，文档降级不豁免凭证。
+#   ② 敏感目录 ~/.ssh/.aws/.gnupg/.kube/.docker/.config/gcloud/.npmrc/.pypirc/
+#      .git-credentials/.env → 一律阻断，.md 同样不豁免。
+#   ③ 其余绝对 home 路径 → 文档（.md/.markdown/.mdx）只告警，其它文件阻断。
+#
+# 两遍法：第一遍取变更文件集建「文档白名单」（路径来自 -z 输出，无引号无转义，
+# 中文/空格文件名天然可信）；第二遍才逐行扫内容，+ 行归属的文件名**只认 +++ 头**
+# 归一化后的值（core.quotePath=false + 去引号 + 去 b/ 前缀 + 去 CR）。
+#
+# +++ 头**必须结合 hunk 状态判定**：内容行 `++ doc.md` 在 diff 里同样渲染成
+# `+++ doc.md`（内容行 `-- x` → `--- x`），只按前缀认头会被伪造头劫持，把非文档
+# 文件后续的 + 行全当文档扫描（= 降级放行，绕过 pre-push）。真实头只出现在 hunk
+# （`@@ … @@`）之前、且紧跟在 `--- ` 行之后，因此：见 `@@` 即进入 hunk 内容区，
+# 见 `diff --git ` 回到文件头区；hunk 内容区里的 `--- `/`+++ ` 一律当内容处理。
+#
+# 边界（已知行为，写死在此，勿当 bug 修）：
+#   · 重命名按「删除 + 新增」处理（不加 -M）：新路径内容全量扫，安全。
+#     若用户全局开了 diff.renames=true，重命名只出变更行，历史内容不复扫（存量缺口）。
+#   · mode-only / 空 blob 无 + 行 → 不扫；二进制只有 "Binary files differ" → 不扫
+#     （加 --text 会在超大文件上爆内存，暂不做，属已知缺口）。
+#   · 删分支推送（ls=0000）与 root commit（ls^ 不存在）定不出 range → 空 diff 放行，
+#     以「不误拦」优先。
+#   · 输出协议：阻断与告警**只写 stderr**，stdout 必须保持空白（pre-push 的 stdout
+#     属于 git 客户端协议，任何 echo 都可能打断握手）。告警/阻断各最多 5 条 + 省略提示。
 wt_guard_scan() {
-local ls="$1" rs="$2" range="" base="" hits=""
-if [ -n "$rs" ] && [ "$rs" != "0000000000000000000000000000000000000000" ] && git cat-file -e "$rs" 2>/dev/null; then
-  range="$rs..$ls"
+wt_ls="$1"; wt_rs="$2"; wt_range=""; wt_base=""
+if [ -n "$wt_rs" ] && [ "$wt_rs" != "0000000000000000000000000000000000000000" ] && git cat-file -e "$wt_rs" 2>/dev/null; then
+  wt_range="$wt_rs..$wt_ls"
 else
-  base="$(git merge-base "$ls" "origin/HEAD" 2>/dev/null || git merge-base "$ls" main 2>/dev/null || true)"
-  if [ -n "$base" ]; then range="$base..$ls"; else range="$ls^..$ls"; fi
+  wt_base="$(git merge-base "$wt_ls" "origin/HEAD" 2>/dev/null || git merge-base "$wt_ls" main 2>/dev/null || true)"
+  if [ -n "$wt_base" ]; then wt_range="$wt_base..$wt_ls"; else wt_range="$wt_ls^..$wt_ls"; fi
 fi
-hits="$(git diff -U0 "$range" -- . 2>/dev/null | grep -E '^\+' | grep -vE '^\+\+\+' \
-  | grep -vE '/(Users|home)/(you|user|example|runner|shared|me)(/|$)' \
-  | grep -nE '(^|[+ "'\''`(=])/(Users|home)/[A-Za-z0-9._-]+|-----BEGIN [A-Z ]*PRIVATE KEY-----|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}' | head -5)"
-if [ -n "$hits" ]; then
-  echo "[dia-wt] 推送包含敏感内容（已阻断）：" >&2
-  printf '%s\n' "$hits" >&2
-  echo "[dia-wt] 误报请修扫描规则（hooks 由 dia wt adopt 安装），不提供关闭开关" >&2
-  return 1
+# 临时文件：优先 TMPDIR（macOS 每个用户独立），失败退回 .git 目录（必然可写）
+wt_seq=$(( ${wt_seq:-0} + 1 ))
+wt_docs="${TMPDIR:-/tmp}/dia-wt-scan.$$.$wt_seq.docs"
+if ! : 2>/dev/null > "$wt_docs"; then
+  mkdir -p "$common/dia" 2>/dev/null || true
+  wt_docs="$common/dia/scan.$$.$wt_seq.docs"
+  : 2>/dev/null > "$wt_docs" || { echo "[dia-wt] 提示：无法创建扫描临时文件，本次跳过敏感扫描" >&2; return 0; }
 fi
+wt_blk="$wt_docs.blocked"; wt_warn="$wt_docs.warn"
+: 2>/dev/null > "$wt_blk"; : 2>/dev/null > "$wt_warn"
+# 第一遍：变更文件集 → 文档白名单（每行一个路径，已去 CR；不做引号/转义处理）
+# 注：NUL 转换行会让「文件名本身含换行」的路径被拆成两条（该文件退化为非文档 → 从严阻断）
+git -c core.quotePath=false diff --name-only -z "$wt_range" -- . 2>/dev/null \
+  | tr '\000' '\n' \
+  | awk '{ sub(/\r$/, ""); if ($0 ~ /\.(md|markdown|mdx)$/) print }' > "$wt_docs" 2>/dev/null
+# 第二遍：逐行判定（命中项落盘，避免 head -5 的 SIGPIPE 截断 awk 造成漏报）
+git -c core.quotePath=false diff -U0 "$wt_range" -- . 2>/dev/null | awk -v docs="$wt_docs" -v blk="$wt_blk" -v warnf="$wt_warn" '
+  BEGIN { while ((getline d < docs) > 0) if (d != "") isdoc[d] = 1; close(docs) }
+  # ⚠️ 只有紧跟 `diff --git` 的 `+++ ` 才是文件头；否则「内容行恰好以 `++ ` 开头」（diff 里渲染成 `+++ x`）
+  #    会被误当成文件头 → 把非文档当文档，从而**把本该阻断的路径降级为告警**（红队 high，2026-11-11）。
+  /^diff --git / { expect_hdr = 1; next }
+  expect_hdr && /^\+\+\+ / {
+    # 文件名归一化：去 "+++ " → 去 CR → 去成对双引号（含空格/非 ASCII 时 git 会加引号）
+    # → 去 b/ 前缀 → 去尾部空白（路径含空格时 git 会在 +++ 后补一个 TAB 作分隔）
+    f = substr($0, 5)
+    sub(/\r$/, "", f)
+    sub(/^"/, "", f); sub(/"$/, "", f)
+    sub(/^b\//, "", f)
+    sub(/[ \t]+$/, "", f)
+    expect_hdr = 0
+    next
+  }
+  expect_hdr && /^(--- |index |new file |deleted file |similarity |rename )/ { next }
+  /^@@/ { expect_hdr = 0 }        # 进了 hunk，文件头已结束（二进制/无 +++ 的文件不会污染后续判定）
+  /^\+/ {
+    line = $0
+    # ① 凭证类：永远阻断（私钥 / AK 风格 key / gh token），文档不豁免
+    if (line ~ /-----BEGIN [A-Z ]*PRIVATE KEY-----/ || line ~ /AKIA[0-9A-Z]{16}/ || line ~ /ghp_[A-Za-z0-9]{20,}/ || line ~ /github_pat_[A-Za-z0-9_]{20,}/) { print NR": "line > blk; next }
+    # ② 绝对 home 路径：命中敏感目录 → 阻断（.md 也不豁免）；③ 其余在文档里 → 仅告警
+    if (line ~ /(^|[+ "\`(=])\/(Users|home)\/[A-Za-z0-9._-]+/) {
+      if (line ~ /\/(Users|home)\/[^\/]+\/(\.ssh|\.aws|\.gnupg|\.kube|\.docker|\.config\/gcloud|\.npmrc|\.pypirc|\.git-credentials|\.env)/) { print NR": "line > blk; next }
+      if (f in isdoc) { print NR": "line > warnf; next }
+      print NR": "line > blk
+    }
+  }
+'
+wt_rc=0
+if [ -s "$wt_blk" ]; then
+  wt_n="$(wc -l < "$wt_blk" | tr -d ' ')"
+  {
+    echo "[dia-wt] 推送包含敏感内容（已阻断）："
+    head -5 "$wt_blk"
+    if [ "$wt_n" -gt 5 ]; then echo "[dia-wt] ……另有 $((wt_n - 5)) 条已省略"; fi
+    echo "[dia-wt] 误报请修扫描规则（hooks 由 dia wt adopt 安装），不提供关闭开关"
+  } >&2
+  wt_rc=1
+fi
+if [ -s "$wt_warn" ]; then
+  wt_nw="$(wc -l < "$wt_warn" | tr -d ' ')"
+  {
+    echo "[dia-wt] 提示：文档里的绝对 home 路径（仅告警，不阻断）："
+    head -5 "$wt_warn"
+    if [ "$wt_nw" -gt 5 ]; then echo "[dia-wt] ……另有 $((wt_nw - 5)) 条已省略"; fi
+  } >&2
+fi
+rm -f "$wt_docs" "$wt_blk" "$wt_warn" 2>/dev/null || true
+return "$wt_rc"
 }
 
 if [ "$probe" = 1 ]; then

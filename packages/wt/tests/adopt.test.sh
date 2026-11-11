@@ -93,6 +93,78 @@ printf 'path=$TD/home/kits/dia.json\n' > "$TD/repo-worktree--y/vars.txt"
 git -C "$TD/repo-worktree--y" add vars.txt && git -C "$TD/repo-worktree--y" commit -qm vars >/dev/null 2>&1
 git -C "$TD/repo-worktree--y" push -q origin feat/y 2>/dev/null && ok "相对片段 home/ 不误报" || bad "相对片段被误判"
 
+# 文档（.md）里的绝对 home 路径：降级为告警，不阻断（2026-11-11）
+ABS="/""home/developer/repos/x"   # 拆开写：避免本仓守卫把测试样本当真实泄漏
+printf 'abs=%s\n' "$ABS" > "$TD/repo-worktree--y/doc.md"
+git -C "$TD/repo-worktree--y" add doc.md && git -C "$TD/repo-worktree--y" commit -qm doc-path >/dev/null 2>&1
+git -C "$TD/repo-worktree--y" push -q origin feat/y 2>/dev/null && ok "文档里的绝对 home 路径 放行（仅告警）" || bad "文档里的绝对 home 路径被误拦"
+git -C "$TD/repo-worktree--y" reset -q --hard HEAD~1
+
+# 非文档（.txt）里的绝对 home 路径：仍然阻断
+printf 'abs=%s\n' "$ABS" > "$TD/repo-worktree--y/conf.txt"
+git -C "$TD/repo-worktree--y" add conf.txt && git -C "$TD/repo-worktree--y" commit -qm txt-path >/dev/null 2>&1
+if git -C "$TD/repo-worktree--y" push -q origin feat/y 2>/dev/null; then bad "非文档绝对 home 路径未被拦截"; else ok "非文档绝对 home 路径仍拦截"; fi
+git -C "$TD/repo-worktree--y" reset -q --hard HEAD~1
+
+# 扫描规则优先级 / 路径归一化（2026-11-11 两遍法）
+# 夹具注意：敏感样本一律用拼接构造（printf/引号拼接），否则本仓 pre-push 会把测试文件自己拦下。
+SCAN_W="$TD/repo-worktree--y"
+try_push(){ git -C "$SCAN_W" push -q origin feat/y >"$TD/push.out" 2>"$TD/push.err"; }
+commit_scan(){ git -C "$SCAN_W" add -A . >/dev/null 2>&1; git -C "$SCAN_W" commit -qm "scan $1" >/dev/null 2>&1; }
+# 回退本地提交，并把远端 ref 同步回本地 HEAD：否则前面的 reset 会让后续 push 变成
+# non-fast-forward，失败原因不是守卫 → 用例失真（判定要看 stderr 有没有 [dia-wt]）。
+undo_scan(){ git -C "$SCAN_W" reset -q --hard HEAD~1; git --git-dir="$BR" update-ref refs/heads/feat/y "$(git -C "$SCAN_W" rev-parse HEAD)"; }
+git --git-dir="$BR" update-ref refs/heads/feat/y "$(git -C "$SCAN_W" rev-parse HEAD)"
+
+# ② 敏感目录：文档不豁免
+SSH_ABS="$(printf '/%s/alice/.ssh/id_rsa' Users)"
+printf 'ssh=%s\n' "$SSH_ABS" > "$SCAN_W/doc-ssh.md"; commit_scan doc-ssh
+try_push; if [ $? -ne 0 ] && grep -q '已阻断' "$TD/push.err"; then ok ".md 里的 ~/.ssh 仍拦截"; else bad ".md 里的 ~/.ssh 未拦截"; fi
+undo_scan
+ENV_ABS="$(printf '/%s/bob/.env' home)"
+printf 'env=%s\n' "$ENV_ABS" > "$SCAN_W/doc-env.md"; commit_scan doc-env
+try_push; if [ $? -ne 0 ] && grep -q '已阻断' "$TD/push.err"; then ok ".md 里的 ~/.env 仍拦截（home 前缀）"; else bad ".md 里的 ~/.env 未拦截"; fi
+undo_scan
+
+# ① 凭证：文档降级不豁免
+PK="-----BEGIN ""RSA PRIVATE KEY-----"
+printf 'key=%s\n' "$PK" > "$SCAN_W/leak.txt"; commit_scan pk-txt
+try_push; if [ $? -ne 0 ] && grep -q '已阻断' "$TD/push.err"; then ok ".txt 里的私钥块拦截"; else bad ".txt 里的私钥块未拦截"; fi
+undo_scan
+printf '%s\n' "$PK" > "$SCAN_W/key.md"; commit_scan pk-md
+try_push; if [ $? -ne 0 ]; then ok ".md 里的私钥仍拦截（凭证不降级）"; else bad ".md 里的私钥被放行"; fi
+undo_scan
+AK="AKIA""ABCDEFGHIJKLMNOP"; GH="ghp_""0123456789abcdefghijABCD"
+printf 'a=%s\nb=%s\n' "$AK" "$GH" > "$SCAN_W/tok.txt"; commit_scan tok
+try_push; if [ $? -ne 0 ] && grep -q '已阻断' "$TD/push.err"; then ok ".txt 里的 AKIA / ghp_ 拦截"; else bad ".txt 里的 AKIA / ghp_ 未拦截"; fi
+undo_scan
+
+# ③ 路径与扩展名归一化：带空格 / 中文名的 .md 必须仍认作文档
+printf 'abs=%s\n' "$ABS" > "$SCAN_W/doc 中文 笔记.md"; commit_scan spaced
+if try_push; then grep -q '仅告警' "$TD/push.err" && ok "带空格/中文名 .md 放行且出告警" || bad "带空格/中文名 .md 放行但无告警"; else bad "带空格/中文名 .md 被误拦（quotepath/引号回归）"; fi
+[ ! -s "$TD/push.out" ] && ok "告警不出现在 stdout" || bad "告警泄漏到 stdout: $(head -2 "$TD/push.out" | tr '\n' ' ')"
+undo_scan
+printf 'abs=%s\r\n' "$ABS" > "$SCAN_W/crlf.md"; commit_scan crlf
+if try_push; then ok "CRLF 行尾的 .md 放行"; else bad "CRLF 行尾的 .md 被误拦"; fi
+undo_scan
+
+# 多文件混合命中：一条 .md 告警 + 一条 .txt 阻断 → 必须阻断
+printf 'abs=%s\n' "$ABS" > "$SCAN_W/multi-doc.md"
+printf 'abs=%s\n' "$ABS" > "$SCAN_W/multi-conf.txt"; commit_scan multi
+try_push; if [ $? -ne 0 ] && grep -q '已阻断' "$TD/push.err" && grep -q '仅告警' "$TD/push.err"; then ok "混合命中阻断且告警并存"; else bad "混合命中未正确阻断"; fi
+[ ! -s "$TD/push.out" ] && ok "阻断文本只走 stderr" || bad "阻断文本泄漏到 stdout"
+undo_scan
+
+# 伪文件头：内容行以 `++ ` 开头（diff 里渲染成 `+++ x`）不得把非文档降级为文档（红队 high，2026-11-11）
+{ printf '++ doc.md\n'; printf 'abs=%s\n' "$ABS"; } > "$SCAN_W/fake-hdr.txt"; commit_scan fake-hdr
+try_push; if [ $? -ne 0 ] && grep -q '已阻断' "$TD/push.err"; then ok "伪文件头（++ 开头）不降级"; else bad "伪文件头把非文档降级了"; fi
+undo_scan
+
+# 告警上限：最多 5 条 + 省略提示
+{ i=1; while [ "$i" -le 7 ]; do printf 'p%d=%s/developer/d%d\n' "$i" "/""home" "$i"; i=$((i+1)); done; } > "$SCAN_W/many.md"; commit_scan many
+if try_push && grep -q '另有 2 条已省略' "$TD/push.err"; then ok "告警上限 5 条并提示省略数"; else bad "告警未按上限省略"; fi
+undo_scan
+
 # adopt --all
 AR="$TD/allroot"; mkdir -p "$AR/a" "$AR/b"
 for r in a b; do mk_repo "$AR/$r"; done

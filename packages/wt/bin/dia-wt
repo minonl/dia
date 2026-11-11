@@ -1206,6 +1206,12 @@ prot="${prot//  / }"
 # 中文/空格文件名天然可信）；第二遍才逐行扫内容，+ 行归属的文件名**只认 +++ 头**
 # 归一化后的值（core.quotePath=false + 去引号 + 去 b/ 前缀 + 去 CR）。
 #
+# +++ 头**必须结合 hunk 状态判定**：内容行 `++ doc.md` 在 diff 里同样渲染成
+# `+++ doc.md`（内容行 `-- x` → `--- x`），只按前缀认头会被伪造头劫持，把非文档
+# 文件后续的 + 行全当文档扫描（= 降级放行，绕过 pre-push）。真实头只出现在 hunk
+# （`@@ … @@`）之前、且紧跟在 `--- ` 行之后，因此：见 `@@` 即进入 hunk 内容区，
+# 见 `diff --git ` 回到文件头区；hunk 内容区里的 `--- `/`+++ ` 一律当内容处理。
+#
 # 边界（已知行为，写死在此，勿当 bug 修）：
 #   · 重命名按「删除 + 新增」处理（不加 -M）：新路径内容全量扫，安全。
 #     若用户全局开了 diff.renames=true，重命名只出变更行，历史内容不复扫（存量缺口）。
@@ -1241,7 +1247,10 @@ git -c core.quotePath=false diff --name-only -z "$wt_range" -- . 2>/dev/null \
 # 第二遍：逐行判定（命中项落盘，避免 head -5 的 SIGPIPE 截断 awk 造成漏报）
 git -c core.quotePath=false diff -U0 "$wt_range" -- . 2>/dev/null | awk -v docs="$wt_docs" -v blk="$wt_blk" -v warnf="$wt_warn" '
   BEGIN { while ((getline d < docs) > 0) if (d != "") isdoc[d] = 1; close(docs) }
-  /^\+\+\+ / {
+  # ⚠️ 只有紧跟 `diff --git` 的 `+++ ` 才是文件头；否则「内容行恰好以 `++ ` 开头」（diff 里渲染成 `+++ x`）
+  #    会被误当成文件头 → 把非文档当文档，从而**把本该阻断的路径降级为告警**（红队 high，2026-11-11）。
+  /^diff --git / { expect_hdr = 1; next }
+  expect_hdr && /^\+\+\+ / {
     # 文件名归一化：去 "+++ " → 去 CR → 去成对双引号（含空格/非 ASCII 时 git 会加引号）
     # → 去 b/ 前缀 → 去尾部空白（路径含空格时 git 会在 +++ 后补一个 TAB 作分隔）
     f = substr($0, 5)
@@ -1249,8 +1258,11 @@ git -c core.quotePath=false diff -U0 "$wt_range" -- . 2>/dev/null | awk -v docs=
     sub(/^"/, "", f); sub(/"$/, "", f)
     sub(/^b\//, "", f)
     sub(/[ \t]+$/, "", f)
+    expect_hdr = 0
     next
   }
+  expect_hdr && /^(--- |index |new file |deleted file |similarity |rename )/ { next }
+  /^@@/ { expect_hdr = 0 }        # 进了 hunk，文件头已结束（二进制/无 +++ 的文件不会污染后续判定）
   /^\+/ {
     line = $0
     # ① 凭证类：永远阻断（私钥 / AK 风格 key / gh token），文档不豁免

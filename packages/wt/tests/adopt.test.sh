@@ -155,6 +155,11 @@ try_push; if [ $? -ne 0 ] && grep -q '已阻断' "$TD/push.err" && grep -q '仅�
 [ ! -s "$TD/push.out" ] && ok "阻断文本只走 stderr" || bad "阻断文本泄漏到 stdout"
 undo_scan
 
+# 伪文件头：内容行以 `++ ` 开头（diff 里渲染成 `+++ x`）不得把非文档降级为文档（红队 high，2026-11-11）
+{ printf '++ doc.md\n'; printf 'abs=%s\n' "$ABS"; } > "$SCAN_W/fake-hdr.txt"; commit_scan fake-hdr
+try_push; if [ $? -ne 0 ] && grep -q '已阻断' "$TD/push.err"; then ok "伪文件头（++ 开头）不降级"; else bad "伪文件头把非文档降级了"; fi
+undo_scan
+
 # 告警上限：最多 5 条 + 省略提示
 { i=1; while [ "$i" -le 7 ]; do printf 'p%d=%s/developer/d%d\n' "$i" "/""home" "$i"; i=$((i+1)); done; } > "$SCAN_W/many.md"; commit_scan many
 if try_push && grep -q '另有 2 条已省略' "$TD/push.err"; then ok "告警上限 5 条并提示省略数"; else bad "告警未按上限省略"; fi

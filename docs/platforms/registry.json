@@ -8,7 +8,7 @@
       "render": "~/.config/opencode/agents/<id>.md",
       "probe": ["--version"],
       "range": ">=2.0.0 <3.0.0",
-      "tested": ["2.2.5", "2.2.6"],
+      "tested": ["2.2.5", "2.2.6"], "tested_note": "2.2.x 兼容：补丁版本不锁，升级各自机器即可",
       "notes": [
         "V1 → V2 断代：V1 实现不在 V2 运行，配置键与 hook API 全变",
         "配置文件 opencode.json / opencode.jsonc 二选一；两者都在时宿主先读 .json"

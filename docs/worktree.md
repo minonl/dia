@@ -29,7 +29,7 @@ dia wt adopt --all --apply     # 批量：仓根下所有主 checkout（跳过 *
 | `pre-push` | 主 checkout 上**任何 push**（含 tag / feature 分支）→ 拒绝；推 `main/master/develop/dev` → 拒绝；并对推送内容做敏感信息扫描 |
 | `post-checkout` | 主 checkout 切到非默认分支 → 黄色提示（不阻断） |
 
-pre-push 的敏感扫描按**固定顺序**判定（[`packages/wt/bin/dia-wt`](../packages/wt/bin/dia-wt) `wt_guard_scan`）：
+pre-push 的敏感扫描按**固定顺序**判定（`packages/wt/bin/dia-wt` `wt_guard_scan`）：
 
 1. 凭证（`BEGIN … PRIVATE KEY` / `AKIA` +16 / `ghp_…` / `github_pat_…`）→ **任何文件**都阻断（文档不豁免）；
 2. 敏感目录（`~/.ssh`、`~/.aws`、`~/.gnupg`、`~/.kube`、`~/.docker`、`~/.config/gcloud`、`~/.npmrc`、`~/.pypirc`、`~/.git-credentials`、`~/.env`）→ 一律阻断（`.md` 也不豁免）；

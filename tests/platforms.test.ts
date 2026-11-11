@@ -43,7 +43,7 @@ describe("注册表", () => {
       const r = platforms.load();
       expect(r.platforms.opencode.supported).toBe(true);
       expect(r.platforms.dsh.supported).toBe(true);
-      expect(r.platforms.opencode.range).toContain("2.0.0");
+      expect(r.platforms.opencode.range).toContain("2.2.0");
     } finally { delete process.env.DIA_PLATFORMS_FILE; }
   });
 });

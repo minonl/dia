@@ -655,3 +655,41 @@ describe("add / remove（注入 job runner，不装真调度）", () => {
     expect(s.serviceShell("/a b/worker")).toBe(`'/a b/worker'`);
   });
 });
+
+// ── 2026-11-11：`dia service add` 三条实测阻塞（levm §1.6）回归 ──────────────
+describe("service add / 三条阻塞回归", () => {
+  test("detectBackend：Linux 非交互 shell（无 DIA_JOB_* 环境）也能探测到 cron/systemd", () => {
+    // 模拟：env 里**没有** DIA_JOB_*，但 PATH 上有 crontab/systemctl（用注入的 probe 替身）
+    const probe = (cmd: string) => cmd === "crontab" || cmd === "systemctl";
+    // @ts-expect-error 允许注入第二个参数（测试用），实现需支持
+    const b = s.detectBackend({}, { hasBin: probe, platform: "linux" });
+    expect(["cron", "systemd"]).toContain(b);
+  });
+
+  test("isGitSource：识别 git+ssh / git+https / git@host:owner/repo", () => {
+    expect(s.isGitSource("git+ssh://git@github.com/a/b.git")).toBe(true);
+    expect(s.isGitSource("git+https://git.leyantech.com/fed/x.git")).toBe(true);
+    expect(s.isGitSource("git@github.com:a/b.git")).toBe(true);
+    expect(s.isGitSource("/local/path")).toBe(false);
+    expect(s.isGitSource("./rel")).toBe(false);
+  });
+
+  test("defaultRunner：--desc 文案含空格时不得被拆成多个 argv", () => {
+    const calls: string[][] = [];
+    const runner = s.defaultRunnerForTest(
+      { backfill: ["--allow-unstable", "--desc", "dia service svc-x: 健康检查"] },
+      {
+        jobBin: () => ({ bin: "dia-job", error: null }),
+        spawn: (_bin: string, args: string[]) => { calls.push(args); return { status: 0, stdout: "", stderr: "" }; },
+      },
+    );
+    runner(["--cmd", "true"]);
+    expect(calls.length).toBe(1);
+    const args = calls[0];
+    // --desc 的下一个参数必须是完整的文案（一个元素），不能是 "dia" / "service" 等碎片
+    const i = args.indexOf("--desc");
+    expect(i).toBeGreaterThan(-1);
+    expect(args[i + 1]).toBe("dia service svc-x: 健康检查");
+    expect(args).toContain("--allow-unstable");
+  });
+});

@@ -1,6 +1,6 @@
 {
   "name": "@minonl/dia",
-  "version": "0.0.45",
+  "version": "0.0.46",
   "type": "module",
   "description": "dia (嗲) — lightweight agent framework: knowledge index, audit, session ingest",
   "bin": {

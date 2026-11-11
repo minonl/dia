@@ -29,6 +29,15 @@ dia wt adopt --all --apply     # 批量：仓根下所有主 checkout（跳过 *
 | `pre-push` | 主 checkout 上**任何 push**（含 tag / feature 分支）→ 拒绝；推 `main/master/develop/dev` → 拒绝；并对推送内容做敏感信息扫描 |
 | `post-checkout` | 主 checkout 切到非默认分支 → 黄色提示（不阻断） |
 
+pre-push 的敏感扫描按**固定顺序**判定（[`packages/wt/bin/dia-wt`](../packages/wt/bin/dia-wt) `wt_guard_scan`）：
+
+1. 凭证（`BEGIN … PRIVATE KEY` / `AKIA` +16 / `ghp_…` / `github_pat_…`）→ **任何文件**都阻断（文档不豁免）；
+2. 敏感目录（`~/.ssh`、`~/.aws`、`~/.gnupg`、`~/.kube`、`~/.docker`、`~/.config/gcloud`、`~/.npmrc`、`~/.pypirc`、`~/.git-credentials`、`~/.env`）→ 一律阻断（`.md` 也不豁免）；
+3. 其余**绝对 home 路径**：文档（`.md` / `.markdown` / `.mdx`）只告警，其它文件阻断。
+
+告警与阻断**只写 stderr**（stdout 属于 git 协议，保持空白），最多 5 条 + 「另有 N 条已省略」。
+已知缺口（不阻断）：二进制文件（无 `+` 行）、`diff.renames=true` 下的重命名只扫变更行、删分支推送 / root commit 定不出 range 时空 diff 放行。
+
 **钩子链**：本地钩子先跑守卫，再执行 `<common>/hooks/<name>`（simple-git-hooks 等管理器生成处）；`pre-push` 的 stdin 原样转发。
 `SIMPLE_GIT_HOOKS_RC` 由 adopt 写入 `~/.zshenv`（带 `# dia-wt:` 标记），脚本内容固定为 `dia wt guard <hook>`。
 

@@ -1200,9 +1200,21 @@ else
   base="$(git merge-base "$ls" "origin/HEAD" 2>/dev/null || git merge-base "$ls" main 2>/dev/null || true)"
   if [ -n "$base" ]; then range="$base..$ls"; else range="$ls^..$ls"; fi
 fi
-hits="$(git diff -U0 "$range" -- . 2>/dev/null | grep -E '^\+' | grep -vE '^\+\+\+' \
-  | grep -vE '/(Users|home)/(you|user|example|runner|shared|me)(/|$)' \
-  | grep -nE '(^|[+ "'\''`(=])/(Users|home)/[A-Za-z0-9._-]+|-----BEGIN [A-Z ]*PRIVATE KEY-----|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}' | head -5)"
+hits="$(git diff -U0 "$range" -- . 2>/dev/null | awk '
+  /^\+\+\+ / { f=$0; sub(/^\+\+\+ b\//,"",f); next }
+  /^\+/ {
+    line=$0
+    # ① 凭证类：永远阻断（私钥 / AK 风格 key / gh token）
+    if (line ~ /-----BEGIN [A-Z ]*PRIVATE KEY-----/ || line ~ /AKIA[0-9A-Z]{16}/ || line ~ /ghp_[A-Za-z0-9]{20,}/ || line ~ /github_pat_[A-Za-z0-9_]{20,}/) { print NR": "line; next }
+    # ② 绝对 home 路径：命中敏感目录 → 阻断；在**文档**（.md/.markdown/.mdx）里 → 降级为告警（2026-11-11）
+    if (line ~ /(^|[+ "\`(=])\/(Users|home)\/[A-Za-z0-9._-]+/) {
+      if (line ~ /\/(Users|home)\/[^\/]+\/(\.ssh|\.aws|\.gnupg|\.kube|\.docker|\.config\/gcloud|\.npmrc|\.pypirc|\.git-credentials|\.env)/) { print NR": "line; next }
+      if (f ~ /\.(md|markdown|mdx)$/) { warn = warn NR": "line "\n"; next }
+      print NR": "line
+    }
+  }
+  END { if (warn != "") printf("%s", warn) > "/dev/stderr" }
+' | head -5)"
 if [ -n "$hits" ]; then
   echo "[dia-wt] 推送包含敏感内容（已阻断）：" >&2
   printf '%s\n' "$hits" >&2

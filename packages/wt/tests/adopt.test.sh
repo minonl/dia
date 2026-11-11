@@ -93,6 +93,19 @@ printf 'path=$TD/home/kits/dia.json\n' > "$TD/repo-worktree--y/vars.txt"
 git -C "$TD/repo-worktree--y" add vars.txt && git -C "$TD/repo-worktree--y" commit -qm vars >/dev/null 2>&1
 git -C "$TD/repo-worktree--y" push -q origin feat/y 2>/dev/null && ok "相对片段 home/ 不误报" || bad "相对片段被误判"
 
+# 文档（.md）里的绝对 home 路径：降级为告警，不阻断（2026-11-11）
+ABS="/""home/developer/repos/x"   # 拆开写：避免本仓守卫把测试样本当真实泄漏
+printf 'abs=%s\n' "$ABS" > "$TD/repo-worktree--y/doc.md"
+git -C "$TD/repo-worktree--y" add doc.md && git -C "$TD/repo-worktree--y" commit -qm doc-path >/dev/null 2>&1
+git -C "$TD/repo-worktree--y" push -q origin feat/y 2>/dev/null && ok "文档里的绝对 home 路径 放行（仅告警）" || bad "文档里的绝对 home 路径被误拦"
+git -C "$TD/repo-worktree--y" reset -q --hard HEAD~1
+
+# 非文档（.txt）里的绝对 home 路径：仍然阻断
+printf 'abs=%s\n' "$ABS" > "$TD/repo-worktree--y/conf.txt"
+git -C "$TD/repo-worktree--y" add conf.txt && git -C "$TD/repo-worktree--y" commit -qm txt-path >/dev/null 2>&1
+if git -C "$TD/repo-worktree--y" push -q origin feat/y 2>/dev/null; then bad "非文档绝对 home 路径未被拦截"; else ok "非文档绝对 home 路径仍拦截"; fi
+git -C "$TD/repo-worktree--y" reset -q --hard HEAD~1
+
 # adopt --all
 AR="$TD/allroot"; mkdir -p "$AR/a" "$AR/b"
 for r in a b; do mk_repo "$AR/$r"; done

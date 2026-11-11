@@ -1213,6 +1213,10 @@ _sched_carrier_present() {  # <name> <label> <backend> → 0=载体在位
 #
 # 只收两类**可证伪**的候选（宁漏不错——误删一条登记 = 丢用户的任务）：
 #   ① cmd 里的执行体已不存在：服务/任务注定 exit=127，留着纯噪音。
+#      ⚠️ **必须与「无 state、无载体」同时成立**才收（2026-11-11 修）：目标路径可能只是**暂时**
+#         不可达（外部卷未挂载 / 仓库目录改名 / 依赖被卸载），此时载体/state 说明任务**还活着** ——
+#         按「目标缺失」下线会 bootout 活 job 并删 plist/包装脚本（不可恢复）。
+#      ⇒ 判定顺序固定为：**先判活（state 或载体在位）→ 再判 cmd 目标缺失**。
 #   ② **重复登记**：同一 (cmd + 调度) 登记了两条以上、且该条无 state、无载体 —— 换名/重装遗留。
 #      ⚠️ 无 state、无载体的**唯一**登记者**不算候选**：可能是「刚装还没跑」或 adopted 任务，
 #         删掉会丢唯一的登记（保守：这类只由 doctor 提示，不由 gc 动手）。
@@ -1267,9 +1271,12 @@ cmd_registry_gc() {
     reason=""
 
     dia_job_cmd_path_class "$cmd"
-    if [ "$YP_CLASS" != none ] && [ -n "$YP_CMD_TARGET" ] && [ ! -e "$YP_CMD_TARGET" ]; then
-      reason="cmd 目标不存在：$YP_CMD_TARGET"
-    elif [ -f "$state_f" ]; then
+    # ⚠️ **先判「活着」（state / 载体在位），再判 cmd 目标缺失**（2026-11-11 修，顺序即安全边界）。
+    #   反过来的话：外部卷暂未挂载 / 仓库目录临时改名 / 依赖二进制被卸载 ⇒ 目标路径一时不可达，
+    #   一条**正在跑**的任务会被列成候选，`--apply` 再走 cmd_uninstall ⇒ 先 bootout（杀掉活
+    #   job）+ 删 plist + 删包装脚本，而 state 之外的调度物**不可恢复**。
+    #   ⇒ 有 state 或载体在位即「活着」：一律只计数、**绝不打印名字**（见函数头承诺）。
+    if [ -f "$state_f" ]; then
       healthy=$((healthy+1))            # 跑过 ⇒ 活着，不打印名字
       seen="${seen}${key}"$'\t'"${name}"$'\n'
       continue
@@ -1277,6 +1284,9 @@ cmd_registry_gc() {
       healthy=$((healthy+1))            # 载体在位 ⇒ 活着，不打印名字
       seen="${seen}${key}"$'\t'"${name}"$'\n'
       continue
+    elif [ "$YP_CLASS" != none ] && [ -n "$YP_CMD_TARGET" ] && [ ! -e "$YP_CMD_TARGET" ]; then
+      # 到此才敢说「目标不存在」：**且**无 state、无载体 ⇒ 确实只剩一块墓碑
+      reason="cmd 目标不存在：$YP_CMD_TARGET"
     else
       # 无 state、无载体：仅当**同 cmd+调度的正主已在场**时，才判为重复登记；
       # 唯一登记一律不动（保守，见函数头注释 ②）——只登记成「正主」，不算已证实健康。

@@ -143,12 +143,61 @@ discover() {
   esac
 }
 
+# ── 调度态（`list` 行尾列）──────────────────────────────────────────
+# 为什么必须显示（2026-11-11 gaps）：「登记」≠「在跑」。registry 是**历史累积**的，
+#   早年换名/重装会留下条目，而 `list` 只打印名字 ⇒ 用户看不出「这条到底还在不在跑」。
+# 判据只看**载体是否在位**（launchd plist/已加载、crontab 标记、systemd unit/启用态），
+#   绝不据此猜「跑得好不好」（那是 doctor 的事）。
+_sched_state() {  # <name> <label> → running|scheduled|not-running|absent
+  local name="$1" label="$2" backend act pid info f _old
+  backend="$([ -f "$REG" ] && json field "$REG" "$name" backend 2>/dev/null || true)"
+  [ -n "$backend" ] || { if [ "$PLATFORM" = macos ]; then backend=launchd; else backend=cron; fi; }
+  case "$backend" in
+    systemd)
+      if [ -n "$SYSTEMCTL_BIN" ] && ! _launchd_off; then
+        act="$("$SYSTEMCTL_BIN" --user is-active "${label}.service" 2>/dev/null || true)"
+        [ "$act" = active ] && { echo running; return 0; }
+        if "$SYSTEMCTL_BIN" --user is-enabled "${label}.service" >/dev/null 2>&1; then
+          echo not-running; return 0
+        fi
+      fi
+      [ -f "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/${label}.service" ] && { echo not-running; return 0; }
+      echo absent ;;
+    cron)
+      if [ "$DIA_JOB_NO_LAUNCHD" != 1 ] && cron_present "$name"; then echo scheduled; else echo absent; fi ;;
+    launchd|*)
+      _old="$LABEL_OVERRIDE"; LABEL_OVERRIDE="$label"; f="$(plist_path "$name")"; LABEL_OVERRIDE="$_old"
+      pid=""; info=""
+      if ! _launchd_off && [ "$PLATFORM" = macos ]; then
+        info="$(launchctl print "gui/$UID_NUM/$label" 2>/dev/null)"
+        [ -n "$info" ] && pid="$(printf '%s' "$info" | awk -F' = ' '/^\tpid = /{print $2; exit}')"
+      fi
+      if [ -n "$info" ]; then
+        # 已加载：有 pid = 正在跑（常驻型）；无 pid = 已登记待触发（periodic 常态）
+        [ -n "$pid" ] && echo running || echo scheduled
+      elif [ -f "$f" ]; then echo not-running
+      else echo absent; fi ;;
+  esac
+}
+
+# label → 任务名（registry 优先；回退扫描的 label 由调用方按前缀剥离）
+_registry_name_of_label() {  # <label> → name（找不到则空输出）
+  local want="$1"
+  [ -f "$REG" ] || return 0
+  json selfcheck-rows "$REG" "$DIA_JOB_LABEL_PREFIX" 2>/dev/null | awk -F'\t' -v w="$want" '$2==w{print $1; exit}'
+}
+
 cmd_list() {
   echo "平台: $PLATFORM   数据根: $YAN_DATA_ROOT"
-  local found=0
+  local found=0 t name
   while read -r t; do
     [ -n "$t" ] || continue
-    found=1; echo "  · $t"
+    found=1
+    name="$(_registry_name_of_label "$t")"
+    [ -n "$name" ] || name="${t#"$DIA_JOB_LABEL_PREFIX"}"
+    # ⚠️ 行前缀 `  · <label>` 逐字保留（历史输出被人/脚本 grep 过），调度态只做行尾**追加**列
+    printf '  · %s  [%s%s]\n' "$t" "$(_sched_state "$name" "$t")" \
+      "$([ -f "$YAN_DATA_ROOT/tasks/$name.state.jsonl" ] && echo ' · 有 state')"
   done < <(discover)
   [ "$found" = 1 ] || echo "  （未发现已登记任务；现有 session-diary / review 尚未纳入统一命名 ✓ 属预期）"
 }
@@ -1128,6 +1177,171 @@ cmd_adopt() {
 
 
 
+# ── 载体在位判定（gc 与 list 共用；**只读**）──────────────────────────────
+# 「载体」= 真正让任务跑起来的调度物：launchd plist/已加载条目、crontab 标记、systemd unit。
+# ⚠️ 测试隔离（DIA_JOB_NO_LAUNCHD=1）下**不查真机**（launchctl/crontab/systemd）——
+#    否则沙箱 registry 的「在不在跑」会被本机无关状态污染（且与本脚本其余部分口径一致）。
+_sched_carrier_present() {  # <name> <label> <backend> → 0=载体在位
+  local name="$1" label="$2" backend="$3" f _old
+  case "$backend" in
+    systemd)
+      f="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/${label}.service"
+      [ -f "$f" ] && return 0
+      if [ -n "$SYSTEMCTL_BIN" ] && ! _launchd_off; then
+        "$SYSTEMCTL_BIN" --user is-enabled "${label}.service" >/dev/null 2>&1 && return 0
+      fi
+      return 1 ;;
+    cron)
+      [ "$DIA_JOB_NO_LAUNCHD" = 1 ] && return 1
+      cron_present "$name" && return 0
+      return 1 ;;
+    *)
+      _old="$LABEL_OVERRIDE"; LABEL_OVERRIDE="$label"; f="$(plist_path "$name")"; LABEL_OVERRIDE="$_old"
+      [ -f "$f" ] && return 0
+      if ! _launchd_off && [ "$PLATFORM" = macos ]; then
+        launchctl print "gui/$UID_NUM/$label" >/dev/null 2>&1 && return 0
+      fi
+      return 1 ;;
+  esac
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# registry gc —— 列出 / 清理「历史条目」（登记 ≠ 在跑 / 目标已不存在）
+#
+# 为什么需要（2026-11-11 gaps）：registry 是**累积**的，早年换名/重装留下的条目会一直躺在
+#   `list` 里；用户看到一串名字，却分不清「还在跑」还是「只剩一块墓碑」。
+#
+# 只收两类**可证伪**的候选（宁漏不错——误删一条登记 = 丢用户的任务）：
+#   ① cmd 里的执行体已不存在：服务/任务注定 exit=127，留着纯噪音。
+#   ② **重复登记**：同一 (cmd + 调度) 登记了两条以上、且该条无 state、无载体 —— 换名/重装遗留。
+#      ⚠️ 无 state、无载体的**唯一**登记者**不算候选**：可能是「刚装还没跑」或 adopted 任务，
+#         删掉会丢唯一的登记（保守：这类只由 doctor 提示，不由 gc 动手）。
+#      ⚠️ 同 (cmd+调度) 的第 1 条是「正主」，其后的才算重复（registry 顺序即安装顺序）。
+#
+# 健康条目（有 state 或载体在位）**绝不打印名字**（只计数），避免被读成「要删」。
+# 默认/--dry-run 只列不改；--apply 逐条走既有 cmd_uninstall（不新写卸载逻辑）。
+# ═══════════════════════════════════════════════════════════════════════════
+# ⚠️ 下线时**必须带 registry 里的真实 label**：cmd_uninstall 用 label_for() 推导（默认 前缀+name），
+#    而历史条目常是自定义 label（com.example.* 等）；不带 label 会「找错 plist ⇒ 跳过下线 ⇒
+#    只删登记、留下孤儿 plist」（比不清理更坏：不再有人能管它）。
+_uninstall_with_label() {  # <name> <label>
+  local _old="$LABEL_OVERRIDE" rc=0
+  LABEL_OVERRIDE="$2"
+  cmd_uninstall "$1" || rc=$?
+  LABEL_OVERRIDE="$_old"
+  return "$rc"
+}
+
+_json_escape() { local s="${1-}"; s="${s//\\/\\\\}"; s="${s//\"/\\\"}"; s="${s//$'\n'/\\n}"; printf '%s' "$s"; }
+
+cmd_registry_gc() {
+  local apply=0 jsonout=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --apply) apply=1; shift ;;
+      --dry-run) apply=0; shift ;;   # 默认即 dry-run（保留显式写法，便于脚本自述意图）
+      --json) jsonout=1; shift ;;
+      -h|--help) echo "用法：yan-task registry gc [--dry-run|--apply] [--json]"; return 0 ;;
+      *) echo "用法：yan-task registry gc [--dry-run|--apply] [--json]（未知参数：$1）" >&2; return 2 ;;
+    esac
+  done
+  if [ ! -f "$REG" ]; then
+    if [ "$jsonout" = 1 ]; then printf '{"candidates":[],"count":0,"healthy":0,"unverified":0,"applied":false,"failed":0}\n'; else echo "（无 registry：${REG}）"; fi
+    return 0
+  fi
+
+  local name label adopted cmd iv cal wd type backend key state_f reason canon
+  local -a c_name=() c_label=() c_backend=() c_reason=()
+  local healthy=0 unverified=0 seen=""   # seen = "<key>\t<name>\n"...（key 里可能有 '|'，故用 TAB 分隔）
+  local i n
+
+  while IFS=$'\t' read -r name label adopted; do
+    [ -n "$name" ] || continue
+    # adopted：plist/unit 由**对方项目**自管，不归我们清理（与 uninstall/doctor 口径一致）
+    [ "${adopted:-0}" = 1 ] && continue
+    IFS=$'\t' read -r cmd iv cal wd type < <(json fields "$REG" "$name")
+    backend="$(json field "$REG" "$name" backend 2>/dev/null || true)"
+    [ -n "$backend" ] || { if [ "$PLATFORM" = macos ]; then backend=launchd; else backend=cron; fi; }
+    key="$cmd|${type:-periodic}|$backend|${iv:--}|${cal:--}|${wd:--}"
+    state_f="$YAN_DATA_ROOT/tasks/$name.state.jsonl"
+    reason=""
+
+    dia_job_cmd_path_class "$cmd"
+    if [ "$YP_CLASS" != none ] && [ -n "$YP_CMD_TARGET" ] && [ ! -e "$YP_CMD_TARGET" ]; then
+      reason="cmd 目标不存在：$YP_CMD_TARGET"
+    elif [ -f "$state_f" ]; then
+      healthy=$((healthy+1))            # 跑过 ⇒ 活着，不打印名字
+      seen="${seen}${key}"$'\t'"${name}"$'\n'
+      continue
+    elif _sched_carrier_present "$name" "$label" "$backend"; then
+      healthy=$((healthy+1))            # 载体在位 ⇒ 活着，不打印名字
+      seen="${seen}${key}"$'\t'"${name}"$'\n'
+      continue
+    else
+      # 无 state、无载体：仅当**同 cmd+调度的正主已在场**时，才判为重复登记；
+      # 唯一登记一律不动（保守，见函数头注释 ②）——只登记成「正主」，不算已证实健康。
+      # ⚠️ 理由里**不点名正主**：gc 的输出只应出现候选（点名健康条目等于把它列出来，
+      #    会被误读成「它也要删」；本次即由「健康条目不得出现」的断言抓出）。
+      canon="$(printf '%s' "$seen" | awk -F'\t' -v k="$key" '$1==k{print $2; exit}')"
+      if [ -n "$canon" ]; then
+        reason="重复登记（同 cmd/调度的另一条登记保留），且无 state、无载体"
+      else
+        seen="${seen}${key}"$'\t'"${name}"$'\n'
+        unverified=$((unverified+1))
+      fi
+    fi
+
+    [ -n "$reason" ] || continue        # 既非①也非② ⇒ 不动（不出现在输出里）
+    c_name+=("$name"); c_label+=("$label"); c_backend+=("$backend"); c_reason+=("$reason")
+  done < <(json selfcheck-rows "$REG" "$DIA_JOB_LABEL_PREFIX")
+
+  n=${#c_name[@]}
+  local failures=0 urc=0
+
+  if [ "$jsonout" = 1 ]; then
+    # --json：stdout 只放机器可读结果（--apply 的卸载过程走 stderr）
+    if [ "$apply" = 1 ] && [ "$n" -gt 0 ]; then
+      for ((i=0; i<n; i++)); do
+        urc=0; _uninstall_with_label "${c_name[$i]}" "${c_label[$i]}" >&2 || urc=$?
+        [ "$urc" = 0 ] || failures=$((failures+1))
+      done
+    fi
+    local sep=""
+    printf '{"candidates":['
+    for ((i=0; i<n; i++)); do
+      printf '%s{"name":"%s","label":"%s","backend":"%s","reason":"%s"}' \
+        "$sep" "$(_json_escape "${c_name[$i]}")" "$(_json_escape "${c_label[$i]}")" \
+        "$(_json_escape "${c_backend[$i]}")" "$(_json_escape "${c_reason[$i]}")"
+      sep=","
+    done
+    printf '],"count":%s,"healthy":%s,"unverified":%s,"applied":%s,"failed":%s}\n' \
+      "$n" "$healthy" "$unverified" "$([ "$apply" = 1 ] && echo true || echo false)" "$failures"
+    [ "$failures" = 0 ] || return 1
+    return 0
+  fi
+
+  local _mode="dry-run（只列不改）"; [ "$apply" = 1 ] && _mode="apply（清理候选）"
+  echo "══ dia-job registry gc（${PLATFORM} · ${_mode}）══"
+  if [ "$n" = 0 ]; then
+    echo "  ✓ 无历史条目（健康 ${healthy} 条 · 未证实 ${unverified} 条）"
+  else
+    for ((i=0; i<n; i++)); do
+      echo "  ✗ ${c_name[$i]}（label=${c_label[$i]} · backend=${c_backend[$i]}）：${c_reason[$i]}"
+    done
+  fi
+  if [ "$apply" = 1 ] && [ "$n" -gt 0 ]; then
+    for ((i=0; i<n; i++)); do
+      urc=0; _uninstall_with_label "${c_name[$i]}" "${c_label[$i]}" || urc=$?
+      [ "$urc" = 0 ] || { echo "  ⚠️ 清理 ${c_name[$i]} 失败（rc=${urc}）" >&2; failures=$((failures+1)); }
+    done
+    echo "── 候选 ${n} 条 · 已清理 $((n-failures)) 条 · 健康 ${healthy} 条 · 未证实 ${unverified} 条（未列出）──"
+  else
+    echo "── 候选 ${n} 条 · 健康 ${healthy} 条 · 未证实 ${unverified} 条（未列出）· 未改动 ${REG}（加 --apply 清理）──"
+  fi
+  [ "$failures" = 0 ] || return 1
+  return 0
+}
+
 cmd_gc() {  # 清理 <数据根>/tasks 下超过 N 天的 state/日志/心跳（Q2：默认 30 天）
   local days=30 dry=0
   while [ $# -gt 0 ]; do case "$1" in --days) days="$2"; shift 2 ;; --dry-run) dry=1; shift ;; *) shift ;; esac; done
@@ -1306,12 +1520,21 @@ case "${1:-list}" in
   install)   shift; cmd_install "$@" ;;
   uninstall) shift; cmd_uninstall "$@" ;;
   bootstrap) shift; cmd_bootstrap "$@" ;;   # ⚠️ 必须 shift + 透传（2026-10-16 修：原为 `cmd_bootstrap`，导致 --dry-run 永远进不去）
-  registry)  [ -f "$REG" ] && cat "$REG" || echo "（无 registry）" ;;
+  registry)  # registry | registry gc [--dry-run|--apply] [--json]
+    case "${2:-}" in
+      '') [ -f "$REG" ] && cat "$REG" || echo "（无 registry）" ;;   # 旧行为：无参直接打印登记表（保持不变）
+      gc) shift 2; cmd_registry_gc "$@" ;;   # ⚠️ 必须 shift 2 再透传（漏 shift ⇒ --apply 永远进不去，2026-10-16 老坑）
+      *)  echo "用法：yan-task registry [gc [--dry-run|--apply] [--json]]（未知子命令：$2）" >&2; exit 2 ;;
+    esac ;;
   adopt)     shift; cmd_adopt "$@" ;;
   selfcheck) shift; cmd_selfcheck "$@" ;;
   backfill)  shift; cmd_backfill "$@" ;;
   gc)        shift; cmd_gc "$@" ;;
   logs)      shift; cmd_logs "$@" ;;
   platform) echo "$PLATFORM" ;;
-  *) echo "用法: yan-task {list|status|doctor|platform|install|uninstall|adopt|selfcheck|backfill|bootstrap|registry|gc|logs}" >&2; exit 2 ;;
+  *)
+    echo "用法: yan-task {list|status|doctor|platform|install|uninstall|adopt|selfcheck|backfill|bootstrap|registry|gc|logs}" >&2
+    echo "      yan-task registry                        # 打印登记表 registry.json" >&2
+    echo "      yan-task registry gc [--dry-run|--apply] [--json]   # 列出/清理历史条目" >&2
+    exit 2 ;;
 esac

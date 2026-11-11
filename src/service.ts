@@ -14,10 +14,10 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import {
-  appendFileSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync,
-  rmSync, statSync, symlinkSync, unlinkSync, writeFileSync,
+  appendFileSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync,
+  renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync,
 } from "node:fs";
-import { hostname as osHostname } from "node:os";
+import { hostname as osHostname, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { jobBin } from "./job.ts";
@@ -649,23 +649,44 @@ export function healthJobInterval(svc: ServiceManifest): number {
 
 export type Backend = "launchd" | "cron" | "systemd" | "none";
 
+export interface DetectBackendOptions {
+  /** PATH 探测（默认 `command -v <cmd>`）：注入替身便于在任意平台单测 */
+  hasBin?: (cmd: string) => boolean;
+  platform?: NodeJS.Platform;
+}
+
+/** 真实 PATH 探测：`command -v <cmd>`（which 等效，非交互 shell 也能用）。 */
+const realHasBin = (cmd: string): boolean => {
+  try {
+    const r = spawnSync("bash", ["-c", `command -v ${cmd}`], { encoding: "utf8" });
+    return r.status === 0 && !!String(r.stdout ?? "").trim();
+  } catch { return false; }
+};
+
 /**
- * 调度后端（§4.2 / §7）：显式 DIA_SERVICE_BACKEND 优先，否则按平台推断（读不到就不推断）。
+ * 调度后端（§4.2 / §7）：显式 DIA_SERVICE_BACKEND 优先 → DIA_JOB_* 环境提示 → 平台探测。
+ *   · darwin：`launchctl` 在 PATH 上 → launchd；
+ *   · linux ：`crontab` → cron；`systemctl`（--user 的常驻单元）→ systemd；两者取其一。
+ * **不再要求 DIA_JOB_* 环境**（非交互 shell / cron 起的进程读不到这些变量时也要能推断）。
  * 推断不出 → E_BACKEND，不静默装半套。
  */
-export function detectBackend(env: NodeJS.ProcessEnv = process.env): Backend {
+export function detectBackend(env: NodeJS.ProcessEnv = process.env, opts: DetectBackendOptions = {}): Backend {
   const explicit = env.DIA_SERVICE_BACKEND;
   if (explicit === "launchd" || explicit === "cron" || explicit === "systemd" || explicit === "none") return explicit;
   if (explicit) throw new Error(`E_BACKEND: 未知的 DIA_SERVICE_BACKEND=${explicit}（launchd|cron|systemd|none）`);
-  if (/^darwin/i.test(process.platform)) return env.DIA_JOB_BIN || env.DIA_SERVICE_JOB_BIN ? "launchd" : "none";
-  if (env.DIA_JOB_CRONTAB_BIN || env.DIA_SERVICE_JOB_BIN || env.DIA_JOB_BIN) {
-    let cron = false, systemd = false;
-    try { cron = !!spawnSync("bash", ["-c", "command -v crontab"], { encoding: "utf8" }).stdout?.trim(); } catch {}
-    try { systemd = !!spawnSync("bash", ["-c", "command -v systemctl"], { encoding: "utf8" }).stdout?.trim(); } catch {}
-    if (systemd && !cron) return "systemd";
-    if (cron) return "cron";
-    if (systemd) return "systemd";
+  const hasBin = opts.hasBin ?? realHasBin;
+  const platform = opts.platform ?? process.platform;
+  if (/^darwin/i.test(platform)) {
+    // 环境提示：显式给了 job bin 说明装了 launchd 通道
+    if (env.DIA_JOB_BIN || env.DIA_SERVICE_JOB_BIN) return "launchd";
+    if (hasBin("launchctl")) return "launchd";
+    throw new Error("E_BACKEND: 本机没有 launchd（launchctl）——不静默装半套；测试或自定义后端可用 DIA_SERVICE_BACKEND=none");
   }
+  if (env.DIA_JOB_CRONTAB_BIN) return "cron";
+  const cron = hasBin("crontab");
+  const systemd = hasBin("systemctl");
+  if (cron) return "cron";
+  if (systemd) return "systemd";
   throw new Error("E_BACKEND: 本机没有可用的调度后端（launchd / cron / systemd --user）——不静默装半套；"
     + "测试或自定义后端可用 DIA_SERVICE_BACKEND=none");
 }
@@ -1380,16 +1401,138 @@ function linkEntry(path: string): string {
   return dest;
 }
 
-function defaultRunner(opts: { backfill?: string[] } = {}): JobRunner {
+export interface RunnerDeps {
+  /** 默认 spawnSync；注入后**不得**再调用真实 dia-job（测试用） */
+  spawn?: (bin: string, args: string[], opt?: any) => { status: number | null; stdout?: any; stderr?: any };
+  jobBin?: () => { bin: string | null; error?: string | null };
+}
+
+/**
+ * `dia job install|uninstall` 的默认执行器（可注入依赖，单测用）。
+ *
+ * backfill 的每一项都是**单个 argv 元素**（例如 `--desc` 后面那句完整文案）：
+ * 绝不能按空白拆词——`dia service svc-x: 健康检查` 会被拆成 4 个参数，
+ * job 侧只拿到第一个词，desc 变残且多出的词被当成位置参数。
+ * 插入位置保持在 `--desc` **之前**（与既有 job install 语义一致）。
+ */
+export function defaultRunnerForTest(opts: { backfill?: string[] } = {}, deps: RunnerDeps = {}): JobRunner {
+  const spawnFn = deps.spawn ?? ((bin: string, args: string[], opt?: any) => spawnSync(bin, args, opt));
+  const binFn = deps.jobBin ?? jobBin;
   return (args) => {
-    const { bin, error } = jobBin();
+    const { bin, error } = binFn();
     if (!bin) return { status: 2, stdout: "", stderr: `${error || "未找到 dia-job"}\n` };
     const full = [...args];
     const descAt = full.indexOf("--desc");
-    for (const line of opts.backfill ?? []) full.splice(descAt >= 0 ? descAt : full.length, 0, ...line.split(" "));
-    const r = spawnSync(bin, full, { encoding: "utf8", env: { ...process.env, DIA_JOB_ROOT: jobRoot() } });
+    const at = descAt >= 0 ? descAt : full.length;
+    if (opts.backfill?.length) full.splice(at, 0, ...opts.backfill);
+    const r = spawnFn(bin, full, { encoding: "utf8", env: { ...process.env, DIA_JOB_ROOT: jobRoot() } });
     return { status: r.status, stdout: String(r.stdout ?? ""), stderr: String(r.stderr ?? "") };
   };
+}
+
+function defaultRunner(opts: { backfill?: string[] } = {}): JobRunner {
+  return defaultRunnerForTest(opts);
+}
+
+// ── git 源（`--from git+ssh://…` / `git@host:owner/repo`）──────────────────────
+
+const WINDOWS_DRIVE_RE = /^[A-Za-z]:[\\/]/;
+const GIT_PLUS_RE = /^git\+([a-z][a-z0-9+.-]*):\/\//i;
+const SCP_LIKE_RE = /^([^@\s/:]+)@([^:\s/]+):(.+)$/;
+
+/**
+ * 是否 **git 源**（需要联网/凭据取回的仓库），而非本地目录/脚本。
+ * 支持：`git+ssh://` `git+https://` `git+http://` `git+file://`、`ssh://…`、`git://…`、`file://…`、
+ * scp-like `git@host:owner/repo`。
+ * 明确排除本地路径：`/abs`、`./rel`、`../up`、Windows 盘符 `C:\x` / `C:/x`，
+ * 以及 `a:b` 这种没有 `user@` 的冒号串（否则会被当成远端仓去 clone）。
+ */
+export function isGitSource(src: string): boolean {
+  const s = String(src ?? "").trim();
+  if (!s || WINDOWS_DRIVE_RE.test(s)) return false;
+  if (GIT_PLUS_RE.test(s)) return true;
+  if (/^ssh:\/\//i.test(s)) return true;
+  if (/^git:\/\//i.test(s)) return true;
+  if (/^file:\/\//i.test(s)) return true;
+  return SCP_LIKE_RE.test(s);
+}
+
+/** 归一化 git 源：去 `git+` 前缀；scp-like → `ssh://user@host/owner/repo`。 */
+export function normalizeGitSource(src: string): string {
+  const s = String(src ?? "").trim();
+  const stripped = s.replace(GIT_PLUS_RE, "$1://");
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(stripped)) return stripped;
+  const m = SCP_LIKE_RE.exec(stripped);
+  if (m) return `ssh://${m[1]}@${m[2]}/${m[3].replace(/^\/+/, "")}`;
+  return stripped;
+}
+
+/** git 克隆缓存根：`<services>/.git-cache`（`.` 开头 → listServices 不会当成服务）。 */
+export const gitCacheRoot = (): string => join(servicesRoot(), ".git-cache");
+
+const gitCacheKey = (url: string, ref: string | null): string =>
+  createHash("sha256").update(`${url}\0${ref ?? ""}`).digest("hex").slice(0, 16);
+
+function gitSourceError(msg: string): Error {
+  const e = new Error(`E_GIT_SOURCE: ${msg}`);
+  (e as any).code = "E_GIT_SOURCE";
+  return e;
+}
+
+/** 浅克隆（--depth 1，可选 --branch）；失败一律 E_GIT_SOURCE（含 stderr 摘要），不静默回落。 */
+function cloneGit(url: string, dest: string, ref: string | null): void {
+  const args = ["clone", "--quiet", "--depth", "1", ...(ref ? ["--branch", ref] : []), url, dest];
+  let r;
+  try {
+    r = spawnSync("git", args, { encoding: "utf8" });
+  } catch (e: any) {
+    throw gitSourceError(`git 执行失败：${e?.message || e}`);
+  }
+  if (r.error) {
+    const code = (r.error as NodeJS.ErrnoException).code;
+    throw gitSourceError(code === "ENOENT" ? "未找到 git（请先安装 git 后重试）" : `git 执行失败：${r.error.message}`);
+  }
+  if (r.status !== 0) {
+    const detail = String(r.stderr || r.stdout || "").trim().split("\n").filter(Boolean).slice(0, 3).join(" / ");
+    throw gitSourceError(`git clone 失败（${url}${ref ? ` @${ref}` : ""}）${detail ? `：${detail}` : ""}`);
+  }
+}
+
+export interface GitSourceDir {
+  dir: string;
+  /** true = 本次新建的临时克隆（dry-run 用），调用方负责清理 */
+  temporary: boolean;
+}
+
+/**
+ * 把 git 源取到本地目录（§add）：
+ *   · 非 dry-run：`<services>/.git-cache/<hash>`（命中即复用，**不因 dry-run / 失败被删除**）；
+ *     先克隆到同级 staging 再 rename，缓存里不会留下半装克隆（克隆失败即抛，staging 被清掉）；
+ *   · dry-run：缓存未命中 → 临时目录克隆（temporary=true）——只清自己新建的那份。
+ */
+export function materializeGitSource(src: string, opts: { ref?: string | null; dryRun?: boolean } = {}): GitSourceDir {
+  const url = normalizeGitSource(src);
+  const ref = opts.ref?.trim() || null;
+  const dest = join(gitCacheRoot(), gitCacheKey(url, ref));
+  if (existsSync(join(dest, ".git"))) return { dir: dest, temporary: false };
+  if (opts.dryRun) {
+    const tmp = mkdtempSync(join(tmpdir(), "dia-svc-git-"));
+    try { cloneGit(url, tmp, ref); } catch (e) { rmSync(tmp, { recursive: true, force: true }); throw e; }
+    return { dir: tmp, temporary: true };
+  }
+  mkdirSync(gitCacheRoot(), { recursive: true });
+  const staging = mkdtempSync(join(gitCacheRoot(), ".staging-"));
+  try {
+    const work = join(staging, "repo");
+    cloneGit(url, work, ref);
+    try { renameSync(work, dest); } catch (e) {
+      // 并发克隆：别的进程先落位 → 复用它的缓存；其它错误照抛
+      if (!existsSync(join(dest, ".git"))) throw e;
+    }
+    return { dir: dest, temporary: false };
+  } finally {
+    rmSync(staging, { recursive: true, force: true });
+  }
 }
 
 /**
@@ -1403,14 +1546,34 @@ export function add(opts: AddOptions): AddResult {
   const rawDir = resolve(opts.dir);
   let dir = rawDir;
   let copied = false;
-  if (opts.from !== undefined) {
+  let gitTmpDir: string | null = null;
+  if (opts.from !== undefined && isGitSource(opts.from)) {
+    // git 源：浅克隆（缓存优先；dry-run 用临时目录）→ 再按本地 dir 流程走
+    const g = materializeGitSource(opts.from, { ref: opts.ref, dryRun: !!opts.dryRun });
+    if (g.temporary) {
+      gitTmpDir = g.dir;
+      dir = g.dir;
+    } else {
+      mkdirSync(dirname(rawDir), { recursive: true });
+      cloneInto(g.dir, rawDir);
+      dir = rawDir;
+    }
+  } else if (opts.from !== undefined) {
     const src = resolve(opts.from);
     if (!existsSync(src)) throw new Error(`E_SOURCE: path not found: ${src}`);
     if (looksLikeRepo(src)) cloneInto(src, rawDir);
     else { copyAdopted(src, rawDir); copied = true; }
     dir = rawDir;
   }
+  try {
+    return addResolved(opts, dir, copied);
+  } finally {
+    // 只清理**本次新建的临时克隆**；`<services>/.git-cache` 里的克隆是共享缓存，dry-run/失败都不删
+    if (gitTmpDir) rmSync(gitTmpDir, { recursive: true, force: true });
+  }
+}
 
+function addResolved(opts: AddOptions, dir: string, copied: boolean): AddResult {
   const svc = readServiceManifest(dir);
   assertHealthcheckSupported(svc.healthcheck);
   // 后端探测：探测失败 / none 时仍允许 --dry-run（只是看一眼装什么，不写任何调度条目）

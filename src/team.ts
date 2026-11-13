@@ -236,6 +236,7 @@ async function repairRedteamHighs(o: {
   judge: string;
   redteam: any;
   usageAcc: { rows: any[]; input: number; output: number; total: number; cost: number; unpriced: number };
+  base?: string | null;
   builderFix: (findings: any[]) => Promise<void>;
   round2: (ws: string, diff: string) => Promise<{ value: any; repaired: boolean }>;
 }): Promise<{ redteam: any; escalated: boolean }> {
@@ -254,7 +255,7 @@ async function repairRedteamHighs(o: {
 
   // 3) builder-fix 的真实改动必须写回验收包：packet.md 只写「变更：见 diff.patch」，
   //    diff.patch 停在修复前 = 人对不含修复的 diff 拍板（acp/dsh 两条路径共用此处）。
-  const diff2 = gitDiff(workspace);
+  const diff2 = gitDiff(workspace, o.base);
   writeFileSync(join(dir, "diff.patch"), diff2);
 
   // 4) 重新快照 + 再复检一轮
@@ -282,7 +283,18 @@ export function normalizeVerify(v: any): any {
     else conclusion = "无法判定";
   }
   let evidence = v.evidence;
-  if (!Array.isArray(evidence)) evidence = evidence ? [String(evidence)] : [];
+  if (!Array.isArray(evidence)) evidence = evidence ? [evidence] : [];
+  // dsh 会回 object（如 {command, exit_code, output}）：必须转成可读字符串，
+  // 否则 test.log / verify.json 里会写成 "[object Object]"（2026-11-13 真跑踩到）。
+  evidence = evidence.map((e: any) => {
+    if (typeof e === "string") return e;
+    if (e && typeof e === "object") {
+      const parts = [e.command || e.cmd, e.exit_code !== undefined ? `exit=${e.exit_code}` : null, e.output || e.detail || e.evidence]
+        .filter((x: any) => x !== undefined && x !== null && x !== "");
+      return parts.length ? parts.join(" | ") : JSON.stringify(e);
+    }
+    return String(e);
+  });
   if (!evidence.length) {
     const parts = [];
     if (v.command) parts.push(`cmd: ${v.command}`);
@@ -299,9 +311,20 @@ export function normalizeRedteam(v: any): any {
   return { ...v, findings };
 }
 
-function gitDiff(ws: string): string {
+/** 开工时的 HEAD：用来算「本次运行改了什么」——builder 若把改动 commit 了，`git diff` 会是空的。 */
+export function gitHead(ws: string): string | null {
+  try { return execFileSync("git", ["-C", ws, "rev-parse", "HEAD"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() || null; }
+  catch { return null; }
+}
+
+export function gitDiff(ws: string, base?: string | null): string {
   let out = "";
-  try { out += execFileSync("git", ["-C", ws, "diff"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }); } catch {}
+  try {
+    // 有基准 commit 就 diff 基准..工作树（含已提交 + 未提交），否则只看未提交
+    const args = ["-C", ws, "diff"];
+    if (base) args.push(base);
+    out += execFileSync("git", args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+  } catch {}
   try {
     const untracked = execFileSync("git", ["-C", ws, "ls-files", "--others", "--exclude-standard"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })
       .split("\n").filter(Boolean);
@@ -317,6 +340,7 @@ export async function runAcp(id: string, workspace: string) {
   const t = get(id);
   if (!t.judge) throw new Error("E_TASK: judge required");
   const dir = runDir(id); mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const base = gitHead(workspace);
   const acp = new AcpClient(["opencode", "acp"], workspace, Number(process.env.DIA_ACP_TIMEOUT || DEFAULT_ACP_TIMEOUT));
   const usageAcc = { rows: [] as any[], input: 0, output: 0, total: 0, cost: 0, unpriced: 0 };
   const prices = loadPrices();
@@ -377,7 +401,7 @@ export async function runAcp(id: string, workspace: string) {
       lastVerifyKey = key;
     }
 
-    const diff = gitDiff(workspace);
+    const diff = gitDiff(workspace, base);
     writeFileSync(join(dir, "diff.patch"), diff);
 
     if (verify?.conclusion !== "通过") {
@@ -407,7 +431,7 @@ export async function runAcp(id: string, workspace: string) {
 
     // redteam 的 high 级反驳必须回灌 builder 修（gate 也会拦）；修完复跑判据 + 复检一轮。
     const repaired = await repairRedteamHighs({
-      id, dir, task: t, workspace, judge, redteam, usageAcc,
+      id, dir, task: t, workspace, judge, redteam, usageAcc, base,
       builderFix: async (findings) => {
         const fixNs = await acp.newSession(workspace);
         await acp.setMode(fixNs.sessionId, "dabo-builder");
@@ -512,6 +536,7 @@ export async function runDsh(id: string, workspace: string) {
   const t = get(id);
   if (!t.judge) throw new Error("E_TASK: judge required");
   const dir = runDir(id); mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const base = gitHead(workspace);
   const usageAcc = { rows: [] as any[], input: 0, output: 0, total: 0, cost: 0, unpriced: 0 };
   const prices = loadPrices();
   const tracker = new Map<string, number>();
@@ -561,7 +586,7 @@ export async function runDsh(id: string, workspace: string) {
       lastKey = key;
     }
 
-    const diff = gitDiff(workspace);
+    const diff = gitDiff(workspace, base);
     writeFileSync(join(dir, "diff.patch"), diff);
 
     if (verify?.conclusion !== "通过") {
@@ -587,7 +612,7 @@ export async function runDsh(id: string, workspace: string) {
 
     // 与 ACP 路径同一套闭环：high 回灌 builder 修 → 复跑判据 → 再复检一轮；仍不达标就升级。
     const repaired = await repairRedteamHighs({
-      id, dir, task: t, workspace, judge, redteam, usageAcc,
+      id, dir, task: t, workspace, judge, redteam, usageAcc, base,
       builderFix: async (findings) => {
         const fOut = await callDsh("builder", workspace, `Fix these high-severity findings. Keep the judge green; do not change the judge itself.\n${JSON.stringify(findings)}\nReturn a brief summary.`, tracker);
         recordModelCall(id, "builder-fix", fOut.model, fOut.usage, usageAcc, prices);

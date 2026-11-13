@@ -882,66 +882,133 @@ export function renderDrift(id: string, opts: { host?: string } = {}): RenderDri
   return { id, version: r.version, drift };
 }
 
-export function remove(id: string): { removed: string[]; skipped: string[] } {
-  const idDir = join(dataDir(), "personas", id);
-  if (!existsSync(idDir)) throw new Error("E_NOT_INSTALLED");
+/** 槽位目录：新布局 `versions/<v>` 优先，旧平铺 `<v>` 兜底（与 dirOf 同口径）。 */
+function slotDir(idDir: string, version: string): string {
+  const nested = join(idDir, "versions", version);
+  return existsSync(nested) ? nested : join(idDir, version);
+}
+
+/** 其它槽位仍声明持有的产物：按槽位删除时不能回收它们（宿主产物路径通常跨版本共享）。 */
+function slotClaims(idDir: string, version: string): { paths: Set<string>; kits: Set<string> } {
+  const paths = new Set<string>();
+  const kits = new Set<string>();
+  const lockPath = join(slotDir(idDir, version), "dia.lock");
+  if (!existsSync(lockPath)) return { paths, kits };
+  try {
+    const lock = JSON.parse(readFileSync(lockPath, "utf8"));
+    for (const d of lock.renderedDirs ?? []) if (d?.path) paths.add(resolve(d.path));
+    for (const r of lock.content?.rendered ?? []) if (r?.path) paths.add(resolve(r.path));
+    for (const f of lock.rendered ?? []) paths.add(resolve(f));
+    for (const r of lock.content?.config ?? []) if (r?.path) paths.add(resolve(r.path));
+    for (const k of lock.kits ?? []) if (k?.id) kits.add(k.id);
+  } catch { /* 坏 lock：调用方按无声明处理 */ }
+  return { paths, kits };
+}
+
+/** 回收单个版本槽位 lock 里登记的产物（不删槽位目录本身）。 */
+function removeSlotArtifacts(
+  id: string,
+  idDir: string,
+  version: string,
+  keep: { paths: Set<string>; kits: Set<string> } = { paths: new Set(), kits: new Set() },
+): { removed: string[]; skipped: string[] } {
   const removed: string[] = [];
   const skipped: string[] = [];
+  const dir = slotDir(idDir, version);
+  const lockFile = join(dir, "dia.lock");
+  if (!existsSync(lockFile)) return { removed, skipped };
   const allowed = resolve(opencodeAgents(), `${id}.md`);
-  for (const v of versionDirs(idDir)) {
-    const dir = existsSync(join(idDir, "versions", v)) ? join(idDir, "versions", v) : join(idDir, v);
-    const lockFile = join(dir, "dia.lock");
-    if (existsSync(lockFile)) {
-      const lock = JSON.parse(readFileSync(lockFile, "utf8"));
-      for (const d of lock.renderedDirs || []) {
-        const abs = resolve(d.path);
-        if (!abs.startsWith(resolve(dshProfiles()) + sep) || basename(abs) !== id) { skipped.push(abs); continue; }
-        if (!existsSync(abs)) continue;
-        // 宿主会改写自己目录里的文件，所以按「所有权标记」判断而不是字节哈希；
-        // 标记缺失/归属不符 = 不是我们该删的东西。
-        const m = readMarker(abs);
-        if (!m || m.id !== id) { skipped.push(abs); continue; }
-        rmSync(abs, { recursive: true, force: true }); removed.push(abs);
-      }
-      // 内容产物（persona 自带 files/skills）：按 lock 里记录的哈希/指向回收
-      for (const r of lock.content?.rendered ?? []) {
-        if (r.type === "dir") continue;
-        if (!existsSync(r.path)) continue;
-        if (r.type === "file") {
-          if (!existsSync(r.path) || shaFile(r.path) !== r.value) { skipped.push(r.path); continue; }
-          unlinkSync(r.path); removed.push(r.path);
-        } else {
-          let cur = "";
-          try { cur = realpathSync(r.path); } catch { skipped.push(r.path); continue; }
-          const want = resolve(dir, r.value);
-          if (existsSync(want) && cur === realpathSync(want)) { unlinkSync(r.path); removed.push(r.path); }
-          else skipped.push(r.path);
-        }
-      }
-      // 宿主渲染（agent md / dsh profile）
-      for (const f of lock.rendered || []) {
-        const abs = resolve(f);
-        const isCodexAgent = basename(abs) === "AGENTS.md" && basename(dirname(abs)) === ".codex";
-        if (abs !== allowed && !isCodexAgent) { skipped.push(abs); continue; }
-        const expectedHash = lock.renderedHashes?.[f];
-        if (!expectedHash || !existsSync(abs) || shaFile(abs) !== expectedHash) { skipped.push(abs); continue; }
-        rmSync(abs); removed.push(abs);
-      }
-      // 声明式配置：按原内容回滚（文件被改过则 skip）
-      for (const r of lock.content?.config ?? []) {
-        const rv = config.revert([r]);
-        removed.push(...rv.restored);
-        skipped.push(...rv.skipped);
-      }
-      // kit：随 persona 一起卸载
-      for (const k of lock.kits ?? []) {
-        try { kit.remove(k.id); removed.push(`kit:${k.id}@${k.version}`); } catch { skipped.push(`kit:${k.id}`); }
-      }
+  const lock = JSON.parse(readFileSync(lockFile, "utf8"));
+  for (const d of lock.renderedDirs || []) {
+    const abs = resolve(d.path);
+    if (keep.paths.has(abs)) continue;
+    if (!abs.startsWith(resolve(dshProfiles()) + sep) || basename(abs) !== id) { skipped.push(abs); continue; }
+    if (!existsSync(abs)) continue;
+    // 宿主会改写自己目录里的文件，所以按「所有权标记」判断而不是字节哈希；
+    // 标记缺失/归属不符 = 不是我们该删的东西。
+    const m = readMarker(abs);
+    if (!m || m.id !== id) { skipped.push(abs); continue; }
+    rmSync(abs, { recursive: true, force: true }); removed.push(abs);
+  }
+  // 内容产物（persona 自带 files/skills）：按 lock 里记录的哈希/指向回收
+  for (const r of lock.content?.rendered ?? []) {
+    if (r.type === "dir") continue;
+    const abs = resolve(r.path);
+    if (keep.paths.has(abs)) continue;
+    if (!existsSync(r.path)) continue;
+    if (r.type === "file") {
+      if (!existsSync(r.path) || shaFile(r.path) !== r.value) { skipped.push(r.path); continue; }
+      unlinkSync(r.path); removed.push(r.path);
+    } else {
+      let cur = "";
+      try { cur = realpathSync(r.path); } catch { skipped.push(r.path); continue; }
+      const want = resolve(dir, r.value);
+      if (existsSync(want) && cur === realpathSync(want)) { unlinkSync(r.path); removed.push(r.path); }
+      else skipped.push(r.path);
     }
+  }
+  // 宿主渲染（agent md / dsh profile）
+  for (const f of lock.rendered || []) {
+    const abs = resolve(f);
+    if (keep.paths.has(abs)) continue;
+    const isCodexAgent = basename(abs) === "AGENTS.md" && basename(dirname(abs)) === ".codex";
+    if (abs !== allowed && !isCodexAgent) { skipped.push(abs); continue; }
+    const expectedHash = lock.renderedHashes?.[f];
+    if (!expectedHash || !existsSync(abs) || shaFile(abs) !== expectedHash) { skipped.push(abs); continue; }
+    rmSync(abs); removed.push(abs);
+  }
+  // 声明式配置：按原内容回滚（文件被改过则 skip）
+  for (const r of lock.content?.config ?? []) {
+    if (keep.paths.has(resolve(r.path))) continue;
+    const rv = config.revert([r]);
+    removed.push(...rv.restored);
+    skipped.push(...rv.skipped);
+  }
+  // kit：随 persona 一起卸载（仍被其它槽位引用时保留）
+  for (const k of lock.kits ?? []) {
+    if (keep.kits.has(k.id)) continue;
+    try { kit.remove(k.id); removed.push(`kit:${k.id}@${k.version}`); } catch { skipped.push(`kit:${k.id}`); }
+  }
+  return { removed, skipped };
+}
+
+export function remove(id: string, opts: { version?: string } = {}): { removed: string[]; skipped: string[]; version?: string } {
+  const idDir = join(dataDir(), "personas", id);
+  if (!existsSync(idDir)) throw new Error("E_NOT_INSTALLED");
+  // 删除前先记生效版本：删完再读会变成「剩余最新」，就判断不出刚删的是不是生效槽位。
+  const effective = active.effective(id);
+  const selected = opts.version !== undefined ? resolveVersion(id, opts.version) : undefined;
+  const all = versionDirs(idDir);
+  const targets = selected ? [selected] : all;
+  // 按槽位删除时，其它槽位仍声明的宿主产物/kit 不能回收（agent md、dsh profile 等路径跨版本共享）
+  const keep = selected
+    ? all.filter((v) => v !== selected).reduce((acc, v) => {
+        const c = slotClaims(idDir, v);
+        for (const p of c.paths) acc.paths.add(p);
+        for (const k of c.kits) acc.kits.add(k);
+        return acc;
+      }, { paths: new Set<string>(), kits: new Set<string>() })
+    : { paths: new Set<string>(), kits: new Set<string>() };
+  const removed: string[] = [];
+  const skipped: string[] = [];
+  for (const v of targets) {
+    const dir = slotDir(idDir, v);
+    if (!existsSync(dir)) continue;
+    const r = removeSlotArtifacts(id, idDir, v, keep);
+    removed.push(...r.removed);
+    skipped.push(...r.skipped);
     rmSync(dir, { recursive: true, force: true });
   }
-  rmSync(idDir, { recursive: true, force: true });
-  return { removed, skipped };
+  const remaining = versionDirs(idDir);
+  if (!remaining.length) {
+    // 没有版本了：清掉指针，避免 scope/doctor 继续指向已删槽位
+    active.clear(id);
+    rmSync(idDir, { recursive: true, force: true });
+  } else if (effective?.version === selected) {
+    // 删的是生效版本，但还有其它槽位 → 重指到剩余最新版本（审计 reason=remove）
+    active.use(id, null, { reason: "remove" });
+  }
+  return { removed, skipped, ...(selected ? { version: selected } : {}) };
 }
 
 

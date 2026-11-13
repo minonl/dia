@@ -31,11 +31,18 @@ function versionCmp(dir: string) {
       if (d) return d;
     }
     const stamp = (v: string) => {
-      try {
-        const lock = JSON.parse(readFileSync(join(dir, v, "dia.lock"), "utf8"));
-        if (lock?.installedAt) return Date.parse(lock.installedAt) || 0;
-      } catch { /* 老槽位无 installedAt → 退回 mtime */ }
-      try { return statSync(join(dir, v)).mtimeMs; } catch { return 0; }
+      // 与 commitOf 同口径：新布局 versions/<v> 优先，旧平铺 <v> 兜底
+      const dirs = [join(dir, "versions", v), join(dir, v)];
+      for (const d of dirs) {
+        try {
+          const lock = JSON.parse(readFileSync(join(d, "dia.lock"), "utf8"));
+          if (lock?.installedAt) return Date.parse(lock.installedAt) || 0;
+        } catch { /* 老槽位无 installedAt / 布局不符 → 尝试下一个 */ }
+      }
+      for (const d of dirs) {
+        try { return statSync(d).mtimeMs; } catch { /* next */ }
+      }
+      return 0;
     };
     return stamp(a) - stamp(b);
   };
@@ -69,8 +76,16 @@ export function effective(id: string): { version: string; source: "active" | "la
 }
 
 function commitOf(id: string, version: string): string | undefined {
-  try { return JSON.parse(readFileSync(join(dataDir(), "personas", id, version, "dia.lock"), "utf8")).commit; }
-  catch { return undefined; }
+  // 两种安装布局并存：新布局 versions/<v>，旧布局平铺 <v>。
+  // 只读平铺路径会让嵌套槽位在重指后丢掉 commit（scope/show 显示 ?）。
+  for (const dir of [
+    join(dataDir(), "personas", id, "versions", version),
+    join(dataDir(), "personas", id, version),
+  ]) {
+    try { return JSON.parse(readFileSync(join(dir, "dia.lock"), "utf8")).commit; }
+    catch { /* 尝试下一种布局 */ }
+  }
+  return undefined;
 }
 
 export function use(id: string, version: string | null, opts: { reason?: string; by?: string } = {}): { previous: string | null; current: ActiveEntry } {
@@ -93,6 +108,17 @@ export function use(id: string, version: string | null, opts: { reason?: string;
   writeFileSync(activeFile(), JSON.stringify(all, null, 1));
   appendFileSync(auditFile(), JSON.stringify({ id, ...entry, previous }) + "\n");
   return { previous, current: entry };
+}
+
+/** 清掉某个 persona 的生效指针（最后一个版本被删时用）；不会动审计流水。 */
+export function clear(id: string): { previous: string | null } {
+  const all = readAll();
+  const previous = all[id]?.version ?? null;
+  if (!all[id]) return { previous: null };
+  delete all[id];
+  mkdirSync(stateDir(), { recursive: true });
+  writeFileSync(activeFile(), JSON.stringify(all, null, 1));
+  return { previous };
 }
 
 export function history(id?: string, limit = 20): any[] {

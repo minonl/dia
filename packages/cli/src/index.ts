@@ -1514,6 +1514,34 @@ async function teamCli(argv: string[]): Promise<number> {
   return 2;
 }
 
+/** remove 的第一个位置参数（跳过白名单 flag；`--json` 不吞后面的 id）。 */
+function removeId(args: string[]): string | undefined {
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--json") continue;
+    if (a === "--version") { i++; continue; }
+    if (a.startsWith("--")) continue;
+    return a;
+  }
+  return undefined;
+}
+
+/** remove 的参数白名单：只允许 `--version <ver>` 与 `--json`；未知/缺值/空值先报 E_USAGE。 */
+function removeArgError(args: string[]): string | null {
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--json") continue;
+    if (a === "--version") {
+      const v = args[i + 1];
+      if (v === undefined || v === "" || v.startsWith("--")) return `E_USAGE: 未知参数 ${a}（缺少值）`;
+      i++;
+      continue;
+    }
+    if (a.startsWith("--")) return `E_USAGE: 未知参数 ${a}`;
+  }
+  return null;
+}
+
 async function personaCli(argv: string[]): Promise<number> {
   const [sub, ...args] = argv;
   const asJson = has(args, "--json");
@@ -1704,15 +1732,27 @@ async function personaCli(argv: string[]): Promise<number> {
       return 31;
     }
   }
-    if (sub === "remove") {
-    const id = positional(args)[0];
+  if (sub === "remove") {
+    // 参数校验必须早于安装态检查：未安装的 id + 未知参数也要报 E_USAGE，而不是 E_NOT_INSTALLED
+    const usageErr = removeArgError(args);
+    if (usageErr) { err(usageErr); return 2; }
+    const id = removeId(args);
     if (!id) { err("missing id"); return 2; }
     try {
-      const r = persona.remove(id);
-      out(asJson ? JSON.stringify(r) : `removed ${id}${r.removed.length ? " (" + r.removed.join(", ") + ")" : ""}` +
+      const r = persona.remove(id, { version: flag(args, "--version") });
+      const label = r.version ? `${id}@${r.version}` : id;
+      out(asJson ? JSON.stringify(r) : `removed ${label}${r.removed.length ? " (" + r.removed.join(", ") + ")" : ""}` +
         (r.skipped?.length ? `\nskipped (hash/allowlist mismatch): ${r.skipped.join(", ")}` : ""));
-      return r.skipped?.length ? 30 : 0;
-    } catch (e: any) { err(e?.message || String(e)); return 31; }
+      // 指定版本时「删掉请求的槽位」即成功；skipped 只表示共享/手改产物被保留。
+      // 全量 remove 仍沿用旧语义：有 skipped 视为部分完成（30）。
+      return r.skipped?.length && !r.version ? 30 : 0;
+    } catch (e: any) {
+      const m = e?.message || String(e);
+      err(m);
+      if (m.startsWith("E_VERSION")) return 21;
+      if (m.startsWith("E_NOT_INSTALLED")) return 20;
+      return 31;
+    }
   }
   err("usage: dia persona add|create|render|list|verify|remove|show|use|path|check|update|default");
   return 2;

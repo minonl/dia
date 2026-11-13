@@ -41,3 +41,22 @@ dsh 的 tokens 从 `~/.dsh/sessions/.../session.v4.jsonl.zstd` 的 `assistant/me
 
 - 缓存计价只按 `cacheReadTokens` 粗略计算；provider 的缓存写/读折扣可能不同。
 - 价格会变；以 `prices.json` 的 `updated_at`（建议手动记录）为准。
+
+## 6. provider 别名（2026-11-13）
+
+同一个模型在不同宿主里的 provider id 可能不同：价目表写 `deepseek/deepseek-flash`，
+而 dsh 上报 `deepseek-account/deepseek-flash`。
+
+`priceFor()` 的查找顺序：
+
+1. 精确 `provider/model`；
+2. `provider/*` 通配；
+3. **同模型名跨 provider**：只有当所有同名项价格一致时才采用（否则宁可不计价）。
+
+**显式 `null` 语义**（2026-11-13）：价目表里写了 `"provider/model": null` 或 `"provider/*": null`
+表示**明确不计价**，不会再被别名兜底覆盖——用于「这个出口就是免费/不该记账」的场景。
+
+因此别名不会再被误判为 `unpriced`；但**模型名本身不同**（如 `deepseek-v4-flash` vs `deepseek-flash`）
+仍然不猜——需要补进 `~/.config/dia/prices.json` 或默认表。
+
+来源：opencode 的模型目录（`opencode` 的 models 接口）——`deepseek/deepseek-flash` = 0.15 / 0.6 / cache 0.003。

@@ -353,7 +353,7 @@ export async function runAcp(id: string, workspace: string) {
       const sBuild = buildNs.sessionId;
       await acp.setMode(sBuild, "dabo-builder");
       const fix = round === 0 ? "" : `\nPrevious verify: ${JSON.stringify(verify)}`;
-      const buildOut = await acp.prompt(sBuild, `Implement this task in the repo.\nPlan: ${JSON.stringify(plan)}\nJudge: ${judge}${fix}\nReport briefly what you changed and test results.`);
+      const buildOut = await acp.prompt(sBuild, `Implement this task in the repo.\nPlan: ${JSON.stringify(plan)}\nJudge: ${judge}${fix}\nAll artifacts must be tracked by git (git add + commit); untracked files count as not delivered.\nReport briefly what you changed and test results.`);
       recordModelCall(id, `builder-${round}`, modelOf(buildNs), buildOut.usage, usageAcc, prices);
       writeFileSync(join(dir, `builder-${round}.md`), buildOut.text || "(no output)");
 
@@ -540,7 +540,7 @@ export async function runDsh(id: string, workspace: string) {
     let lastKey = "";
     for (let round = 0; round <= 3; round++) {
       const fix = round === 0 ? "" : `\nPrevious verify: ${JSON.stringify(verify)}`;
-      const buildOut = await callDsh("builder", workspace, `Implement this task in the repo.\nPlan: ${JSON.stringify(plan)}\nJudge: ${judge}${fix}\nReport briefly what you changed and test results.`, tracker);
+      const buildOut = await callDsh("builder", workspace, `Implement this task in the repo.\nPlan: ${JSON.stringify(plan)}\nJudge: ${judge}${fix}\nAll artifacts must be tracked by git (git add + commit); untracked files count as not delivered.\nReport briefly what you changed and test results.`, tracker);
       recordModelCall(id, `builder-${round}`, buildOut.model, buildOut.usage, usageAcc, prices);
       writeFileSync(join(dir, `builder-${round}.md`), buildOut.text || "(no output)");
 

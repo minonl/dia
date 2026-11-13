@@ -83,6 +83,9 @@ describe("team run --acp（假 ACP 服）", () => {
     expect(existsSync(join(dir, "redteam-ws"))).toBe(false);
     // 状态机真落到了台账（而不是只看 CLI 打印的字面量）
     expect(taskStatus(id)).toBe("awaiting_acceptance");
+    // builder 的提示里必须要求产物进 git（redteam RT-1）
+    const prompts = readFileSync(fakeLog, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)).filter((e: any) => e.ev === "prompt");
+    expect(prompts.find((e: any) => e.role === "builder")?.text || "").toContain("git add");
 
     expect(run(["team", "gate", id]).status).toBe(0);
     expect(run(["team", "accept", id]).status).toBe(0);

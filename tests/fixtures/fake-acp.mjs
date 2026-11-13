@@ -78,6 +78,7 @@ process.stdin.on("data", (chunk) => {
       const s = sessions.get(sid) || { role, cwd: null };
       const effRole = s.role || role || "builder";
       const promptText = String(params?.prompt?.map?.((p) => p?.text || "").join("\n") || "");
+      log({ ev: "prompt", sid, role: effRole, text: promptText });
       // 模拟 builder-fix 真的改工作区（默认关闭，不影响其它用例）
       const fixName = process.env.FAKE_BUILDER_FIX;
       if (fixName && effRole === "builder" && promptText.includes("Fix these high-severity findings")) {

@@ -51,7 +51,8 @@ const registryEntry = (cmd: string) => ({
   },
 });
 
-describe("载体缺失必须重装（crontab 被外部抹掉）", () => {
+// macOS 上 dia-job 安装走 launchd（不是 crontab），这组用例只针对 cron 载体（Linux/WSL）。
+describe.skipIf(process.platform === "darwin")("载体缺失必须重装（crontab 被外部抹掉）", () => {
   test("registry 在、条目不在 → ensureJob 重新写入 crontab", () => {
     writeRegistry(registryEntry(`'${process.execPath}' collab observe --interval 300`));
     expect(cron()).toBe("");

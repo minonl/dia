@@ -2,6 +2,7 @@
 // 设计：docs/design/comm-semantics.md §7
 // 约束：一次只跑一个 tick（定时交给 dia job）；不写消息状态；不常驻；不联网。
 import { accessSync, appendFileSync, chmodSync, constants, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { delimiter } from "node:path";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -237,6 +238,30 @@ export function ensureUpkeepJob(desired = DEFAULT_INTERVAL_S): string | null {
   return ensureTask("msg-upkeep", "msg upkeep", "dia msg 重投/超时升级（dia collab enable 注册）", desired);
 }
 
+/**
+ * 载体是否真的在位：registry 只说明「登记过」，不代表调度器里还有条目。
+ * 2026-11-13 实测事故：crontab 条目被外部重写抹掉后 registry 仍留着 → 旧逻辑在 Linux 上
+ * 直接认为「已正确」而跳过重装，`dia collab enable` 报成功、board 却一直是旧的。
+ */
+function carrierPresent(reg: any, name: string): boolean {
+  // 测试隔离模式下不触真实调度器（安装/卸载同样跳过）
+  if (process.env.DIA_JOB_NO_LAUNCHD === "1") return true;
+  const backend = String(reg.backend || (process.platform === "darwin" ? "launchd" : "cron"));
+  const label = String(reg.label || `local.dia-job-${name}`);
+  if (backend === "launchd") {
+    return existsSync(join(homedir(), "Library", "LaunchAgents", `${label}.plist`));
+  }
+  if (backend === "systemd") {
+    const base = process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
+    return existsSync(join(base, "systemd", "user", `${label}.service`));
+  }
+  try {
+    const bin = process.env.DIA_JOB_CRONTAB_BIN || "crontab";
+    const out = execFileSync(bin, ["-l"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    return out.includes(`# dia-job:${name}`) || out.includes(`# yan-task:${name}`);
+  } catch { return false; }
+}
+
 function ensureTask(NAME: string, subcmd: string, desc: string, desired = DEFAULT_INTERVAL_S): string | null {
   try {
     // 临时根（数据根 / DIA_HOME / job 根任一在 tmp）不注册持久定时：
@@ -265,11 +290,8 @@ function ensureTask(NAME: string, subcmd: string, desc: string, desired = DEFAUL
       const reg = tasks[key] || {};
       const sameInterval = Number(String(reg.interval ?? "").trim()) === interval;
       const sameCmd = String(reg.cmd || "").includes(subcmd.split(" ")[0] === "msg" ? "msg upkeep" : "collab observe");
-      // 注册在但 plist 丢了（被手工删/被另一根 uninstall 误删）→ 必须重装，否则「注册在、没在跑」
-      const label = String(reg.label || `local.dia-job-${NAME}`);
-      const plist = join(homedir(), "Library", "LaunchAgents", `${label}.plist`);
-      const backendOk = process.platform !== "darwin" || process.env.DIA_JOB_NO_LAUNCHD === "1" || existsSync(plist);
-      if (sameInterval && sameCmd && backendOk) {
+      // 注册在但载体丢了（plist / systemd unit / crontab 条目被删）→ 必须重装
+      if (sameInterval && sameCmd && carrierPresent(reg, NAME)) {
         job.pinJobRoot(job.jobRootResolved()); // 已正确 → 顺手落钉，之后永不被 legacy 抢走
         return null;
       }

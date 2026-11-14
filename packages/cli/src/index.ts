@@ -1245,7 +1245,9 @@ async function collabCli(argv: string[]): Promise<number> {
         }
       }
       const kitInfo = sub === "enable" ? defaultMsg.ensure(personaId, { force: true }) : null;
-      const jobWarn = sub === "enable" ? (observer.ensureJob() || observer.ensureUpkeepJob()) : null;
+      // 两个任务都要校正：`a() || b()` 会在 a 报错时跳过 b（实际踩到 msg-upkeep 从此不再自愈）
+      const jobWarns = sub === "enable" ? [observer.ensureJob(), observer.ensureUpkeepJob()].filter(Boolean) as string[] : [];
+      const jobWarn = jobWarns.length ? jobWarns.join("；") : null;
       // enable 顺手跑一次 tick：board.interval_s 立即对齐 job（否则要等下一个调度周期，doctor 会先报「不一致」）
       if (sub === "enable" && !jobWarn) {
         try { observer.observe({}); } catch (e: any) { err(`warn: 观察器首刷失败（${e?.message || e}）；稍后 dia collab observe`); }

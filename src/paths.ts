@@ -17,6 +17,17 @@ export function diaHome(): string {
 }
 
 export const personasDir = () => join(diaHome(), "personas");
+
+/** ── 宿主 XDG 目录（Linux/BSD 规范；macOS 上也用同一套默认值）────────────────
+ *  2026-11-16：此前 XDG 只被零星支持（`dia-job` 认 XDG_DATA_HOME/XDG_CONFIG_HOME，
+ *  而 dia 自己的 persona/pricing/observer 直接拼 `~/.config`），同一台机器上两边会看到
+ *  不同位置。**所有宿主约定目录一律经这四个函数解析**，别再手拼 `~/.config` / `~/.local/share`。
+ *  注意：**数据根 `~/.dia` 不参与 XDG**（2026-11-05 拍板跨平台同一路径，迁移动静太大）。 */
+export const xdgConfig = () => process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
+export const xdgData = () => process.env.XDG_DATA_HOME || join(homedir(), ".local", "share");
+export const xdgCache = () => process.env.XDG_CACHE_HOME || join(homedir(), ".cache");
+export const xdgState = () => process.env.XDG_STATE_HOME || join(homedir(), ".local", "state");
+
 export const msgRoot = () => join(diaHome(), "msg");
 export const agentsRoot = () => join(diaHome(), "agents");
 export const stateDir = () => process.env.DIA_STATE_DIR || join(diaHome(), "state"); // DIA_STATE_DIR: 兼容旧值（deprecated）

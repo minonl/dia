@@ -7,6 +7,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { execFileSync } from "node:child_process";
 import * as paths from "./paths.ts";
+import * as platforms from "./platforms.ts";
 
 export interface DepEntry {
   id: string;
@@ -14,8 +15,7 @@ export interface DepEntry {
   version: string;
   resolved?: string;
   integrity?: string;
-  role?: "required" | "optional" | "degradable" | string;
-  fallback?: string;
+  role?: "required" | "optional" | string;
   verified_at?: string;
   verified_by?: string;
   method?: string;
@@ -99,20 +99,47 @@ function probeVersion(bin: string): string | null {
   } catch { return null; }
 }
 
+/**
+ * host_cli 的平台声明（docs/platforms/registry.json 按命令名索引）。
+ * 为什么判定权要归这里（2026-11-16）：deps.jsonl 的 `version` 是**登记当时的快照**
+ * （如 `host_cli:dsh@0.2.1-rc.2`），宿主一升级就永远报「漂移」；而 platforms 注册表本来
+ * 就维护 `range`（如 `>=0.2.0 <0.3.0`）——两份数据各说各话时，**范围判定以注册表为准**。
+ */
+function platformOf(id: string): { name: string; entry: platforms.PlatformEntry } | null {
+  const m = id.match(/^host_cli:([^@]+)@/);
+  if (!m) return null;
+  const entry = platforms.load()?.platforms?.[m[1]];
+  return entry ? { name: m[1], entry } : null;
+}
+
 /** 实测一条依赖。只回答"现在能不能找到、版本对不对"，不改账本。 */
 export function check(e: DepEntry): DepCheck {
   const required = e.role === "required";
   // 可选依赖缺失 ≠ 不健康：记 note，不拉红；required 缺失才 fail。
   const missing = (why: string): DepCheck => required
-    ? { id: e.id, status: "fail", detail: `${e.id}：${why}（required）` }
+    ? { id: e.id, status: "fail", detail: `${e.id}：${why}（required：此机运行需要它，装好后重跑 dia doctor）` }
     : { id: e.id, status: "ok", note: true, detail: `${e.id}：${why}（可选，未装）` };
 
   if (e.kind === "host_cli" || e.kind === "npm") {
     const bin = binOf(e.id);
     if (!bin) return { id: e.id, status: "warn", detail: `${e.id}：id 里取不到命令名` };
     const raw = probeVersion(bin);
-    if (!raw) return missing(`${bin} 不在 PATH`);
+    if (!raw) {
+      // platforms 注册表显式声明 supported=false ⇒ 本平台没这个宿主，不算缺陷
+      const pe = e.kind === "host_cli" ? platformOf(e.id) : null;
+      if (pe && !pe.entry.supported) {
+        return { id: e.id, status: "ok", note: true, detail: `${e.id}：本平台不支持（platforms 注册表 supported=false，跳过）` };
+      }
+      return missing(`${bin} 不在 PATH`);
+    }
     const actual = versionOf(raw);
+    // host_cli：有平台声明就用 range 判（补丁/预发布演进不该反复报漂移）；否则退回登记版本匹配
+    const pe = e.kind === "host_cli" ? platformOf(e.id) : null;
+    if (pe?.entry.range && actual) {
+      return platforms.satisfies(actual, pe.entry.range)
+        ? { id: e.id, status: "ok", detail: `${e.id}：${raw}（platforms 范围 ${pe.entry.range}）` }
+        : { id: e.id, status: "warn", detail: `${e.id}：实测 ${actual}，超出 platforms 支持范围 ${pe.entry.range}`, note: !required };
+    }
     const want = parseSpec(e.version);
     if (actual && want && !matchesSpec(actual, want)) {
       return { id: e.id, status: "warn", detail: `${e.id}：实测 ${actual}，登记 ${e.version}`, note: !required };

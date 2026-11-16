@@ -91,11 +91,12 @@ detect_platform() {
 }
 PLATFORM="$(detect_platform)"
 
-# ── 调度/服务后端（设计 §4：macOS=launchd；Linux+WSL=periodic 走 cron、service 走 systemd --user）──
-# 为什么 Linux 要分两个后端（2026-10-30 用户拍板 A 方案）：
-#   cron 表达不了「常驻 + 挂了重拉」，systemd 表达不了「每 N 分钟跑一次」而不额外写 timer 单元；
-#   两者都在**本用户作用域**（`systemctl --user` / `crontab` 自己的表），不需要 root。
-#   ⇒ periodic=cron、service=systemd，各自用对的工具，任务 manifest/wrapper 完全不感知平台。
+# ── 调度/服务后端（设计 §4：macOS=launchd；Linux+WSL=periodic 走 cron 或 systemd timer、service 走 systemd --user）──
+# 为什么 Linux 要分多个后端（2026-10-30 用户拍板 A 方案；2026-11-16 补 timer）：
+#   cron 表达不了「常驻 + 挂了重拉」；systemd service 表达不了「每 N 分钟跑一次」而不额外写 timer 单元；
+#   三者都在**本用户作用域**（`systemctl --user` / `crontab` 自己的表），不需要 root。
+#   ⇒ periodic=cron（有 cron 时）或 systemd timer（Fedora 族/不可变系统默认无 cron）；
+#     service=systemd --user。任务 manifest/wrapper 完全不感知平台。
 CRONTAB_BIN="${DIA_JOB_CRONTAB_BIN:-$(command -v crontab 2>/dev/null || true)}"
 # 显式 DIA_JOB_CRONTAB_BIN 指向不存在/不可执行的路径 ≠ 可用（否则 doctor 报假绿）
 _have_crontab() { [ -n "$CRONTAB_BIN" ] && [ -x "$CRONTAB_BIN" ]; }
@@ -135,6 +136,25 @@ _unit_dir() { printf '%s' "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"; }
 unit_path() { printf '%s/%s.service' "$(_unit_dir)" "$(label_for "$1")"; }
 _have_systemd() { [ -n "$SYSTEMCTL_BIN" ] && [ -x "$SYSTEMCTL_BIN" ] && "$SYSTEMCTL_BIN" --user show-environment >/dev/null 2>&1; }
 
+# ── periodic 后端选择（2026-11-16）：cron 优先，无 crontab 时用 systemd timer ──
+# 为什么补 timer（事故驱动）：Fedora 族 / 不可变系统（Bazzite、Kinoite）**默认不带 cronie**，
+#   而「不可变系统上装 cron」要 rpm-ostree layering + 重启 —— 门槛太高，结果是 periodic 任务
+#   永远装不上。systemd --user 在这些机器上本来就在（service 后端早已依赖它）。
+# 口径：
+#   · auto（默认）：有 crontab → cron（沿用既有行为，零迁移）；没有 → systemd-timer；都没有 → 报错
+#   · 显式 DIA_JOB_PERIODIC_BACKEND=cron|systemd-timer 可强制（排障/测试）
+DIA_JOB_PERIODIC_BACKEND="${DIA_JOB_PERIODIC_BACKEND:-auto}"
+_periodic_backend() {  # → cron|systemd-timer|空（都不可用）；rc=2 非法取值
+  case "$DIA_JOB_PERIODIC_BACKEND" in
+    cron|systemd-timer) printf '%s' "$DIA_JOB_PERIODIC_BACKEND"; return 0 ;;
+    auto|'') : ;;
+    *) return 2 ;;
+  esac
+  if _have_crontab; then printf 'cron'; return 0; fi
+  if _have_systemd; then printf 'systemd-timer'; return 0; fi
+  printf ''
+}
+
 # ── 跨平台 mtime（GNU/BSD 顺序**不能反**）─────────────────────────────────────
 # ⚠️ 2026-10-30 实测：Linux 上 `stat -f %m FILE` **不报错**（那是「看文件系统」）⇒
 #   `stat -f … || stat -c …` 的兜底永远不触发，age 由垃圾值算出 ⇒ 心跳/日志时间全是假的。
@@ -166,8 +186,8 @@ discover() {
       ls -1 "$HOME/Library/LaunchAgents" 2>/dev/null | grep -E "^$(printf '%s' "$DIA_JOB_LABEL_PREFIX" | sed 's/\./\\./g')" | sed 's/\.plist$//' | sort -u ;;
     linux|wsl)
       _cron_read | grep -oE '# (dia-job|yan-task):[a-z0-9._-]+' | sed -E 's/# (dia-job|yan-task)://'
-      # systemd --user unit（service 型）：按 label 前缀扫 unit 目录
-      ls -1 "$(_unit_dir)" 2>/dev/null | grep -E "^$(printf '%s' "$DIA_JOB_LABEL_PREFIX" | sed 's/\./\\./g')" | sed -e 's/\.service$//' -e "s/^${DIA_JOB_LABEL_PREFIX}//" || true
+      # systemd --user 单元（service 型 / periodic 的 timer 型）：扫 unit 目录，剥掉 .service/.timer 后缀
+      ls -1 "$(_unit_dir)" 2>/dev/null | grep -E "^$(printf '%s' "$DIA_JOB_LABEL_PREFIX" | sed 's/\./\\./g')" | sed -e 's/\.service$//' -e 's/\.timer$//' -e "s/^${DIA_JOB_LABEL_PREFIX}//" | sort -u || true
       ;;
     *) : ;;
   esac
@@ -192,6 +212,16 @@ _sched_state() {  # <name> <label> → running|scheduled|not-running|absent
         fi
       fi
       [ -f "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/${label}.service" ] && { echo not-running; return 0; }
+      echo absent ;;
+    systemd-timer)
+      if [ -n "$SYSTEMCTL_BIN" ] && ! _launchd_off; then
+        act="$("$SYSTEMCTL_BIN" --user is-active "${label}.timer" 2>/dev/null || true)"
+        [ "$act" = active ] && { echo scheduled; return 0; }
+        if "$SYSTEMCTL_BIN" --user is-enabled "${label}.timer" >/dev/null 2>&1; then
+          echo not-running; return 0
+        fi
+      fi
+      [ -f "$(_unit_dir)/${label}.timer" ] && { echo not-running; return 0; }
       echo absent ;;
     cron)
       if [ "$DIA_JOB_NO_LAUNCHD" != 1 ] && cron_present "$name"; then echo scheduled; else echo absent; fi ;;
@@ -259,6 +289,9 @@ cmd_status() {
       # systemd --user：状态与 MainPID（≈ launchctl print 的 state/pid）
       local s; s="$(systemd_state "$name")"
       st="${s%% *}"; case "$s" in *PID=*) pid="${s##*PID=}" ;; esac
+    elif [ "$backend" = systemd-timer ]; then
+      # timer 没有「进程态」：看 timer 单元是否在位（是否禁用由 _sched_state 在 list 里体现）
+      if timer_present "$name"; then st="scheduled"; else st="absent"; fi
     elif [ "${backend:-cron}" = cron ]; then
       # cron：**没有进程状态**（一次性进程），只能看条目是否在 + state.jsonl 的上次结论
       if cron_present "$name"; then st="scheduled"; else st="absent"; fi
@@ -296,11 +329,21 @@ cmd_doctor() {
   # GUI App / launchd pid 判定在 Linux 上无意义，硬跑只会制造假阳性）。
   if [ "$PLATFORM" != macos ]; then
     if [ "$PLATFORM" = linux ] || [ "$PLATFORM" = wsl ]; then
-      # 1) crontab 可用性（periodic 后端的前提）
-      if _have_crontab; then
-        echo "  ✓ crontab 可用（${CRONTAB_BIN}）"
+      # 1) periodic 后端可用性（cron 优先；无 cron 时 systemd timer 兜底 —— Fedora 族/不可变系统）
+      local pb pb_rc=0
+      pb="$(_periodic_backend)" || pb_rc=$?
+      if [ "$pb_rc" != 0 ]; then
+        echo "  ✗ DIA_JOB_PERIODIC_BACKEND 取值非法（auto|cron|systemd-timer）"; bad=$((bad+1))
+      elif [ "$pb" = cron ]; then
+        if _have_crontab; then
+          echo "  ✓ periodic 后端 = cron（crontab: ${CRONTAB_BIN}）"
+        else
+          echo "  ✗ periodic 后端 = cron，但找不到 crontab（$(_cron_install_hint)）"; bad=$((bad+1))
+        fi
+      elif [ "$pb" = systemd-timer ]; then
+        echo "  ✓ periodic 后端 = systemd timer（本机无 crontab，用 user timer 兜底）"
       else
-        echo "  ✗ 找不到 crontab —— periodic 任务装不了（$(_cron_install_hint)）"; bad=$((bad+1))
+        echo "  ✗ periodic 无可用后端：既没有 crontab（$(_cron_install_hint)），systemctl --user 也不可用"; bad=$((bad+1))
       fi
       # 1b) 调度 PATH 必须能找到 node（nvm/fnm 装的 node 不在系统目录 ⇒ 任务 127 静默失败）
       if PATH="$DIA_JOB_EXEC_PATH" command -v node >/dev/null 2>&1; then
@@ -308,8 +351,8 @@ cmd_doctor() {
       else
         echo "  ⚠️ 调度 PATH 找不到 node —— periodic/service 任务会 127 静默失败（设 DIA_JOB_TOOL_PATH 或把 node 链到 ~/.local/bin）"; warn=$((warn+1))
       fi
-      # 2) cron 守护进程是否在跑（装了但没跑 = 静默不执行，最坑）
-      if command -v systemctl >/dev/null 2>&1; then
+      # 2) cron 守护进程是否在跑（装了但没跑 = 静默不执行，最坑；只有 cron 后端才相关）
+      if [ "$pb" = cron ] && command -v systemctl >/dev/null 2>&1; then
         if systemctl is-active --quiet cron 2>/dev/null || systemctl is-active --quiet crond 2>/dev/null; then
           echo "  ✓ cron 守护进程在跑"
         else
@@ -338,6 +381,8 @@ cmd_doctor() {
           case "${_be:-cron}" in
             systemd) "$SYSTEMCTL_BIN" --user is-enabled "$(label_for "$short").service" >/dev/null 2>&1 \
                        && echo "  ✓ ${short}（systemd 已启用）" || { echo "  ✗ ${short}（systemd unit 未启用）"; bad=$((bad+1)); } ;;
+            systemd-timer) "$SYSTEMCTL_BIN" --user is-enabled "$(label_for "$short").timer" >/dev/null 2>&1 \
+                       && echo "  ✓ ${short}（systemd timer 已启用）" || { echo "  ✗ ${short}（systemd timer 未启用）"; bad=$((bad+1)); } ;;
             *) cron_present "$short" && echo "  ✓ ${short}（crontab 有条目）" || { echo "  ✗ ${short}（crontab 缺条目）"; bad=$((bad+1)); } ;;
           esac
         done < <(json selfcheck-rows "$REG" "$DIA_JOB_LABEL_PREFIX")
@@ -928,6 +973,87 @@ systemd_remove() {  # systemd_remove <name>
   [ -n "$SYSTEMCTL_BIN" ] && "$SYSTEMCTL_BIN" --user daemon-reload >/dev/null 2>&1 || true
 }
 
+# ── periodic 的 systemd timer 后端（2026-11-16）───────────────────────────────
+# 为什么 interval 用 OnUnitInactiveSec 而不是翻译成 OnCalendar：OnCalendar 只能表达日历点
+#   （每 5 分钟 = `*:0/5`），非整除间隔（如 90s）表达不了；OnUnitInactiveSec 直接吃秒数，
+#   语义 =「上次跑完 N 秒后再跑」——oneshot + inactive 不会因为任务跑得久而叠加堆积。
+timer_unit_path() { printf '%s/%s.timer' "$(_unit_dir)" "$(label_for "$1")"; }
+
+# 日历型（--calendar HH:MM [--weekdays 1-5]）→ OnCalendar 值（systemd 星期名；0/7 = 周日）
+_oncalendar() {
+  local calendar="$1" weekdays="$2" m h dow="" w
+  m="${calendar##*:}"; h="${calendar%%:*}"
+  if [ "$weekdays" != "-" ] && [ -n "$weekdays" ]; then
+    for w in $weekdays; do
+      case "$w" in
+        0|7) dow="$dow,Sun" ;; 1) dow="$dow,Mon" ;; 2) dow="$dow,Tue" ;; 3) dow="$dow,Wed" ;;
+        4) dow="$dow,Thu" ;; 5) dow="$dow,Fri" ;; 6) dow="$dow,Sat" ;;
+      esac
+    done
+    dow="${dow#,}"
+  fi
+  printf '%s*-*-* %02d:%02d:00' "${dow:+$dow }" "$((10#$h))" "$((10#$m))"
+}
+
+write_timer_units() {  # write_timer_units <name> <wrapper> <log> <interval|-> <calendar|-> <weekdays|-> [<desc>] → 打印 .timer 路径
+  local name="$1" wrapper="$2" log="$3" interval="$4" calendar="$5" weekdays="$6" desc="${7:-dia-job 任务 $1}"
+  local unit timer trigger
+  unit="$(unit_path "$name")"; timer="$(timer_unit_path "$name")"
+  mkdir -p "$(dirname "$unit")" "$(dirname "$log")"
+  cat > "$unit" <<UNIT
+[Unit]
+Description=$desc
+
+[Service]
+Type=oneshot
+# 调度器的 PATH 往往没有 nvm/fnm（node 不在系统目录）⇒ 与 cron 行同口径显式注入
+Environment=PATH=$DIA_JOB_EXEC_PATH
+ExecStart=/bin/bash "$wrapper"
+StandardOutput=append:$log
+StandardError=append:$log
+UNIT
+  if [ "$interval" != "-" ] && [ -n "$interval" ]; then
+    trigger="OnBootSec=${interval}s
+OnUnitInactiveSec=${interval}s"
+  else
+    trigger="OnCalendar=$(_oncalendar "$calendar" "$weekdays")
+# 关机/休眠错过的触发点，开机后补跑一次
+Persistent=true"
+  fi
+  cat > "$timer" <<TIMER
+[Unit]
+Description=$desc（定时）
+
+[Timer]
+$trigger
+Unit=$(basename "$unit")
+
+[Install]
+WantedBy=timers.target
+TIMER
+  printf '%s' "$timer"
+}
+
+systemd_timer_install() {  # systemd_timer_install <name>
+  local name="$1" timer
+  timer="$(basename "$(timer_unit_path "$name")")"
+  _have_systemd || { echo "  ✗ systemctl --user 不可用（无 user manager？容器/无 session 的机器）" >&2; return 3; }
+  "$SYSTEMCTL_BIN" --user daemon-reload >/dev/null 2>&1 || { echo "  ✗ systemctl --user daemon-reload 失败" >&2; return 1; }
+  "$SYSTEMCTL_BIN" --user enable --now "$timer" >/dev/null 2>&1 || { echo "  ✗ systemctl --user enable --now $timer 失败" >&2; return 1; }
+  "$SYSTEMCTL_BIN" --user is-active --quiet "$timer" || { echo "  ✗ $timer 未处于 active（别当装好了）" >&2; return 1; }
+}
+
+systemd_timer_remove() {  # systemd_timer_remove <name>
+  local name="$1" timer_unit f
+  timer_unit="$(label_for "$name").timer"; f="$(timer_unit_path "$name")"
+  [ -n "$SYSTEMCTL_BIN" ] && "$SYSTEMCTL_BIN" --user disable --now "$timer_unit" >/dev/null 2>&1 || true
+  if [ -f "$f" ]; then rm -f "$f" && echo "  · 已删 timer：$f"; fi
+  if [ -f "$(unit_path "$name")" ]; then rm -f "$(unit_path "$name")" && echo "  · 已删 oneshot unit"; fi
+  [ -n "$SYSTEMCTL_BIN" ] && "$SYSTEMCTL_BIN" --user daemon-reload >/dev/null 2>&1 || true
+}
+
+timer_present() { [ -f "$(timer_unit_path "$1")" ]; }
+
 systemd_state() {  # systemd_state <name> → "active|inactive|failed|unknown[ PID=n]"
   local name="$1" unit act pid
   unit="$(label_for "$name").service"
@@ -1013,7 +1139,9 @@ cmd_install() {
     if [ "$type" = service ]; then
       _have_systemd || { echo "  ✗ 本机 systemctl --user 不可用（无 user manager；容器/无 session 环境请改用 periodic，或手工 systemd unit）" >&2; return 3; }
     else
-      _have_crontab || { echo "  ✗ 找不到 crontab（先装 cron：$(_cron_install_hint)；或设 DIA_JOB_CRONTAB_BIN）" >&2; return 3; }
+      local pb; pb="$(_periodic_backend)" || { echo "  ✗ DIA_JOB_PERIODIC_BACKEND 取值非法（auto|cron|systemd-timer）" >&2; return 2; }
+      # 两个都没有时把两条路都告诉用户：不可变系统装 cron 要 layering + 重启，很多人其实该用 timer
+      [ -n "$pb" ] || { echo "  ✗ periodic 无可用后端：既没有 crontab（$(_cron_install_hint)），systemctl --user 也不可用" >&2; return 3; }
     fi
   else
     echo "本平台（${PLATFORM}）暂不支持 install（设计 §4.1：Windows native 待实现）" >&2; return 3
@@ -1115,21 +1243,43 @@ cmd_install() {
       systemd_install "$name" || return 1
     fi
   else
-    # ── Linux periodic：crontab（带标记，幂等增删）──
-    backend=cron
-    local wrapper spec rc
-    spec="$(cron_spec "$interval" "$calendar" "${wd_expanded:--}")"; rc=$?
-    if [ "$rc" = 2 ]; then
-      echo "  ✗ 调度参数不合法（见用法）" >&2; return 2
-    elif [ "$rc" = 3 ]; then
-      echo "  ✗ 该调度在 cron 表达不了：--interval 必须是 ≥60 秒的整分（且 ≤23h、24 可整除），或改用 --calendar HH:MM" >&2; return 2
-    fi
-    wrapper="$(write_wrapper "$name" "$cmd")" || return 1
-    if [ "$DIA_JOB_NO_LAUNCHD" = 1 ]; then
-      echo "  · 已跳过 crontab 写入（DIA_JOB_NO_LAUNCHD=1；测试隔离）"
-      f="$wrapper"
+    # ── Linux periodic：cron（有 crontab）或 systemd timer（无 cron 的发行版）──
+    local wrapper spec rc pbackend
+    pbackend="$(_periodic_backend)"
+    if [ "$pbackend" = systemd-timer ]; then
+      backend=systemd-timer
+      # timer 吃秒数，但小于 1 分钟没意义（与 cron 后端的下限一致，避免换平台语义漂移）
+      if [ "$interval" != "-" ] && [ -n "$interval" ]; then
+        case "$interval" in ''|*[!0-9]*) echo "  ✗ --interval 必须是整数秒" >&2; return 2 ;; esac
+        [ "$interval" -ge 60 ] || { echo "  ✗ --interval 不得小于 60 秒（收到 ${interval}）" >&2; return 2; }
+      elif [ "$calendar" = "-" ]; then
+        # 既无 interval 也无 calendar：与 cron 的 @reboot / launchd RunAtLoad 对齐 —— 开机跑一次
+        interval=300
+      fi
+      wrapper="$(write_wrapper "$name" "$cmd")" || return 1
+      f="$(write_timer_units "$name" "$wrapper" "$log" "$interval" "$calendar" "${wd_expanded:--}" "$desc")" || return 1
+      if [ "$DIA_JOB_NO_LAUNCHD" = 1 ]; then
+        echo "  · 已跳过 systemd timer 加载（DIA_JOB_NO_LAUNCHD=1；测试隔离）"
+      else
+        systemd_timer_install "$name" || return 1
+      fi
     else
-      f="$(cron_install "$name" "$wrapper" "$log" "$spec")" || return 1
+      backend=cron
+      spec="$(cron_spec "$interval" "$calendar" "${wd_expanded:--}")"; rc=$?
+      if [ "$rc" = 2 ]; then
+        echo "  ✗ 调度参数不合法（见用法）" >&2; return 2
+      elif [ "$rc" = 3 ]; then
+        echo "  ✗ 该调度在 cron 表达不了：--interval 必须是 ≥60 秒的整分（且 ≤23h、24 可整除），或改用 --calendar HH:MM" >&2
+        echo "      （本机可用 systemd timer 后端绕开该限制：DIA_JOB_PERIODIC_BACKEND=systemd-timer）" >&2
+        return 2
+      fi
+      wrapper="$(write_wrapper "$name" "$cmd")" || return 1
+      if [ "$DIA_JOB_NO_LAUNCHD" = 1 ]; then
+        echo "  · 已跳过 crontab 写入（DIA_JOB_NO_LAUNCHD=1；测试隔离）"
+        f="$wrapper"
+      else
+        f="$(cron_install "$name" "$wrapper" "$log" "$spec")" || return 1
+      fi
     fi
   fi
   # ⚠️ **必须把 label 写进 registry**（2026-10-12 修）：install 此前不记 label →
@@ -1149,6 +1299,10 @@ cmd_install() {
   elif [ "$backend" = systemd ]; then
     if [ "$DIA_JOB_NO_LAUNCHD" = 1 ]; then echo "  · systemd 加载已跳过（测试隔离）"
     else echo "  ✓ systemd --user 已启用并 active（$(systemd_state "$name")）"; fi
+  elif [ "$backend" = systemd-timer ]; then
+    if [ "$DIA_JOB_NO_LAUNCHD" = 1 ]; then echo "  · systemd timer 加载已跳过（测试隔离）"
+    elif timer_present "$name"; then echo "  ✓ systemd timer 已登记（$(timer_unit_path "$name")）"
+    else echo "  ⚠️ systemd timer 未确认落盘"; fi
   else
     if [ "$DIA_JOB_NO_LAUNCHD" = 1 ]; then echo "  · crontab 写入已跳过（测试隔离）"
     elif cron_present "$name"; then echo "  ✓ crontab 已登记（$(cron_present_spec "$name")）"; else echo "  ⚠️ crontab 未确认登记"; fi
@@ -1182,6 +1336,9 @@ cmd_uninstall() {
   elif [ "$backend" = systemd ]; then
     [ "$DIA_JOB_NO_LAUNCHD" = 1 ] || systemd_remove "$name"
     [ "$DIA_JOB_NO_LAUNCHD" = 1 ] && echo "  · 已跳过 systemd 卸载（测试隔离）"
+  elif [ "$backend" = systemd-timer ]; then
+    [ "$DIA_JOB_NO_LAUNCHD" = 1 ] || systemd_timer_remove "$name"
+    [ "$DIA_JOB_NO_LAUNCHD" = 1 ] && echo "  · 已跳过 systemd timer 卸载（测试隔离）"
   else
     [ "$DIA_JOB_NO_LAUNCHD" = 1 ] || cron_remove "$name"
     [ "$DIA_JOB_NO_LAUNCHD" = 1 ] && echo "  · 已跳过 crontab 移除（测试隔离）"
@@ -1202,10 +1359,15 @@ cmd_adopt() {
   fi
   local short="${label##*.}" backend="launchd"
   case "$PLATFORM" in
-    linux|wsl) if [ "$type" = service ]; then backend=systemd; else backend=cron; fi ;;
+    linux|wsl)
+      if [ "$type" = service ]; then backend=systemd
+      elif [ -f "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/${label}.timer" ]; then backend=systemd-timer
+      else backend=cron; fi ;;
   esac
   if [ "$backend" = systemd ] && [ ! -f "$(unit_path "$short")" ]; then
     echo "  ⚠️ 未找到 unit：$(unit_path "$short")（仍登记，便于 status/selfcheck 可见）"
+  elif [ "$backend" = systemd-timer ] && [ ! -f "$(timer_unit_path "$short")" ]; then
+    echo "  ⚠️ 未找到 timer：$(timer_unit_path "$short")（仍登记，便于 status/selfcheck 可见）"
   elif [ "$backend" = cron ] && ! cron_present "$short"; then
     echo "  ⚠️ crontab 里没有 $(_cron_marker "$short") 条目（仍登记；adopted 条目由对方维护）"
   fi
@@ -1428,6 +1590,9 @@ echo "══ yan-task selfcheck（边界=$PLATFORM${_dry_banner}）══"
           systemd)
             if "$SYSTEMCTL_BIN" --user is-enabled "$label.service" >/dev/null 2>&1; then _present=1; fi
             _why="$label.service 未启用/未 active" ;;
+          systemd-timer)
+            if "$SYSTEMCTL_BIN" --user is-enabled "$label.timer" >/dev/null 2>&1; then _present=1; fi
+            _why="$label.timer 未启用" ;;
           *)
             cron_present "$short" && _present=1
             _why="crontab 缺 $(_cron_marker "$short") 条目" ;;
@@ -1457,8 +1622,16 @@ echo "══ yan-task selfcheck（边界=$PLATFORM${_dry_banner}）══"
             non-repo-abs|unknown) _extra+=(--allow-unstable) ;;
           esac
           [ -n "$dsc" ] || dsc="selfcheck 重建（原 desc 缺失）"
+          # 重建**保持原后端**（不因环境变化被悄悄迁移：装了 cron 的机器不把 timer 迁回 cron，
+          # 反过来无 cron 的机器也不会把 cron 任务变成 timer —— 后者会改变条目的语义）
+          local _pb_saved="${DIA_JOB_PERIODIC_BACKEND:-}" _pb_forced=0
+          case "${_be:-cron}" in
+            systemd-timer) DIA_JOB_PERIODIC_BACKEND=systemd-timer; _pb_forced=1 ;;
+            cron) DIA_JOB_PERIODIC_BACKEND=cron; _pb_forced=1 ;;
+          esac
           if [ -n "$cmd" ]; then cmd_install "$short" --cmd "$cmd" --label "$label" --interval "$iv" --calendar "$cal" --weekdays "$wd" --type "${type:-periodic}" --desc "$dsc" "${_extra[@]}" >/dev/null 2>&1 && { echo "  ✚ $short 已重建"; fixed=$((fixed+1)); }
           else echo "  ⚠️ ${short}：不在场且 registry 无 cmd（adopted 任务请按其项目脚本重装）"; fi
+          [ "$_pb_forced" = 1 ] && DIA_JOB_PERIODIC_BACKEND="$_pb_saved"
         fi
         fi
       fi

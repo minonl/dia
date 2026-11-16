@@ -102,3 +102,67 @@ describe("依赖校验", () => {
     expect(s.detail).toContain("缺 1");
   });
 });
+
+// 2026-11-16（R2）：host_cli 的版本判定权归 platforms 注册表的 range ——
+// deps.jsonl 里的 version 只是登记当时的快照，宿主补丁演进不该反复报「漂移」；
+// 同时 supported=false 的平台不该把「本机没这个宿主」记成缺陷。
+describe("host_cli 版本判定归 platforms 注册表", () => {
+  const fakeBin = (version: string) => {
+    const dir = mkdtempSync(join(tmpdir(), "dia-bin-reg-"));
+    const p = join(dir, "fakehost");
+    writeFileSync(p, `#!/bin/sh\necho "fakehost v${version}"\n`);
+    chmodSync(p, 0o755);
+    return dir;
+  };
+  const withRegistry = (entry: any, fn: () => void) => {
+    const dir = mkdtempSync(join(tmpdir(), "dia-plat-"));
+    const file = join(dir, "platforms.json");
+    writeFileSync(file, JSON.stringify({ schema: 1, platforms: { fakehost: entry } }));
+    const saved = process.env.DIA_PLATFORMS_FILE;
+    process.env.DIA_PLATFORMS_FILE = file;
+    try { fn(); } finally { if (saved === undefined) delete process.env.DIA_PLATFORMS_FILE; else process.env.DIA_PLATFORMS_FILE = saved; }
+  };
+  const base = { supported: true, render: null, probe: ["--version"], range: ">=2.2.0 <3.0.0", tested: [], notes: [] };
+
+  test("range 覆盖补丁演进：登记 2.2.5、实测 2.2.9 → ok（不再误报漂移）", () => {
+    const dir = fakeBin("2.2.9"); const old = process.env.PATH; process.env.PATH = `${dir}:${old}`;
+    try {
+      withRegistry(base, () => {
+        const r = deps.check({ id: "host_cli:fakehost@2.2.5", kind: "host_cli", version: "2.2.5", role: "required" });
+        expect(r.status).toBe("ok");
+        expect(r.detail).toContain(">=2.2.0");
+      });
+    } finally { process.env.PATH = old; }
+  });
+
+  test("超出 range → warn（用注册表的范围措辞，不拿旧快照吓人）", () => {
+    const dir = fakeBin("3.1.0"); const old = process.env.PATH; process.env.PATH = `${dir}:${old}`;
+    try {
+      withRegistry(base, () => {
+        const r = deps.check({ id: "host_cli:fakehost@2.2.5", kind: "host_cli", version: "2.2.5", role: "required" });
+        expect(r.status).toBe("warn");
+        expect(r.detail).toContain("platforms 支持范围");
+      });
+    } finally { process.env.PATH = old; }
+  });
+
+  test("注册表声明 supported=false 且未装 → ok + note（本平台没这个宿主，不算缺陷）", () => {
+    const old = process.env.PATH; process.env.PATH = "/usr/bin:/bin"; // 保证 fakehost 不可见
+    try {
+      withRegistry({ ...base, supported: false }, () => {
+        const r = deps.check({ id: "host_cli:fakehost@0.2.1", kind: "host_cli", version: "0.2.1", role: "required" });
+        expect(r.status).toBe("ok");
+        expect(r.note).toBe(true);
+      });
+    } finally { process.env.PATH = old; }
+  });
+
+  test("没有注册表条目时退回登记版本匹配（原行为不变）", () => {
+    const dir = fakeBin("2.2.9"); const old = process.env.PATH; process.env.PATH = `${dir}:${old}`;
+    try {
+      const r = deps.check({ id: "host_cli:fakehost@2.2.5", kind: "host_cli", version: "2.2.5", role: "required" });
+      expect(r.status).toBe("warn"); // 精确登记 2.2.5 vs 实测 2.2.9
+      expect(r.detail).toContain("登记 2.2.5");
+    } finally { process.env.PATH = old; }
+  });
+});

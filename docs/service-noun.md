@@ -76,7 +76,7 @@ service = entry（脚本入口）                       ← 本版只此一种
 |---|---|
 | `entry.cmd` | **稳定入口**，两种合法形态（对齐 `packages/job` 的 ref-entry 判定，`lib/policy.sh`）：<br>① 仓内相对路径（`bin/*`）：`add` 时解析并链接到 `DIA_JOB_ENTRY_DIR`（默认 `$DIA_JOB_ROOT/bin` → `~/.local/bin`），**存 registry 的是链接后的稳定入口**；<br>② 已安装的 ref-entry（`$DIA_JOB_ENTRY_DIR/*`）。<br>禁止 checkout 绝对路径 / worktree 路径（`E_UNSTABLE_ENTRY`） |
 | `lifecycle.type` | `periodic` / `bounded` / `service`（直接映射 `dia job install --type`） |
-| `lifecycle.interval` | periodic 的间隔；**cron 约束**：`≥60s` 且为整分；用 `*/N` 分表达时 `N` 必须整除 `1440`（24h）；间隔 `>23h` 表达不了 → **安装期显式 `E_BACKEND`**（与 `cron_spec` 的 `rc=3` 对齐），绝不上装半套 |
+| `lifecycle.interval` | periodic 的间隔；**cron 约束**：`≥60s` 且为整分；用 `*/N` 分表达时 `N` 必须整除 `1440`（24h）；间隔 `>23h` 表达不了 → **安装期显式 `E_BACKEND`**（与 `cron_spec` 的 `rc=3` 对齐），绝不上装半套。<br>无 cron 的机器（Fedora 族/不可变系统）走 systemd `.timer` 后端：只要求 **≥60 秒整数**，无整分/整除限制 |
 | `lifecycle.target` | `local` / 主机名：多机部署时的归属声明，供 `status` 提示。比对口径：`os.hostname()` 与声明值均**去 `.local` 后缀、转小写**后比较（D3） |
 | `contract` | 与调用方/事件源的约定（stdin 格式、生命周期退出码语义、幂等键）**只声明，不执行、不参与 health 判定** |
 | `healthcheck` | 见 §4；缺省表示「只报生命周期状态」，`status` 显示 `health=n/a` |

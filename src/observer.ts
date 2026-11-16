@@ -252,8 +252,11 @@ export function carrierPresent(reg: any, name: string): boolean {
     return existsSync(join(homedir(), "Library", "LaunchAgents", `${label}.plist`));
   }
   if (backend === "systemd") {
-    const base = process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
-    return existsSync(join(base, "systemd", "user", `${label}.service`));
+    return existsSync(join(paths.xdgConfig(), "systemd", "user", `${label}.service`));
+  }
+  // periodic 的 systemd timer 后端（2026-11-16；无 cron 的发行版）
+  if (backend === "systemd-timer") {
+    return existsSync(join(paths.xdgConfig(), "systemd", "user", `${label}.timer`));
   }
   try {
     const bin = process.env.DIA_JOB_CRONTAB_BIN || "crontab";

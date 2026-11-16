@@ -13,7 +13,7 @@ import * as paths from "./paths.ts";
 // 目录惰性解析（测试与多 persona 场景 env 会变）
 const dataDir = () => paths.diaHome();
 const cacheDir = () => paths.srcCacheDir();
-const opencodeAgents = () => process.env.DIA_OPENCODE_AGENTS_DIR || join(homedir(), ".config", "opencode", "agents");
+const opencodeAgents = () => process.env.DIA_OPENCODE_AGENTS_DIR || join(paths.xdgConfig(), "opencode", "agents");
 const dshProfiles = () => process.env.DIA_DSH_PROFILES_DIR || join(homedir(), ".dsh", "profiles");
 // codex 没有「profile」概念，隔离单位是 HOME：codex 读 $CODEX_HOME/AGENTS.md（默认 $HOME/.codex），
 // skills 读 $HOME/.agents/skills。所以 codex host 渲染到一个**假 HOME**（默认 <data>/codex-home），
@@ -32,7 +32,7 @@ const assertHost = (h: string) => { if (!HOSTS.has(h)) throw new Error("E_HOST: 
 // （packages/core/src/config/discovery.ts: names = ["opencode.json", "opencode.jsonc"]），
 // 两者都存在时宿主先读 .json；只有 .jsonc 时（v1.14.49+ 新装默认）读 .jsonc。
 const OPENCODE_CONFIG_NAMES = ["opencode.json", "opencode.jsonc"];
-const opencodeConfigDir = () => process.env.DIA_OPENCODE_CONFIG_DIR || join(homedir(), ".config", "opencode");
+const opencodeConfigDir = () => process.env.DIA_OPENCODE_CONFIG_DIR || join(paths.xdgConfig(), "opencode");
 const opencodeConfigCandidates = () =>
   process.env.DIA_OPENCODE_CONFIG ? [process.env.DIA_OPENCODE_CONFIG] : OPENCODE_CONFIG_NAMES.map((n) => join(opencodeConfigDir(), n));
 /** 实际生效的 opencode 配置文件：env 显式指定 > 存在的 .json > 存在的 .jsonc > 默认 .json。 */

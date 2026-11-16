@@ -15,11 +15,13 @@
 | `kind` | enum | ✓ | `host_cli / npm / bundle / endpoint / model / datastore / daemon` | CycloneDX 区分服务与组件 |
 | `version` / `resolved` | str / uri | ✓ | 实际解析结果 | npm lockfile |
 | `integrity` | `sha512-…` / commit | ✓（有产物时） | 内容哈希；**不能只靠名字** | npm `integrity`；semver §3 |
-| `role` | `required/optional/degradable` | ✓ | 缺失时的行为 | 设计"可缺，缺了降级" |
-| `fallback` | str | degradable 必填 | 降级路径 | 同上 |
+| `role` | `required/optional` | ✓ | 缺失时的行为（`required` 缺失 = fail，`optional` 只是 note） | 设计"可缺，缺了降级" |
 | `verified_at/by/method/result/evidence` | RFC3339/str/enum/pass\|fail\|unknown/path | ✓ | **验证三元组 + 证据** | SPDX `verifiedUsing`；CycloneDX citations |
 | `support` / `removal_after` | `active|deprecated|eol|unknown` / date | ✓ / deprecated 必填 | 淘汰宽限期 | npm deprecate；PEP 387 |
 | `depends_on` | [id] | ✓（可空） | 依赖图 | CycloneDX dependency graph |
+
+> 设计早期的 `degradable` / `fallback` 字段**未实现**（`check()` 只区分 required / 其它），已从字段表移除；
+> 需要「缺了降级」请直接记 `optional` 并在 `evidence` 写降级做法。
 
 **局限（必须写进 README）**：SBOM 只回答"有什么、谁引入"，不回答"能不能跑"；lockfile 有 hash 无来源证明；`dpkg -V` 只做 md5 且依赖已有记录。
 
@@ -37,6 +39,8 @@
 1. `resolved` 用**可移植写法**（`command:opencode`、`~/...`），不写死某台机器的绝对路径。
 2. 人读视图由 `dia doctor` 派生（`deps` 项，`--json` 给机器）；**本文不抄登记数据**。
 3. `dia doctor` 判定：required 缺失 = `fail`；版本/路径漂移 = `warn`；可选未装 = note（不拉红）。
+   **`host_cli` 的版本判定权在 `docs/platforms/registry.json` 的 `range`**（如 `>=0.2.0 <0.3.0`）：
+   deps 行的 `version` 只是登记当时的快照，宿主补丁/预发布演进不该反复报漂移；注册表里没有该命令时才退回按登记版本匹配。
 4. 追加用 `dia deps record`（`--id/--kind/--version` 必填；`verified_at` 自动填当天，`method=manual`）；
    看现状用 `dia deps list [--json]`（登记 + 实测，required 缺失 exit 2）。
 
@@ -47,7 +51,7 @@
 | 步 | 判据 |
 |---|---|
 | 登记 | id 唯一 + source + integrity；缺就记 `unknown`，不猜 |
-| 探测 | 存在 + 版本符合 + smoke 通过 → `active`；版本不符 → `degraded`；required 缺失 → **非 0 退出**（exit 30） |
+| 探测 | 存在 + 版本符合 + smoke 通过 → `active`；版本不符 → `degraded`；required 缺失 → **exit 2**（与 `dia deps list` 实际退出码一致） |
 | 启用 | `verified_at` ≤90 天 且 integrity 复核一致 |
 | 升级 | 新 id（版本/hash 变），旧行保留；**禁止原地改写** |
 | 废弃 | `support=deprecated` + `removal_after` ≥1 个 minor 周期 + 有替代 |

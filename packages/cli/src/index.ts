@@ -2221,7 +2221,7 @@ export async function main(rawArgv: string[]): Promise<number> {
     if (sub === "record") {
       const id = flag(rest, "--id"), kind = flag(rest, "--kind"), version = flag(rest, "--version");
       if (!id || !kind || !version) {
-        err("usage: dia deps record --id <kind:name@ver> --kind <host_cli|npm|bundle|datastore|model> --version <ver> [--resolved R] [--role required|optional] [--result pass|fail|unknown] [--evidence P] [--fallback X] [--integrity I] [--removal-after DATE] [--file PATH]");
+        err("usage: dia deps record --id <kind:name@ver> --kind <host_cli|npm|bundle|datastore|model> --version <ver> [--resolved R] [--role required|optional] [--result pass|fail|unknown] [--evidence P] [--integrity I] [--removal-after DATE] [--file PATH]");
         return 2;
       }
       const entry: deps.DepEntry = {
@@ -2229,7 +2229,6 @@ export async function main(rawArgv: string[]): Promise<number> {
         resolved: flag(rest, "--resolved"),
         integrity: flag(rest, "--integrity") || "unknown",
         role: flag(rest, "--role") || "optional",
-        fallback: flag(rest, "--fallback"),
         verified_at: new Date().toISOString().slice(0, 10),
         verified_by: process.env.USER || "cli",
         method: "manual",

@@ -111,13 +111,25 @@ dia persona remove dabo
 | `task add/list/link/plan/split/status/done` | **已实现** | done 需 judge + evidence；`plan` 写计划态（prio/start/due/progress）；`split` 父 depends on 子（单条原子事件，judge 继承） |
 | `graph [--json] [--task T] [--tui …] [--export-html] [--serve] [--next/--explain/--lint/--seats]` | **已实现** | 图 JSON（schema 1 + capabilities）；节点带 prio/start/due/progress + 派生 `eff_prio/ready/rank/unblocks/critical` 等；`--export-html` 单文件 HTML；`--next [n]` / `--explain <id>` / `--lint` 只读编排（Kahn-v1）；`--next --seats N [--presence-ttl 30m]` 固定席位分配（seats-v1）；`--serve [--port N] [--no-open]` 本机只读 web（需 graph-web 可选包） |
 | `team run --mock / --acp / --dsh`、`team gate/accept/reject` | **已实现** | 状态机 + 门禁；成功/失败路径均跑通 |
-| `job …` | **已实现** | 转发 `packages/job`（launchd/cron/schtasks） |
+| `job …` | **已实现** | 转发 `packages/job`（periodic：launchd / cron / systemd timer；service：launchd / systemd --user；Windows native 待实现） |
 | `patch …` | **未实现** | 当前 `unknown command`；设计见 `docs/patching.md` |
 | `ingest / audit / freeze / run / resume / price` | **已实现** | D0 阶段交付 |
 
 证据入口：`bun test tests`；`tests/kit.test.ts`、`tests/scope.test.ts`、`tests/env.test.ts`、`tests/active-doctor.test.ts`。
 
-## 5. 与安装文档的关系
+## 5. 路径与 XDG（2026-11-16 统一）
+
+| 目录 | 解析规则 |
+|---|---|
+| 数据根 | **固定 `~/.dia`**（`DIA_ROOT` 覆盖，`DIA_DATA_DIR` 兼容一个 release）；**不参与 XDG** —— 2026-11-05 拍板跨平台同一路径，迁移动静太大 |
+| 宿主配置 / 数据 / 缓存 / 状态 | 尊重 `XDG_CONFIG_HOME` / `XDG_DATA_HOME` / `XDG_CACHE_HOME` / `XDG_STATE_HOME`，未设置时用规范默认值（`~/.config`、`~/.local/share`、`~/.cache`、`~/.local/state`） |
+
+实现：`src/paths.ts` 的 `xdgConfig()/xdgData()/xdgCache()/xdgState()` 是唯一解析器；
+`persona`（opencode 宿主目录）、`pricing`（`prices.json`）、`observer`（systemd unit 在场判定）、
+`job`（旧 job 根探测）一律经它解析，**不要再手拼 `~/.config` / `~/.local/share`**。
+`dia-job` 自己的 unit 目录同样跟 `XDG_CONFIG_HOME` 走 —— 两边口径必须一致，否则同一台机器会看到两个位置。
+
+## 6. 与安装文档的关系
 
 - 清单格式与安全规则见 `docs/persona-install.md`；
 - 入口与默认 agent 规则见 `docs/entrypoints.md`。

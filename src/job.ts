@@ -27,7 +27,11 @@ export function jobBin(): { bin: string | null; error?: string } {
  *  · 迁移期兼容：新根不存在、旧根（~/.local/share/dia-job）存在 → 用旧根（否则升级瞬间定时任务全找不到）
  *  · 都没有 → 新根 ~/.dia/job（dia-job 自己会创建）
  */
-export const legacyJobRoot = () => join(homedir(), ".local", "share", "dia-job");
+export const legacyJobRoot = () => join(paths.xdgData(), "dia-job");
+/** 旧版（XDG 之前）的 job 根：老机器上可能还在这里，迁移期一并认。 */
+export const ancientJobRoot = () => join(homedir(), ".local", "share", "dia-job");
+/** 所有旧根（只读兼容）：XDG 口径在前，历史固定路径在后。 */
+export const legacyJobRoots = () => [...new Set([legacyJobRoot(), ancientJobRoot()])];
 
 /** 临时路径（测试/沙箱）：这类根永远不许落到 legacy，也不许注册真定时。 */
 export function isEphemeralPath(p: string): boolean {
@@ -72,12 +76,13 @@ export function jobRootSource(): JobRootSource {
   const next = paths.jobRoot();
   if (readJobPin()) return "pin"; // 已落钉：固定新根，永不回退 legacy
   if (isEphemeralPath(dataRootPath()) || isEphemeralPath(homedir())) return "next";
-  return !existsSync(next) && existsSync(legacyJobRoot()) ? "legacy" : "next";
+  return !existsSync(next) && legacyJobRoots().some((p) => existsSync(p)) ? "legacy" : "next";
 }
 
 export function jobRootResolved(): string {
   if (process.env.DIA_JOB_ROOT) return process.env.DIA_JOB_ROOT;
-  return jobRootSource() === "legacy" ? legacyJobRoot() : paths.jobRoot();
+  if (jobRootSource() !== "legacy") return paths.jobRoot();
+  return legacyJobRoots().find((p) => existsSync(p)) ?? legacyJobRoot();
 }
 
 /** 写入门控：临时根 / legacy 根一律拒绝（测试用 DIA_JOB_NO_LAUNCHD=1 或 DIA_JOB_ALLOW_EPHEMERAL=1 放行）。 */
@@ -87,7 +92,7 @@ export function assertWritableJobRoot(root = jobRootResolved()): void {
   if (pin && process.env.DIA_JOB_ROOT && resolve(root) !== resolve(pin.root)) {
     throw new Error(`E_JOB_ROOT_PINNED: 已落钉到 ${pin.root}，拒绝写入 ${root}（确需切换：删 ${jobPinFile()} 或 DIA_JOB_ALLOW_EPHEMERAL=1）`);
   }
-  if (resolve(root) === resolve(legacyJobRoot())) {
+  if (legacyJobRoots().some((p) => resolve(p) === resolve(root))) {
     throw new Error(`E_JOB_ROOT_LEGACY: 当前解析到旧 job 根 ${root}（只读兼容）；修复：dia job migrate --from ${root}`);
   }
   if (!process.env.DIA_JOB_ROOT && isEphemeralPath(root) && process.env.DIA_JOB_NO_LAUNCHD !== "1") {

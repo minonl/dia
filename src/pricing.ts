@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import * as paths from "./paths.ts";
 
 export interface Price { input: number; output: number; cache_read?: number }
 export type PriceTable = Record<string, Price | null>;
@@ -12,7 +12,7 @@ const DEFAULT: PriceTable = {
 };
 
 export function pricesFile(): string {
-  return process.env.DIA_PRICES_FILE || join(homedir(), ".config", "dia", "prices.json");
+  return process.env.DIA_PRICES_FILE || join(paths.xdgConfig(), "dia", "prices.json");
 }
 
 export function loadPrices(): PriceTable {

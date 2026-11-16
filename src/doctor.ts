@@ -194,7 +194,7 @@ function jobRootCheck(): Check {
     if (sandbox || process.env.DIA_JOB_NO_LAUNCHD === "1") return { name, status: "ok", detail: `沙箱/临时根 ${cur}（跳过一致性判定）` };
     return { name, status: "fail", detail: `job 根在临时目录：${cur}（设 DIA_JOB_ROOT 到稳定目录）` };
   }
-  const legacy = job.legacyJobRoot();
+  const legacyRoots = job.legacyJobRoots();
   // split-brain：当前注册的任务，其 plist 却指向旧根脚本 → 注册与实跑分叉
   try {
     const tasks = JSON.parse(readFileSync(join(cur, "tasks", "registry.json"), "utf8")).tasks || {};
@@ -220,18 +220,25 @@ function jobRootCheck(): Check {
       }
       const xml = readFileSync(plist, "utf8");
       const m = xml.match(/<key>ProgramArguments<\/key><array><string>[^<]*<\/string><string>([^<]*)<\/string>/);
-      if (m && m[1].startsWith(join(legacy, "tasks") + "/")) {
-        return { name, status: "fail", detail: `launchd 正在跑旧根脚本（${n} → ${m[1]}）；修复：dia job migrate --from ${legacy}` };
+      const legacyHit = m ? legacyRoots.find((l) => m[1].startsWith(join(l, "tasks") + "/")) : undefined;
+      if (legacyHit) {
+        return { name, status: "fail", detail: `launchd 正在跑旧根脚本（${n} → ${m[1]}）；修复：dia job migrate --from ${legacyHit}` };
       }
       if (m && job.isEphemeralPath(m[1])) {
         return { name, status: "fail", detail: `launchd 指向临时路径（${n} → ${m[1]}，疑似测试污染）；修复：dia collab enable 重注册` };
       }
     }
   } catch { /* 无 registry / 非 mac 忽略 */ }
-  let legacyCount = 0;
-  try { legacyCount = Object.keys(JSON.parse(readFileSync(join(legacy, "tasks", "registry.json"), "utf8")).tasks || {}).length; } catch { /* none */ }
-  if (legacyCount && resolve(legacy) !== resolve(cur)) {
-    return { name, status: "warn", detail: `旧 job 根仍有 ${legacyCount} 个注册：${legacy}（迁移：dia job migrate --from ${legacy} --dry-run）` };
+  let legacyCount = 0, legacyPath = "";
+  for (const l of legacyRoots) {
+    if (resolve(l) === resolve(cur)) continue;
+    try {
+      const n = Object.keys(JSON.parse(readFileSync(join(l, "tasks", "registry.json"), "utf8")).tasks || {}).length;
+      if (n) { legacyCount = n; legacyPath = l; break; }
+    } catch { /* none */ }
+  }
+  if (legacyCount) {
+    return { name, status: "warn", detail: `旧 job 根仍有 ${legacyCount} 个注册：${legacyPath}（迁移：dia job migrate --from ${legacyPath} --dry-run）` };
   }
   const pin = job.readJobPin();
   if (pin && resolve(pin.root) !== resolve(cur)) {

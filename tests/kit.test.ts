@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeAll } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname } from "node:path";
 import { join } from "node:path";
@@ -184,5 +184,45 @@ describe("kit 空内容拒绝", () => {
     const root = mkdtempSync(join(tmpdir(), "dia-kit-empty-"));
     writeFileSync(join(root, "dia.json"), JSON.stringify({ schema: 1, kind: "kit", id: "empty", version: "0.1.0" }));
     expect(() => kit.install(root)).toThrow(/E_MANIFEST/);
+  });
+});
+
+// 2026-11-16（Linux 实测）：两条在 Fedora/Bazzite 上会真实踩到的边界
+describe("kit 边界（Linux 宿主形态）", () => {
+  test("HOME 是符号链接（/home → /var/home）时，真实路径形态不误判越界", () => {
+    const real = mkdtempSync(join(tmpdir(), "dia-kit-realhome-"));
+    const link = join(mkdtempSync(join(tmpdir(), "dia-kit-link-")), "home");
+    symlinkSync(real, link);
+    const prev = process.env.DIA_HOME;
+    process.env.DIA_HOME = link;
+    try {
+      const s = mkdtempSync(join(tmpdir(), "dia-kit-symsrc-"));
+      writeFileSync(join(s, "a.md"), "# a\n");
+      writeFileSync(join(s, "dia.json"), JSON.stringify({
+        schema: 1, kind: "kit", id: "sym", version: "0.1.0",
+        files: [{ from: "a.md", to: `${real}/.sym/a.md` }], // 真实路径形态（非 ~ 展开后的符号链接形态）
+      }));
+      expect(() => kit.install(s)).not.toThrow();
+      expect(readFileSync(join(real, ".sym/a.md"), "utf8")).toBe("# a\n");
+    } finally { process.env.DIA_HOME = prev; }
+  });
+
+  test("目标已是实体目录时 --force 备份不抛（递归 cp）", () => {
+    const s = mkdtempSync(join(tmpdir(), "dia-kit-dirsrc-"));
+    mkdirSync(join(s, "skill"), { recursive: true });
+    writeFileSync(join(s, "skill", "SKILL.md"), "# s\n");
+    writeFileSync(join(s, "dia.json"), JSON.stringify({
+      schema: 1, kind: "kit", id: "dirclash", version: "0.1.0",
+      skills: [{ from: "skill", name: "dirclash", mode: "link" }],
+    }));
+    const dest = join(home, ".agents/skills/dirclash");
+    mkdirSync(dest, { recursive: true });
+    writeFileSync(join(dest, "OLD.md"), "keep me\n"); // 宿主已有同名实体目录（非 dia 管理）
+    expect(() => kit.install(s, { force: true })).not.toThrow();
+    expect(lstatSync(dest).isSymbolicLink()).toBe(true);
+    // 备份必须留下原目录内容（证明是递归备份）
+    const bdir = join(process.env.DIA_DATA_DIR!, "backups");
+    const found = readdirSync(bdir, { recursive: true }).map(String).some((p) => p.endsWith("OLD.md"));
+    expect(found).toBe(true);
   });
 });

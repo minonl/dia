@@ -93,12 +93,46 @@ function expandHome(p: string): string {
   return isAbsolute(p) ? p : resolve(home, p);
 }
 
+/** 宽松 realpath：存在的部分取真实路径，不存在的尾巴原样拼回（用于越界判定的第二道）。 */
+function realpathLoose(p: string): string {
+  let cur = resolve(p);
+  const tail: string[] = [];
+  while (!existsSync(cur)) {
+    const parent = dirname(cur);
+    if (parent === cur) return resolve(p);
+    tail.unshift(basename(cur));
+    cur = parent;
+  }
+  try {
+    const real = realpathSync(cur);
+    return tail.length ? join(real, ...tail) : real;
+  } catch {
+    return resolve(p);
+  }
+}
+
 /** 目标路径必须在 HOME 内（越界即拒绝），且不能是 HOME 本身。 */
 function assertInsideHome(p: string): string {
   const abs = resolve(expandHome(p));
   const home = resolve(homeDir());
-  if (abs === home || !abs.startsWith(home + sep)) throw new Error(`E_MANIFEST: target escapes HOME: ${p}`);
+  // ⚠️ 2026-11-16：Fedora/Bazzite 的 /home 是 /var/home 的符号链接，`HOME=/home/u` 而真实
+  //   作业路径是 `/var/home/u/...` —— 只做字符串 resolve 会把同一目录判成「越出 HOME」。
+  //   ⇒ 字符串形态或 realpath 形态任一落在 HOME 内即通过（realpath 仍挡「.. / 符号链接逃逸」）。
+  const stringOk = abs === home || abs.startsWith(home + sep);
+  if (!stringOk) {
+    const realAbs = realpathLoose(abs);
+    const realHome = realpathLoose(home);
+    if (realAbs !== realHome && !realAbs.startsWith(realHome + sep)) throw new Error(`E_MANIFEST: target escapes HOME: ${p}`);
+  }
   return abs;
+}
+
+/** 写盘前清掉已存在的目标：实体目录要递归删（unlink 只对文件/软链有效）。 */
+function removeExistingForWrite(dest: string): void {
+  if (isSymlink(dest)) { unlinkSync(dest); return; }
+  if (!existsSync(dest)) return;
+  if (lstatSync(dest).isDirectory()) rmSync(dest, { recursive: true, force: true });
+  else unlinkSync(dest);
 }
 
 /** 源路径必须在包内。 */
@@ -310,7 +344,10 @@ export function renderContent(
     }
     if (!isSymlink(p.dest) && existsSync(p.dest)) {
       mkdirSync(backupDir, { recursive: true });
-      cpSync(p.dest, join(backupDir, basename(p.dest)));
+      // ⚠️ 2026-11-16：目标可能是**目录**（宿主已有同名实体目录，如 ~/.agents/skills/dia-msg）
+      //   不带 recursive 会抛 `Recursive option not enabled`；postinstall 里被静默吞掉、
+      //   整批产物一个都不装（ensure 是全有或全无）。目录必须递归备份。
+      cpSync(p.dest, join(backupDir, basename(p.dest)), { recursive: true });
     }
   }
   if (opts.dryRun) return plans.map((p) => p.entry);
@@ -319,10 +356,11 @@ export function renderContent(
   for (const p of plans) {
     mkdirSync(dirname(p.dest), { recursive: true });
     if (p.entry.type === "file" && p.content !== undefined) {
+      removeExistingForWrite(p.dest);
       writeFileSync(p.dest, Buffer.from(p.content, "base64"));
       p.entry.value = shaFile(p.dest);
     } else if (p.linkTarget) {
-      if (existsSync(p.dest) || isSymlink(p.dest)) unlinkSync(p.dest);
+      removeExistingForWrite(p.dest);
       symlinkSync(resolve(p.linkTarget), p.dest);
       p.entry.value = relative(targetDir, resolve(p.linkTarget));
     }

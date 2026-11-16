@@ -97,13 +97,43 @@ PLATFORM="$(detect_platform)"
 #   两者都在**本用户作用域**（`systemctl --user` / `crontab` 自己的表），不需要 root。
 #   ⇒ periodic=cron、service=systemd，各自用对的工具，任务 manifest/wrapper 完全不感知平台。
 CRONTAB_BIN="${DIA_JOB_CRONTAB_BIN:-$(command -v crontab 2>/dev/null || true)}"
+# 显式 DIA_JOB_CRONTAB_BIN 指向不存在/不可执行的路径 ≠ 可用（否则 doctor 报假绿）
+_have_crontab() { [ -n "$CRONTAB_BIN" ] && [ -x "$CRONTAB_BIN" ]; }
 SYSTEMCTL_BIN="${DIA_JOB_SYSTEMCTL_BIN:-$(command -v systemctl 2>/dev/null || true)}"
 # cron 的最小环境：wrapper/任务里用的 node/bun/dia 多在 ~/.local/bin ⇒ 行内显式给 PATH
 DIA_JOB_CRON_PATH="${DIA_JOB_CRON_PATH:-$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin}"
+# ⚠️ 2026-11-16 实测（Fedora/Bazzite 45）：node 由 nvm/fnm 安装时不在上面的目录里，
+#   而任务命令是 `'<abs>/dia' …`、dia 的 shebang 是 `#!/usr/bin/env node`
+#   ⇒ cron 里直接 `env: 'node': No such file or directory`（127），**任务装上了却永远不成功**。
+#   ⇒ 安装时把当前 shell 里 node/bun 的目录固化进调度 PATH（显式 DIA_JOB_TOOL_PATH 优先）。
+_detect_tool_path() {
+  local out="" c d
+  for c in node bun; do
+    command -v "$c" >/dev/null 2>&1 || continue
+    d="$(cd -P "$(dirname "$(command -v "$c")")" >/dev/null 2>&1 && pwd)" || continue
+    case ":$out:" in *":$d:"*) continue ;; esac
+    out="${out:+$out:}$d"
+  done
+  printf '%s' "$out"
+}
+DIA_JOB_TOOL_PATH="${DIA_JOB_TOOL_PATH:-$(_detect_tool_path)}"
+# 实际注入 cron 行 / systemd unit 的 PATH：工具目录在前，系统目录兜底
+DIA_JOB_EXEC_PATH="${DIA_JOB_TOOL_PATH:+$DIA_JOB_TOOL_PATH:}$DIA_JOB_CRON_PATH"
+# 装 cron 的建议命令必须按发行版分流：不可变系统（rpm-ostree）上 `dnf install` 必然失败。
+_cron_install_hint() {
+  if [ -f /run/ostree-booted ] || [ "${DIA_JOB_OSTREE:-0}" = 1 ]; then
+    printf '%s' "rpm-ostree install cronie && systemctl reboot（不可变系统：layering 后需重启）"
+  elif command -v apt >/dev/null 2>&1; then printf '%s' "apt install cron"
+  elif command -v dnf >/dev/null 2>&1; then printf '%s' "dnf install cronie"
+  elif command -v pacman >/dev/null 2>&1; then printf '%s' "pacman -S cronie"
+  elif command -v zypper >/dev/null 2>&1; then printf '%s' "zypper install cronie"
+  else printf '%s' "安装 cron（cronie / cron）"
+  fi
+}
 _cron_marker() { printf '# dia-job:%s' "$1"; }
 _unit_dir() { printf '%s' "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"; }
 unit_path() { printf '%s/%s.service' "$(_unit_dir)" "$(label_for "$1")"; }
-_have_systemd() { [ -n "$SYSTEMCTL_BIN" ] && "$SYSTEMCTL_BIN" --user show-environment >/dev/null 2>&1; }
+_have_systemd() { [ -n "$SYSTEMCTL_BIN" ] && [ -x "$SYSTEMCTL_BIN" ] && "$SYSTEMCTL_BIN" --user show-environment >/dev/null 2>&1; }
 
 # ── 跨平台 mtime（GNU/BSD 顺序**不能反**）─────────────────────────────────────
 # ⚠️ 2026-10-30 实测：Linux 上 `stat -f %m FILE` **不报错**（那是「看文件系统」）⇒
@@ -267,10 +297,16 @@ cmd_doctor() {
   if [ "$PLATFORM" != macos ]; then
     if [ "$PLATFORM" = linux ] || [ "$PLATFORM" = wsl ]; then
       # 1) crontab 可用性（periodic 后端的前提）
-      if [ -n "$CRONTAB_BIN" ]; then
+      if _have_crontab; then
         echo "  ✓ crontab 可用（${CRONTAB_BIN}）"
       else
-        echo "  ✗ 找不到 crontab —— periodic 任务装不了（apt install cron / dnf install cronie）"; bad=$((bad+1))
+        echo "  ✗ 找不到 crontab —— periodic 任务装不了（$(_cron_install_hint)）"; bad=$((bad+1))
+      fi
+      # 1b) 调度 PATH 必须能找到 node（nvm/fnm 装的 node 不在系统目录 ⇒ 任务 127 静默失败）
+      if PATH="$DIA_JOB_EXEC_PATH" command -v node >/dev/null 2>&1; then
+        echo "  ✓ 调度 PATH 能找到 node（${DIA_JOB_TOOL_PATH:-系统 PATH}）"
+      else
+        echo "  ⚠️ 调度 PATH 找不到 node —— periodic/service 任务会 127 静默失败（设 DIA_JOB_TOOL_PATH 或把 node 链到 ~/.local/bin）"; warn=$((warn+1))
       fi
       # 2) cron 守护进程是否在跑（装了但没跑 = 静默不执行，最坑）
       if command -v systemctl >/dev/null 2>&1; then
@@ -805,7 +841,7 @@ cron_spec() {  # cron_spec <interval|-> <calendar|-> [<weekdays|- >] → 5 段�
   printf '%s %s * * %s' "$m" "$h" "$dow"
 }
 
-_cron_read() { [ -n "$CRONTAB_BIN" ] || return 0; "$CRONTAB_BIN" -l 2>/dev/null || true; }
+_cron_read() { _have_crontab || return 0; "$CRONTAB_BIN" -l 2>/dev/null || true; }
 _cron_drop() {  # _cron_drop <content> <name> → 去掉该任务条目（保留他人条目）
   local content="$1" marker="$2"
   printf '%s\n' "$content" | grep -v -F "$marker" | sed -e '/^[[:space:]]*$/d'
@@ -814,11 +850,11 @@ cron_present() { _cron_read | grep -qF "$(_cron_marker "$1")"; }
 
 cron_install() {  # cron_install <name> <wrapper> <log> <spec> → 打印写入的 crontab 行
   local name="$1" wrapper="$2" log="$3" spec="$4" marker line cur kept
-  [ -n "$CRONTAB_BIN" ] || { echo "  ✗ 找不到 crontab（先装 cron：apt install cron / dnf install cronie；或设 DIA_JOB_CRONTAB_BIN）" >&2; return 3; }
+  _have_crontab || { echo "  ✗ 找不到 crontab（先装 cron：$(_cron_install_hint)；或设 DIA_JOB_CRONTAB_BIN）" >&2; return 3; }
   mkdir -p "$(dirname "$log")"
   marker="$(_cron_marker "$name")"
   # cron 环境极简 ⇒ 行内显式给 PATH（node/bun/dia 多在 ~/.local/bin）
-  line="$spec PATH=$DIA_JOB_CRON_PATH /bin/bash \"$wrapper\" >> \"$log\" 2>&1 $marker"
+  line="$spec PATH=$DIA_JOB_EXEC_PATH /bin/bash \"$wrapper\" >> \"$log\" 2>&1 $marker"
   cur="$(_cron_read)"
   kept="$(_cron_drop "$cur" "$marker")"
   if [ -n "$kept" ]; then printf '%s\n%s\n' "$kept" "$line"; else printf '%s\n' "$line"; fi | "$CRONTAB_BIN" - || {
@@ -830,7 +866,7 @@ cron_install() {  # cron_install <name> <wrapper> <log> <spec> → 打印写入�
 cron_remove() {  # cron_remove <name>
   local name="$1" marker cur kept
   marker="$(_cron_marker "$name")"
-  [ -n "$CRONTAB_BIN" ] || { echo "  · 无 crontab（跳过）"; return 0; }
+  _have_crontab || { echo "  · 无 crontab（跳过）"; return 0; }
   cur="$(_cron_read)"
   kept="$(_cron_drop "$cur" "$marker")"
   [ "$kept" = "$cur" ] && { echo "  · crontab 无该条目"; return 0; }
@@ -848,6 +884,8 @@ Description=$desc
 
 [Service]
 Type=simple
+# 调度器的 PATH 往往没有 nvm/fnm（node 不在系统目录）⇒ 与 cron 行同口径显式注入
+Environment=PATH=$DIA_JOB_EXEC_PATH
 ExecStart=/bin/bash "$wrapper"
 Restart=always
 RestartSec=10
@@ -975,7 +1013,7 @@ cmd_install() {
     if [ "$type" = service ]; then
       _have_systemd || { echo "  ✗ 本机 systemctl --user 不可用（无 user manager；容器/无 session 环境请改用 periodic，或手工 systemd unit）" >&2; return 3; }
     else
-      [ -n "$CRONTAB_BIN" ] || { echo "  ✗ 找不到 crontab（先装 cron：apt install cron / dnf install cronie；或设 DIA_JOB_CRONTAB_BIN）" >&2; return 3; }
+      _have_crontab || { echo "  ✗ 找不到 crontab（先装 cron：$(_cron_install_hint)；或设 DIA_JOB_CRONTAB_BIN）" >&2; return 3; }
     fi
   else
     echo "本平台（${PLATFORM}）暂不支持 install（设计 §4.1：Windows native 待实现）" >&2; return 3

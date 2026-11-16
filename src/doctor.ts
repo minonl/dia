@@ -52,6 +52,10 @@ function collabObserverCheck(): Check {
   const key = Object.keys(tasks).find((k) => k === "collab-observe");
   if (!key) return { name, status: "warn", detail: "观察器定时未注册（修复：dia collab enable）" };
   const reg = tasks[key] || {};
+  // 注册在 ≠ 调度器里还有条目（2026-11-13 事故：crontab 被外部重写抹掉，registry 还留着）
+  if (!observer.carrierPresent(reg, "collab-observe")) {
+    return { name, status: "warn", detail: `定时已注册但调度载体缺失（${reg.backend || "periodic"}）；修复：dia collab enable` };
+  }
   let board: any = null;
   try { board = JSON.parse(readFileSync(boardPath, "utf8")); } catch { /* none */ }
   if (!board) return { name, status: "warn", detail: "定时已注册但 board 未生成（先跑 dia collab observe）" };
@@ -195,6 +199,15 @@ function jobRootCheck(): Check {
   try {
     const tasks = JSON.parse(readFileSync(join(cur, "tasks", "registry.json"), "utf8")).tasks || {};
     for (const [n, t] of Object.entries<any>(tasks)) {
+      // 非 macOS：plist 语义不适用，按 registry 记录的 backend 验真实载体
+      // （crontab `# dia-job:<name>` 标记 / systemd unit 在位）
+      if (process.platform !== "darwin") {
+        const backend = String(t?.backend || "cron");
+        if (String(t?.type || "periodic") === "periodic" && process.env.DIA_JOB_NO_LAUNCHD !== "1" && !observer.carrierPresent({ ...t, backend }, n)) {
+          return { name, status: "warn", detail: `任务 ${n} 已注册但调度载体缺失（${backend}）；修复：dia collab enable` };
+        }
+        continue;
+      }
       const label = String(t?.label || `local.dia-job-${n}`);
       const plist = join(homedir(), "Library", "LaunchAgents", `${label}.plist`);
       if (!existsSync(plist)) {

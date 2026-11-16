@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeEach } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -7,9 +7,19 @@ import { spawnSync } from "node:child_process";
 // job 根：沙箱不回退旧根、写入门控、legacy 迁移
 const cli = join(import.meta.dir, "..", "packages", "cli", "src", "index.ts");
 let home: string, data: string, jobRoot: string, legacy: string;
+
+// 迁移用例会真的 `job install` 到新根：宿主没有 cronie 的发行版（Fedora 族）也要能跑 ⇒ 假 crontab
+const fakeCronDir = mkdtempSync(join(tmpdir(), "dia-jr-cron-"));
+const fakeCronStore = join(fakeCronDir, "table.txt");
+const fakeCron = join(fakeCronDir, "crontab");
+writeFileSync(fakeCronStore, "");
+writeFileSync(fakeCron, `#!/usr/bin/env bash\nstore="${fakeCronStore}"\ncase "\${1:-}" in\n  -l) [ -f "$store" ] && cat "$store"; exit 0 ;;\n  -) cat > "$store"; exit 0 ;;\n  *) exit 2 ;;\nesac\n`);
+chmodSync(fakeCron, 0o755);
+const cronEnv = process.platform === "darwin" ? {} : { DIA_JOB_CRONTAB_BIN: fakeCron };
+
 const run = (args: string[], env: Record<string, string> = {}) => spawnSync("bun", [cli, ...args], {
   encoding: "utf8",
-  env: { ...process.env, HOME: home, DIA_HOME: home, DIA_DATA_DIR: undefined as any, DIA_ROOT: data, DIA_JOB_ROOT: jobRoot, DIA_JOB_NO_LAUNCHD: "1", ...env } as any,
+  env: { ...process.env, HOME: home, DIA_HOME: home, DIA_DATA_DIR: undefined as any, DIA_ROOT: data, DIA_JOB_ROOT: jobRoot, DIA_JOB_NO_LAUNCHD: "1", ...cronEnv, ...env } as any,
 });
 
 beforeEach(() => {

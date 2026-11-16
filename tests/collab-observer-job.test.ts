@@ -7,12 +7,23 @@ import { ensureJob, ensureUpkeepJob } from "../src/observer.ts";
 
 let root: string, jobRoot: string, home: string;
 const cli = join(import.meta.dir, "..", "packages", "cli", "src", "index.ts");
+
+// 这组用例只验证 observer/interval 逻辑，不该依赖宿主是否装了 cron
+// （Fedora 族 / 不可变系统默认没有 cronie ⇒ 早先在这些机器上整片失败）。
+const fakeCronDir = mkdtempSync(join(tmpdir(), "dia-obsjob-cron-"));
+const fakeCronStore = join(fakeCronDir, "table.txt");
+const fakeCron = join(fakeCronDir, "crontab");
+writeFileSync(fakeCronStore, "");
+writeFileSync(fakeCron, `#!/usr/bin/env bash\nstore="${fakeCronStore}"\ncase "\${1:-}" in\n  -l) [ -f "$store" ] && cat "$store"; exit 0 ;;\n  -) cat > "$store"; exit 0 ;;\n  *) exit 2 ;;\nesac\n`);
+chmodSync(fakeCron, 0o755);
+const cronEnv = process.platform === "darwin" ? {} : { DIA_JOB_CRONTAB_BIN: fakeCron };
+
 const run = (args: string[], extraEnv: Record<string, string> = {}) => spawnSync("bun", [cli, ...args], {
   encoding: "utf8",
   env: {
     ...process.env as Record<string, string>,
     DIA_ROOT: root, DIA_JOB_ROOT: jobRoot, DIA_HOME: home,
-    DIA_JOB_NO_LAUNCHD: "1", DIA_BIN: process.execPath, ...extraEnv,
+    DIA_JOB_NO_LAUNCHD: "1", DIA_BIN: process.execPath, ...cronEnv, ...extraEnv,
   },
 });
 const json = (s: string) => JSON.parse(s);
@@ -36,7 +47,7 @@ function writeRegistry(tasks: Record<string, any>) {
   writeFileSync(join(jobRoot, "tasks", "registry.json"), JSON.stringify({ tasks }));
 }
 
-const KEYS = ["DIA_ROOT", "DIA_JOB_ROOT", "DIA_HOME", "DIA_JOB_NO_LAUNCHD", "DIA_BIN"] as const;
+const KEYS = ["DIA_ROOT", "DIA_JOB_ROOT", "DIA_HOME", "DIA_JOB_NO_LAUNCHD", "DIA_BIN", "DIA_JOB_CRONTAB_BIN"] as const;
 const saved: Record<string, string | undefined> = {};
 for (const k of KEYS) saved[k] = process.env[k];
 afterEach(() => {
@@ -52,6 +63,7 @@ beforeEach(() => {
   process.env.DIA_HOME = home;
   process.env.DIA_JOB_NO_LAUNCHD = "1";
   process.env.DIA_BIN = process.execPath; // CI 的 PATH 里没有绝对 dia；显式给一个绝对可执行路径
+  if (process.platform !== "darwin") process.env.DIA_JOB_CRONTAB_BIN = fakeCron; // 不依赖宿主 cronie
 });
 
 afterAll(() => { /* temp dirs */ });

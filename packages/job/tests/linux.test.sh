@@ -66,6 +66,9 @@ out="$(run install hello --cmd 'echo hi' --interval 300 --desc '测试任务' --
 line="$(grep -F '# dia-job:hello' "$CRON_TABLE")"
 printf '%s' "$line" | grep -q '^\*/5 \* \* \* \*' && ok "interval 300 → */5 分钟" || bad "cron 表达式错：$line"
 printf '%s' "$line" | grep -q 'PATH=' && ok "行内含 PATH（cron 最小环境）" || bad "缺 PATH：$line"
+# 2026-11-16：node 由 nvm/fnm 安装时，系统目录 PATH 里没有 node ⇒ 任务 127 静默失败
+NODE_DIR="$(cd -P "$(dirname "$(command -v node)")" >/dev/null 2>&1 && pwd)"
+printf '%s' "$line" | grep -qF "PATH=$NODE_DIR" && ok "行内 PATH 以 node 目录开头（防 127）" || bad "行内 PATH 缺 node 目录（$NODE_DIR）：$line"
 printf '%s' "$line" | grep -q '/bin/bash "' && ok "行内用 /bin/bash 跑 wrapper" || bad "缺 wrapper 调用：$line"
 WRAPPER="$ROOT_DIR/tasks/hello.sh"
 [ -x "$WRAPPER" ] && ok "wrapper 已生成且可执行" || bad "缺 wrapper：$WRAPPER"
@@ -106,6 +109,9 @@ out="$(run install svc --cmd 'bash /tmp/svc.sh' --type service --allow-unstable 
 UNIT="$HOME_DIR/.config/systemd/user/local.dia-job-svc.service"
 [ -f "$UNIT" ] && ok "unit 落到 systemd --user 目录" || bad "缺 unit：$UNIT"
 grep -q 'Restart=always' "$UNIT" && ok "Restart=always（≈ KeepAlive）" || bad "unit 缺 Restart=always"
+# 2026-11-16：systemd --user 的 PATH 未必含 nvm（headless/linger 场景）⇒ unit 显式注入
+grep -q '^Environment=PATH=' "$UNIT" && ok "unit 显式注入 PATH" || bad "unit 缺 Environment=PATH"
+grep -qF "Environment=PATH=$NODE_DIR" "$UNIT" && ok "unit PATH 含 node 目录" || bad "unit PATH 缺 node 目录：$(grep '^Environment=PATH=' "$UNIT")"
 grep -q "ExecStart=/bin/bash \"$ROOT_DIR/tasks/svc.sh\"" "$UNIT" && ok "ExecStart 指向 wrapper" || bad "ExecStart 错：$(grep ExecStart "$UNIT")"
 grep -q -- '--user enable' "$SYSTEMCTL_LOG" && ok "systemctl --user enable 被调用" || bad "未 enable：$(cat "$SYSTEMCTL_LOG")"
 [ "$(reg_field svc backend)" = systemd ] && ok "registry backend=systemd" || bad "registry backend=$(reg_field svc backend)"
@@ -125,6 +131,13 @@ echo "── doctor（Linux 分支）──"
 out="$(run doctor 2>&1)"; rc=$?
 printf '%s' "$out" | grep -q 'crontab 可用' && ok "doctor 报 crontab 可用" || bad "doctor 缺 crontab 检查：$out"
 printf '%s' "$out" | grep -q 'systemctl --user 可用' && ok "doctor 报 systemd 可用" || bad "doctor 缺 systemd 检查：$out"
+printf '%s' "$out" | grep -q '调度 PATH 能找到 node' && ok "doctor 校验调度 PATH 的 node" || bad "doctor 缺调度 PATH 检查：$out"
+# 显式 DIA_JOB_CRONTAB_BIN 指向坏路径 ⇒ 不算可用；不可变系统提示必须给 rpm-ostree 口径
+out="$(HOME="$HOME_DIR" XDG_CONFIG_HOME="$HOME_DIR/.config" DIA_JOB_ROOT="$ROOT_DIR" \
+       DIA_JOB_CRONTAB_BIN=/nonexistent/crontab DIA_JOB_OSTREE=1 \
+       DIA_JOB_SYSTEMCTL_BIN="$FAKE/systemctl" PATH="$FAKE:$PATH" "$JOB" doctor 2>&1)"
+printf '%s' "$out" | grep -q '找不到 crontab' && ok "坏 crontab 路径不算可用" || bad "坏 crontab 路径被当成可用：$out"
+printf '%s' "$out" | grep -q 'rpm-ostree install cronie' && ok "不可变系统给 rpm-ostree 提示" || bad "ostree 提示缺失：$out"
 [ "$rc" = 0 ] || [ "$rc" = 1 ] && ok "doctor 退出码在 0/1（非崩溃）" || bad "doctor rc=$rc"
 
 echo; echo "── PASS $PASS · FAIL $FAIL ──"; [ "$FAIL" = 0 ]

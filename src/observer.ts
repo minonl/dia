@@ -243,7 +243,7 @@ export function ensureUpkeepJob(desired = DEFAULT_INTERVAL_S): string | null {
  * 2026-11-13 实测事故：crontab 条目被外部重写抹掉后 registry 仍留着 → 旧逻辑在 Linux 上
  * 直接认为「已正确」而跳过重装，`dia collab enable` 报成功、board 却一直是旧的。
  */
-function carrierPresent(reg: any, name: string): boolean {
+export function carrierPresent(reg: any, name: string): boolean {
   // 测试隔离模式下不触真实调度器（安装/卸载同样跳过）
   if (process.env.DIA_JOB_NO_LAUNCHD === "1") return true;
   const backend = String(reg.backend || (process.platform === "darwin" ? "launchd" : "cron"));

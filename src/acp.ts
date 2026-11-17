@@ -57,6 +57,10 @@ export class AcpClient {
 
   async init() { return this.request("initialize", { protocolVersion: 1, clientCapabilities: {} }); }
   async newSession(cwd: string) { return this.request("session/new", { cwd, mcpServers: [] }); }
+  /** 绑定**已有**会话（opencode v2）：之后的 prompt 才落在这个 session 上。
+   *  ⚠️ 实测（2026-11-18, opencode 2.2.6）：load 与 prompt 必须同一个 `opencode acp` 进程/连接，
+   *  拆到两个进程会得到 `-32602 session not found`。 */
+  async loadSession(sessionId: string, cwd: string) { return this.request("session/load", { sessionId, cwd, mcpServers: [] }); }
   async setMode(sessionId: string, modeId: string) { return this.request("session/set_mode", { sessionId, modeId }); }
   async setConfig(sessionId: string, configId: string, value: unknown) {
     return this.request("session/set_config_option", { sessionId, configId, value });

@@ -839,6 +839,14 @@ async function msgCli(argv: string[]): Promise<number> {
     for (const x of r) out(`${x.id}\t${x.session}\tnotified=${x.channel}${x.reason ? `(${x.reason})` : ""}`);
     return 0;
   }
+  if (sub === collab.ACP_NOTIFY_ENTRY) {
+    // 内部子命令：由 `notify()` spawn，后台跑一轮 ACP（init → session/load → prompt）。
+    const [sid, id] = positional(args);
+    if (!sid || !id) { err(`usage: dia msg ${collab.ACP_NOTIFY_ENTRY} <session> <id>`); return 2; }
+    const r = await collab.acpNotify(sid, id);
+    if (!r.ok) err(`E_ACP_NOTIFY: ${r.reason}`);
+    return r.ok ? 0 : 1;
+  }
   if (sub === "dsh") {
     const act = positional(args)[0] || "check";
     const profile = flag(args, "--profile");

@@ -38,13 +38,17 @@ function msgFiles(id: string): string[] {
 }
 
 describe("dia msg push", () => {
-  test("无 pane → mailbox-only，不调用 tmux", () => {
+  test("无 pane → mailbox-only(E_NO_CHANNEL)，不调用 tmux，且留 inject.failed 事件", () => {
     session("ses_a");
     const r = run(["msg", "send", "--to", "ses_a", "--session", "ses_b", "--subject", "hi"]);
     if (r.status !== 0) console.error("SEND FAILED:", r.status, r.stdout, r.stderr);
     expect(r.status).toBe(0);
-    expect(r.stdout).toContain("notified=mailbox-only(no-pane)");
+    // 文案变更（feat/msg-acp-opencode2）：原来的 reason=no-pane 没有事件，是静默降级；
+    // 现在统一成 E_NO_CHANNEL 并写 inject.failed，trace 能看到。
+    expect(r.stdout).toContain("notified=mailbox-only(E_NO_CHANNEL)");
     expect(existsSync(log)).toBe(false);
+    const evPath = join(root, "collab", "events", new Date().toISOString().slice(0, 7) + ".jsonl");
+    expect(readFileSync(evPath, "utf8")).toContain("E_NO_CHANNEL");
   });
 
   test("有 pane + 回读命中 → notified=tmux，写 inject.verified 事件", () => {

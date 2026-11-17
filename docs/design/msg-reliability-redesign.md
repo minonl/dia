@@ -88,6 +88,15 @@ pending → injected → exposed → acked → replied → closed
 | 落盘 | rename 成功 + `thread#seq` 唯一 | 2s | 报错给发送方（幂等键可安全重试） |
 | tmux 注入 | capture-pane 命中 `id + attempt_nonce`，且 pane/cwd/pid 匹配 | 5s | `E_BUSY` → 退避重排（60s 起 ×2，封顶 600s，≤3 次）；未验证 → `uncertain` |
 | ACP 回合 | prompt 返回 **且** 对端有 ack/reply | 180s | 降级 mailbox-only + escalate |
+
+**ACP 通道现状（2026-11-18）**：`dia msg send` 命中 `host=opencode` 且会话记录有 `acp_cmd` 时，异步 spawn
+`dia msg notify-acp <session> <id>`，内部 `initialize → session/load → session/prompt` 走**同一** `opencode acp` 连接，
+成功写 `inject.verified(transport=acp)`、失败写 `inject.failed(transport=acp)`。**当前仅 opencode v2 `session/load` 通道；dsh/其他 ACP 实现未测**。
+
+本轮**不做**：不支持 dsh 的 ACP 通道（`host!==opencode` 一律 mailbox-only，即便登记了 `acp_cmd`）、
+不做通用 ACP 能力探测（`acp_cmd` 只来自 `DIA_ACP_CMD`，不探进程不猜）、不装 tmux、不改 webhook。
+无通道时一律 `inject.failed(error_code=E_NO_CHANNEL)`，不再静默。
+超时：`DIA_ACP_TIMEOUT_MS`（回退 `DIA_ACP_TIMEOUT`，默认 300s）。
 | 接收开工 | 产出 `read.observed`/`context.exposed` | 已注入未读 TTL：P0/P1 15min、P2/P3 60min | 只提示，不重注正文 |
 | requires_reply ack | `acked_at` | 30min（deadline 更早则用 deadline） | escalate 发送方 + 人 |
 | 邮箱软 TTL | 4h 未送达 → escalate；30d 归档 | — | `msg-upkeep` 定时（300s）执行 |
@@ -131,6 +140,7 @@ dia msg deliver <handle> <id> [--transport tmux|acp]   # 显式重投
 ## 6. 测试（补上「未测的默认路径」）
 
 用 `tests/fixtures/fake-tmux.sh` 注入 PATH（`FAKE_TMUX_SCENARIO=idle|busy|no-readback|pane-mismatch|slow`），零代码改动即可测；ACP 用现有 `mock-acp.mjs` 加 `MODE=fail|hang`。
+opencode v2 的 `session/load` 通道用 `tests/fixtures/mock-acp-session.mjs`（`tests/msg-acp-session.test.ts`）——**只测协议形状与「load/prompt 必须同进程」约束，测不到真 opencode 行为**。
 
 | 用例 | 断言 |
 |---|---|

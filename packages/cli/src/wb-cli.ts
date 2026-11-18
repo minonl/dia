@@ -228,6 +228,13 @@ function renderDue(r: ReturnType<typeof computeDue>): string {
 
 /** `dia beat`：会话心跳（只作活性佐证，不是唯一依据）。 */
 export function beatCli(argv: string[]): number {
+  if (has(argv, "--help") || has(argv, "-h")) {
+    out(`usage: dia beat [--session S] [--track ID] [--note TEXT] [--json]
+
+写入一行会话心跳（workbench/beats.jsonl，ephemeral，TTL 720h）。
+会话标识取 --session > DIA_SESSION_ID > OPENCODE_SESSION_ID；--help 只打印用法、不写盘。`);
+    return 0;
+  }
   let session = flag(argv, "--session");
   if (!session) {
     try { session = collab.resolveSessionId(undefined); } catch { /* 下面统一报错 */ }

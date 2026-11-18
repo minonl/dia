@@ -113,14 +113,26 @@ function platformOf(id: string): { name: string; entry: platforms.PlatformEntry 
 }
 
 /** 实测一条依赖。只回答"现在能不能找到、版本对不对"，不改账本。 */
-export function check(e: DepEntry): DepCheck {
+export interface CheckOptions {
+  /** 已安装 service 真正依赖的宿主（host → service id 列表）。
+   *  只有被 service 依赖时才把「缺宿主」升为 fail：渲染不需要宿主，运行（且真有服务跑在上面）才需要。 */
+  requiredHosts?: Map<string, string[]>;
+}
+
+export function check(e: DepEntry, opts: CheckOptions = {}): DepCheck {
   const required = e.role === "required";
   // 可选依赖缺失 ≠ 不健康：记 note，不拉红；required 缺失才 fail。
-  // 例外：host_cli 缺宿主**最多 warn**（2026-11-18 用户定）——渲染不需要宿主，运行才需要；
-  // 与 platforms.ts 的「不判定缺宿主为不健康」同一口径，缺 dsh 不该让整机 doctor 判 fail。
+  // 例外：host_cli 缺宿主默认**最多 warn**（2026-11-18 用户定）——渲染不需要宿主，运行才需要；
+  // 但若已安装 service 真声明了该 host（entry.agent.host）→ 该服务跑不起来，升 fail。
   const missing = (why: string): DepCheck => {
-    if (e.kind === "host_cli" && required)
-      return { id: e.id, status: "warn", detail: `${e.id}：${why}（本机未装宿主：渲染不需要，运行需要；装好后重跑 dia doctor）` };
+    if (e.kind === "host_cli") {
+      const name = e.id.match(/^host_cli:([^@]+)@/)?.[1];
+      const svcs = name ? opts.requiredHosts?.get(name) : undefined;
+      if (svcs?.length)
+        return { id: e.id, status: "fail", detail: `${e.id}：${why}（被 service 依赖：${svcs.join(", ")}；装宿主或改 service 的 entry.agent.host）` };
+      if (required)
+        return { id: e.id, status: "warn", detail: `${e.id}：${why}（本机未装宿主：渲染不需要，运行需要；装好后重跑 dia doctor）` };
+    }
     return required
       ? { id: e.id, status: "fail", detail: `${e.id}：${why}（required：此机运行需要它，装好后重跑 dia doctor）` }
       : { id: e.id, status: "ok", note: true, detail: `${e.id}：${why}（可选，未装）` };
@@ -167,11 +179,11 @@ export function check(e: DepEntry): DepCheck {
   return { id: e.id, status: "ok", detail: `${e.id}：kind=${e.kind} 无探测规则` };
 }
 
-export function checks(entries: DepEntry[]): DepCheck[] { return entries.map(check); }
+export function checks(entries: DepEntry[], opts: CheckOptions = {}): DepCheck[] { return entries.map((e) => check(e, opts)); }
 
 /** 汇总成一条 doctor 检查：required 缺失 = fail；版本/路径漂移、缺宿主 = warn；可选未装只记 note。 */
-export function summary(entries: DepEntry[]): { status: "ok" | "warn" | "fail"; detail: string } {
-  const rows = checks(entries);
+export function summary(entries: DepEntry[], opts: CheckOptions = {}): { status: "ok" | "warn" | "fail"; detail: string } {
+  const rows = checks(entries, opts);
   const fail = rows.filter((r) => r.status === "fail");
   const warn = rows.filter((r) => r.status === "warn");
   const notes = rows.filter((r) => r.note);

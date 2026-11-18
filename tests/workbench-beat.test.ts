@@ -27,6 +27,13 @@ describe("dia beat", () => {
     expect(line.note).toBe("n");
   });
 
+  test("--help 只打印用法，不写盘", () => {
+    const r = spawnSync("bun", [cli, "beat", "--help"], { encoding: "utf8", env: baseEnv() });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("usage: dia beat");
+    expect(existsSync(join(root, "workbench", "beats.jsonl"))).toBe(false);
+  });
+
   test("没有会话标识 → exit 2，不写文件", () => {
     const r = spawnSync("bun", [cli, "beat"], { encoding: "utf8", env: baseEnv() });
     expect(r.status).toBe(2);

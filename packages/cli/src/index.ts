@@ -215,7 +215,7 @@ usage:
   dia wb [--json] [--summary] [--now ISO] [--depth fast|full] | wb refresh | wb migrate [--dry-run] | wb gc [--apply] | wb explain <id>
   dia wb track open|list|show|bind|unbind|stage|next|handoff|attach|close
   dia wb metrics|due|brief [--json] [--track tr-x] [--since 7d]
-  dia beat [--session S] [--track tr-x] [--note N]
+  dia beat [--session S] [--track tr-x] [--note N] [--json]   # 会话心跳；--help 只打印用法、不写盘
   dia graph [--json] [--task t-...] [--tui [--watch] [--status S] [--owner S] [--width N] [--no-color]]
   dia graph --serve [--port N] [--no-open]   # 本机只读 web（需 packages/graph-web）
   dia graph --export-html [path] [--out path] [--now ISO] [--redact] [--all] [--limit N] [--force]
@@ -2244,7 +2244,8 @@ export async function main(rawArgv: string[]): Promise<number> {
     const asJson = has(rest, "--json");
     const file = flag(rest, "--file");
     if (sub === "list") {
-      const rows = deps.load(file).map((e: any) => ({ ...e, check: deps.check(e) }));
+      const hosts = service.requiredHosts();
+      const rows = deps.load(file).map((e: any) => ({ ...e, check: deps.check(e, { requiredHosts: hosts }) }));
       if (asJson) out(JSON.stringify(rows, null, 1));
       else if (!rows.length) out("（无登记）");
       else for (const r of rows) out(`${r.check.status === "ok" ? "✓" : r.check.status === "warn" ? "!" : "✗"} ${r.check.detail}`);

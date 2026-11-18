@@ -785,6 +785,26 @@ export function decorateStatus(text: string, view: (id: string) => { label: stri
 export function servicesRoot(): string { return process.env.DIA_SERVICE_HOME || join(paths.diaHome(), "services"); }
 export const serviceDir = (id: string) => join(servicesRoot(), id);
 export const serviceLockPath = (id: string) => join(serviceDir(id), "service.lock.json");
+
+/**
+ * 已安装 service 真正依赖的宿主（`entry.agent.host`）→ host → service id 列表。
+ * 依赖判定用：只有真有服务跑在该宿主上，缺宿主才算 fail（见 `deps.check` 的 `requiredHosts`）。
+ * 坏清单不阻塞 doctor（跳过该目录）。
+ */
+export function requiredHosts(opts: { servicesRoot?: string } = {}): Map<string, string[]> {
+  const root = opts.servicesRoot ?? servicesRoot();
+  const out = new Map<string, string[]>();
+  if (!existsSync(root)) return out;
+  for (const e of readdirSync(root, { withFileTypes: true })) {
+    if (!e.isDirectory() || e.name.startsWith(".")) continue;
+    try {
+      const m = readServiceManifest(join(root, e.name));
+      const host = m.entry?.agent?.host;
+      if (host) out.set(host, [...(out.get(host) ?? []), m.id || e.name]);
+    } catch { /* 坏清单跳过 */ }
+  }
+  return out;
+}
 /** 结果台账 = job 台账（§4.5 不新增文件）：`tasks/svc-<id>-health.state.jsonl` */
 export const healthStatePath = (id: string) => process.env.DIA_SERVICE_HEALTH_FILE || join(jobRoot(), "tasks", `${healthJobName(id)}.state.jsonl`);
 

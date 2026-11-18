@@ -19,6 +19,7 @@ import * as observer from "./observer.ts";
 import * as collab from "./collab.ts";
 import * as msgEvents from "./msg-events.ts";
 import * as job from "./job.ts";
+import * as service from "./service.ts";
 import { indexStatus, type IndexStatus } from "./kb.ts";
 
 export interface Check { name: string; status: "ok" | "warn" | "fail"; detail: string }
@@ -30,7 +31,8 @@ const home = () => process.env.DIA_HOME || homedir();
 function depsChecks(): Check[] {
   const entries = deps.load();
   if (!entries.length) return [{ name: "deps", status: "warn", detail: "依赖登记未安装（docs/deps.jsonl）" }];
-  const s = deps.summary(entries);
+  // 缺宿主默认只 warn；但已安装 service 声明了该 host → 服务真跑不起来，升 fail
+  const s = deps.summary(entries, { requiredHosts: service.requiredHosts() });
   return [{ name: "deps", status: s.status, detail: s.detail }];
 }
 

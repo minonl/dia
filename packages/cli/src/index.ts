@@ -2380,7 +2380,20 @@ export async function main(rawArgv: string[]): Promise<number> {
   return 2;
 }
 
-main(process.argv.slice(2)).then((code) => process.exit(code)).catch((e) => {
-  err(e?.message || String(e));
-  process.exit(1);
+/** 退出前排空 stdout/stderr：管道（| node / jq）下直接 process.exit 会截断未写出的数据
+ *  （2026-11-18 实测：`dia graph --json | node` 在 54KB 处被切，重定向到文件正常）。 */
+function exitAfterFlush(code: number): void {
+  const flush = (s: NodeJS.WriteStream, next: () => void) => {
+    try {
+      if (s.destroyed || !s.writable) return next();
+      if (s.writableLength === 0) return next();
+      s.write("", () => next());
+    } catch { next(); }
+  };
+  flush(process.stdout, () => flush(process.stderr, () => process.exit(code)));
+}
+
+main(process.argv.slice(2)).then(exitAfterFlush).catch((e) => {
+  process.stderr.write((e?.message || String(e)) + "\n");
+  exitAfterFlush(1);
 });

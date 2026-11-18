@@ -68,6 +68,17 @@ function parseNow(argv: string[]): Date | null | undefined {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
+/** 读视图：意图（tracks/alerts/queue）实时折叠，派生（sessions/worktrees）用缓存快照。
+ *  track open/close 后无需 refresh 就能在 board 看到最新意图（2026-11-18 实测：close 后仍显示 active）。 */
+function readView(now: Date | undefined, depth: "fast" | "full"): Snapshot {
+  const cached = store.readSnapshot();
+  if (!cached) return buildSnapshot({ now, depth });
+  const s = buildSnapshot({ now, depth, sessions: cached.sessions, worktrees: cached.worktrees, sources: cached.sources });
+  s.as_of = cached.as_of;
+  s.duration_ms = cached.duration_ms;
+  return s;
+}
+
 function render(s: Snapshot, asJson: boolean, summary = false) {
   if (asJson) out(JSON.stringify(summary ? summarize(s) : s, null, 1));
   else out(snapshotText(s));
@@ -248,7 +259,7 @@ export function wbCli(argv: string[]): number {  const sub = positional(argv)[0]
   if (sub === "metrics") {
     const since = parseSince(flag(argv, "--since"));
     if (since === null) { err("E_WB_SINCE: --since 支持 7d / 24h / 4w / ISO"); return 2; }
-    const snap = store.readSnapshot() || buildSnapshot({ now: now || undefined, depth });
+    const snap = readView(now || undefined, depth);
     const wanted = flag(argv, "--track");
     let tracks = snap.tracks as any[];
     let tasks = taskLedger.list();
@@ -275,7 +286,7 @@ export function wbCli(argv: string[]): number {  const sub = positional(argv)[0]
   }
 
   if (sub === "due" || sub === "brief") {
-    const snap = store.readSnapshot() || buildSnapshot({ now: now || undefined, depth });
+    const snap = readView(now || undefined, depth);
     const claimCounts = new Map<string, number>();
     try { for (const c of claims.list({})) claimCounts.set(c.holder, (claimCounts.get(c.holder) || 0) + 1); } catch { /* 无 claims 也要能跑 */ }
     const { rows: beats } = store.readBeats();
@@ -370,7 +381,7 @@ export function wbCli(argv: string[]): number {  const sub = positional(argv)[0]
   }
 
   if (sub === "orphans") {
-    const s = store.readSnapshot() || buildSnapshot({ now: now || undefined, depth });
+    const s = readView(now || undefined, depth);
     const all = has(argv, "--all");
     const rows = s.worktrees.repos.flatMap((r) => r.worktrees.map((w) => ({ repo: r.repo, repo_path: r.repo_path, ...w })));
     const picked = all ? rows : rows.filter((w) => ["orphan", "shared", "main-dirty"].some((f) => (w.flags as string[]).includes(f)));
@@ -383,7 +394,7 @@ export function wbCli(argv: string[]): number {  const sub = positional(argv)[0]
   if (sub === "explain") {
     const id = positional(argv)[1] || flag(argv, "--explain");
     if (!id) { err("usage: dia wb explain <tr-id|session-id>"); return 2; }
-    const s = store.readSnapshot() || buildSnapshot({ now: now || undefined, depth });
+    const s = readView(now || undefined, depth);
     const t = s.tracks.find((x) => x.id === id);
     const sess = s.sessions.find((x) => x.session_id === id);
     if (!t && !sess) { err(`E_WB_NOT_FOUND: ${id}`); return 1; }
@@ -413,7 +424,7 @@ export function wbCli(argv: string[]): number {  const sub = positional(argv)[0]
       loop();
     }
   }
-  const s = store.readSnapshot() || buildSnapshot({ now: now || undefined, depth });
+  const s = readView(now || undefined, depth);
   render(s, asJson, summary);
   return 0;
 }

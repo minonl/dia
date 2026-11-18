@@ -2,12 +2,14 @@
 //
 // 设计：docs/msg-collab-m1-design.md §1
 // 事实源：~/.dia/collab/claims.jsonl（append-only）；不阻断、不排队，只让“谁在改”可见。
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { basename, join, relative, resolve, sep } from "node:path";
 import * as paths from "./paths.ts";
 import { resolveSessionId, withLock } from "./collab.ts";
+
+export type ClaimLease = "exclusive" | "shared";
 
 export interface Claim {
   id: string;
@@ -18,6 +20,12 @@ export interface Claim {
   created_at: string;
   expires_at: string;
   released_at?: string;
+  /** workbench track 引用（M2 additive；旧记录无此字段） */
+  track?: string;
+  /** 租约类型（M2 additive；旧记录无此字段 = 无租约语义，保持旧行为） */
+  lease?: ClaimLease;
+  /** 工作树绝对路径的 8 位 sha1（M2 additive；缺省 = 沿用旧的 scope+path 键） */
+  worktree?: string;
 }
 
 interface ClaimEvent {
@@ -30,6 +38,9 @@ interface ClaimEvent {
   reason?: string;
   created_at?: string;
   expires_at?: string;
+  track?: string;
+  lease?: ClaimLease;
+  worktree?: string;
 }
 
 const file = () => join(paths.diaHome(), "collab", "claims.jsonl");
@@ -56,6 +67,9 @@ function fold(): Claim[] {
         reason: e.reason,
         created_at: e.created_at || e.ts,
         expires_at: e.expires_at || e.ts,
+        track: e.track,
+        lease: e.lease === "exclusive" || e.lease === "shared" ? e.lease : undefined,
+        worktree: e.worktree,
       });
     } else if (e.event === "release") {
       const c = map.get(e.id);
@@ -84,8 +98,15 @@ export function scopeFor(cwd = process.cwd()): { scope: string; root: string } {
 
 /** 路径规范化：相对 git 根、拒绝越界；返回 POSIX 分隔符。 */
 export function normalizePath(input: string, root = process.cwd()): string {
-  const abs = resolve(root, input);
-  const base = resolve(root);
+  const lexicalRoot = resolve(root);
+  let base = lexicalRoot;
+  // macOS 的 /var → /private/var 等符号链接会让「同一路径」字符串前缀比较失败（实测 wt create --track）
+  try { base = realpathSync(base); } catch { /* 根尚不存在，保留字面值 */ }
+  const raw = resolve(lexicalRoot, input);
+  const relFromRoot = relative(lexicalRoot, raw);
+  // 落在根内 → 映射到真实根后再 realpath；落在根外 → 保持原值，交给越界判定
+  let abs = relFromRoot.startsWith("..") || relFromRoot.includes(`..${sep}`) ? raw : resolve(base, relFromRoot);
+  try { abs = realpathSync(abs); } catch { /* 文件尚不存在，保留映射后的字面值 */ }
   if (abs !== base && !abs.startsWith(base + sep)) throw new Error(`E_CLAIM_PATH: 越出 scope: ${input}`);
   const rel = relative(base, abs) || ".";
   return rel.split(sep).join("/");
@@ -100,19 +121,57 @@ export function parseTtl(raw?: string): number {
   return n * mult;
 }
 
+/** 工作树标识：绝对路径的 8 位 sha1（§6.2 键的第二段）。 */
+export function worktreeKey(input: string): string {
+  return createHash("sha1").update(resolve(input)).digest("hex").slice(0, 8);
+}
+
 export interface ClaimResult { claim: Claim; overlaps: Claim[] }
 
-export function claim(input: string, opts: { reason?: string; ttl?: string; session?: string; cwd?: string; now?: Date } = {}): ClaimResult {
+export interface ClaimOptions {
+  reason?: string;
+  ttl?: string;
+  session?: string;
+  cwd?: string;
+  now?: Date;
+  /** M2：挂到 workbench track（只记录，不参与键） */
+  track?: string;
+  /** M2：租约类型；缺省 = 旧语义（不阻断，只报 overlap） */
+  lease?: ClaimLease;
+  /** M2：工作树绝对路径；给了就把键升级为 (scope, worktree, path) */
+  worktree?: string;
+}
+
+export function claim(input: string, opts: ClaimOptions = {}): ClaimResult {
+  const lease = opts.lease;
+  if (lease !== undefined && lease !== "exclusive" && lease !== "shared") {
+    throw new Error(`E_USAGE: --lease 只能是 exclusive 或 shared（收到 ${String(lease)}）`);
+  }
+  if (lease === "shared" && !opts.reason) throw new Error("E_CLAIM_LEASE: shared 需要 --reason");
+
   const holder = resolveSessionId(opts.session);
-  const { scope, root } = scopeFor(opts.cwd);
+  // 给了 worktree 且未显式给 cwd：以 worktree 为基准推导 scope / 相对路径
+  const base = opts.cwd ?? (opts.worktree ? resolve(opts.worktree) : undefined);
+  const { scope, root } = scopeFor(base);
   const path = normalizePath(input, root);
+  const worktree = opts.worktree ? worktreeKey(opts.worktree) : undefined;
   const now = opts.now || new Date();
   const expires = new Date(now.getTime() + parseTtl(opts.ttl)).toISOString();
   const id = `c-${now.getTime().toString(36)}-${randomBytes(3).toString("hex")}`;
-  const claim: Claim = { id, path, scope, holder, reason: opts.reason, created_at: now.toISOString(), expires_at: expires };
+  const claim: Claim = {
+    id, path, scope, holder, reason: opts.reason, created_at: now.toISOString(), expires_at: expires,
+    track: opts.track, lease, worktree,
+  };
   return withLock("claims", () => {
-    const overlaps = fold().filter((c) => isActive(c, now.getTime()) && c.scope === scope && c.path === path && c.holder !== holder);
-    append({ event: "claim", id, path, scope, holder, reason: opts.reason, created_at: claim.created_at, expires_at: expires });
+    const overlaps = fold().filter((c) =>
+      isActive(c, now.getTime()) && c.scope === scope && c.worktree === worktree && c.path === path && c.holder !== holder
+    );
+    // exclusive：同键第二持有者直接拒（§6.2）
+    if (lease === "exclusive" && overlaps.length) {
+      const first = [...overlaps].sort((a, b) => a.expires_at.localeCompare(b.expires_at))[0];
+      throw new Error(`E_CLAIM_LEASE: ${first.id} 持有中（至 ${first.expires_at}）`);
+    }
+    append({ event: "claim", id, path, scope, holder, reason: opts.reason, created_at: claim.created_at, expires_at: expires, track: opts.track, lease, worktree });
     return { claim, overlaps };
   });
 }

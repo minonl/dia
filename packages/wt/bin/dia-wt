@@ -272,12 +272,14 @@ wt_path() {
 cmd_create() {
   local repo="${1:-}" feature="${2:-}"; shift 2 2>/dev/null || true
   [ -n "$repo" ] && [ -n "$feature" ] || die "用法：create <repo-path> <feature> [--base <ref>] [--dry-run]"
-  local base="origin/main" dry=0 install=0
+  local base="origin/main" dry=0 install=0 track=""
   while [ $# -gt 0 ]; do case "$1" in
     --base) base="$2"; shift 2 ;;
     --dry-run) dry=1; shift ;;
     --install) install=1; shift ;;
-    *) shift ;;
+    --track) track="${2:-}"; [ -n "$track" ] || die "--track 需要 tr-id"; shift 2 ;;
+    --*) die "未知参数：$1（支持 --base/--dry-run/--install/--track）" ;;
+    *) die "未知参数：$1" ;;
   esac; done
 
   repo="$(cd "$repo" 2>/dev/null && pwd)" || die "仓库不存在：$repo"
@@ -324,6 +326,25 @@ cmd_create() {
   fi
   # 迭代入口自动产出作用域声明（供权限层消费；失败不影响 create）
   write_scope "$dest" "$feature" "${DIA_SESSION:-}" >/dev/null 2>&1 && say "作用域声明已写：$(basename "$(dia_wt_data_root)")/tasks/scope.json"
+
+  # ── track 绑定：调 dia 子命令，不直读 JSONL（数据根可能不同）──
+  if [ -n "$track" ]; then
+    local dia_bin="${DIA_BIN:-dia}"
+    if command -v "$dia_bin" >/dev/null 2>&1; then
+      local sess_args=()
+      [ -n "${DIA_SESSION:-}" ] && sess_args=(--session "$DIA_SESSION")
+      local claim_out
+      if claim_out="$("$dia_bin" claim "$dest" --worktree "$dest" --track "$track" --reason "wt create --track" "${sess_args[@]}" --json 2>&1)"; then
+        local claim_id
+        claim_id="$(printf '%s' "$claim_out" | sed -n 's/.*"id":[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+        say "track=$track claim=${claim_id:-ok}"
+      else
+        warn "claim 失败（${claim_out}）；worktree 已创建，可稍后手动：$dia_bin claim '$dest' --worktree '$dest' --track $track"
+      fi
+    else
+      warn "未找到 dia，跳过 claim（track=$track）"
+    fi
+  fi
 
   # ── 依赖：真装，**不许软链**（R20；2026-10-15 加机械提示 + 可选 --install）──
   # 为什么在创建时就提示：软链省下的 13~34s，换来的是对方 checkout 被 pnpm 改写
@@ -435,7 +456,20 @@ cmd_status() {
 }
 
 cmd_list() {
-  local repo="${1:-.}"
+  local repo="" orphan=0 as_json=0
+  while [ $# -gt 0 ]; do case "$1" in
+    --orphan) orphan=1; shift ;;
+    --json) as_json=1; shift ;;
+    --*) die "未知参数：$1（支持 --orphan/--json）" ;;
+    *) repo="$1"; shift ;;
+  esac; done
+  # orphan/json 一律委派给 dia wb（TS 侧是唯一判定实现，wt 不重复造）
+  if [ "$orphan" = 1 ] || [ "$as_json" = 1 ]; then
+    local dia_bin="${DIA_BIN:-dia}"
+    command -v "$dia_bin" >/dev/null 2>&1 || die "未找到 dia，无法查询 orphan"
+    if [ "$as_json" = 1 ]; then exec "$dia_bin" wb orphans --json; else exec "$dia_bin" wb orphans; fi
+  fi
+  repo="${repo:-.}"
   repo="$(cd "$repo" 2>/dev/null && pwd)" || die "仓库不存在：$repo"
   echo "  仓库: $repo"
   git -C "$repo" worktree list | while read -r p rest; do

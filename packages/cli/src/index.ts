@@ -16,6 +16,8 @@ import * as plan from "../../../src/plan.ts";
 import * as msgPriority from "../../../src/msg-priority.ts";
 import * as observer from "../../../src/observer.ts";
 import * as seats from "../../../src/seats.ts";
+import { wbCli } from "./wb-cli.ts";
+import { routeMsgRetry, routeMsgSend, routeGroupCli } from "./route-cli.ts";
 import { buildNext } from "../../../src/graph-next.ts";
 import * as defaultMsg from "../../../src/default-msg.ts";
 import * as msgEvents from "../../../src/msg-events.ts";
@@ -207,6 +209,9 @@ usage:
   dia msg deliver <agent> <id> [--transport tmux|acp]
   dia task add|list|link|plan|split|status|done [--owner S] [--depends a,b] [--touches p1,p2] [--prio P1] [--start D] [--due D] [--progress 0-100]
   dia task split <id> --into "切片A,切片B" [--slice 切片A] [--role R] [--judge J] [--touches p] [--force]
+  dia wb [--json] [--summary] [--now ISO] [--depth fast|full] | wb refresh | wb migrate [--dry-run] | wb gc [--apply] | wb explain <id>
+  dia wb track open|list|show|bind|unbind|stage|next|handoff|attach|close
+  dia wb metrics|due|brief [--json] [--track tr-x] [--since 7d]
   dia graph [--json] [--task t-...] [--tui [--watch] [--status S] [--owner S] [--width N] [--no-color]]
   dia graph --serve [--port N] [--no-open]   # 本机只读 web（需 packages/graph-web）
   dia graph --export-html [path] [--out path] [--now ISO] [--redact] [--all] [--limit N] [--force]
@@ -833,6 +838,11 @@ async function msgCli(argv: string[]): Promise<number> {
     return 0;
   }
   if (sub === "retry") {
+    // `--queue`：workbench 未解析消息出队（track:/group: 地址在 handoff/bind 后重投）
+    if (has(args, "--queue")) {
+      const rc = routeMsgRetry(args);
+      if (rc !== null) return rc;
+    }
     const r = collab.retryDue();
     if (asJson) { out(JSON.stringify({ retried: r }, null, 1)); return 0; }
     if (!r.length) out("(nothing to retry)");
@@ -888,6 +898,9 @@ async function msgCli(argv: string[]): Promise<number> {
     return 0;
   }
   if (sub === "send") {
+    // `track:` / `group:` / `session:` 地址先走路由层（§7.2：必须插在 /^ses_/ 判定之前）
+    const routed = routeMsgSend(args);
+    if (routed !== null) return routed;
     const toFlag = flag(args, "--to");
     const pos = positional(args)[0];
     const to = toFlag || (looksSession(pos) ? pos : undefined);
@@ -1055,11 +1068,21 @@ async function claimsCli(argv: string[]): Promise<number> {
   try {
     if (sub === "claim") {
       const path = positional(args)[0];
-      if (!path) { err("usage: dia claim <path> [--reason R] [--ttl 4h] [--session S] [--json]"); return 2; }
-      const r = claims.claim(path, { reason: flag(args, "--reason"), ttl: flag(args, "--ttl"), session });
+      if (!path) { err("usage: dia claim <path> [--reason R] [--ttl 4h] [--session S] [--track tr-x] [--lease exclusive|shared] [--worktree PATH] [--json]"); return 2; }
+      const leaseRaw = flag(args, "--lease");
+      if (leaseRaw !== undefined && leaseRaw !== "exclusive" && leaseRaw !== "shared") { err("E_USAGE: --lease 只能是 exclusive 或 shared"); return 2; }
+      const r = claims.claim(path, {
+        reason: flag(args, "--reason"),
+        ttl: flag(args, "--ttl"),
+        session,
+        track: flag(args, "--track"),
+        lease: leaseRaw as any,
+        worktree: flag(args, "--worktree"),
+      });
       if (asJson) out(JSON.stringify(r, null, 1));
       else {
-        out(`claimed ${r.claim.id}  ${r.claim.scope}:${r.claim.path}  holder=${r.claim.holder}  expires=${r.claim.expires_at}`);
+        out(`claimed ${r.claim.id}  ${r.claim.scope}:${r.claim.path}  holder=${r.claim.holder}  expires=${r.claim.expires_at}` +
+          `${r.claim.track ? `  track=${r.claim.track}` : ""}${r.claim.lease ? `  lease=${r.claim.lease}` : ""}`);
         for (const o of r.overlaps) out(`  ⚠ overlap: ${o.holder} (${o.reason || "no reason"}) expires=${o.expires_at}`);
       }
       return 0;
@@ -1087,6 +1110,7 @@ async function claimsCli(argv: string[]): Promise<number> {
     const m = e?.message || String(e);
     err(m);
     if (m.startsWith("E_NO_SESSION") || m.startsWith("E_USAGE") || m.startsWith("E_CLAIM_PATH")) return 2;
+    if (m.startsWith("E_CLAIM_LEASE")) return 44;
     if (m.startsWith("E_CLAIM_OWNER")) return 22;
     if (m.startsWith("E_CLAIM:")) return 21;
     return 31;
@@ -1221,6 +1245,7 @@ async function collabCli(argv: string[]): Promise<number> {
     out("");
   };
   try {
+    if (sub === "group") return routeGroupCli(args);
     const personaId = flag(args, "--persona") || process.env.DIA_PERSONA || undefined;
     if (sub === "status") {
       const s = defaultMsg.status(personaId);
@@ -1364,6 +1389,9 @@ async function collabCli(argv: string[]): Promise<number> {
       return 0;
     }
     if (sub === "out") {
+      // `--to track:…|group:…|session:…` 先走路由层
+      const routed = routeMsgSend(args);
+      if (routed !== null) return routed;
       const to = flag(args, "--to");
       if (!to) { err("usage: dia out --to <session_id> --subject S (--body B|--body-file F) [--kind K]"); return 2; }
       const kind = (flag(args, "--kind") || "notify") as collab.Kind;
@@ -1988,7 +2016,7 @@ const BUILTIN_COMMANDS = new Set([
   "kb", "ingest", "audit", "freeze", "guard", "run", "resume", "persona", "doctor", "deps",
   "env", "kit", "service", "wt", "cmd", "collab", "whoami", "in", "out", "ack", "reply", "close", "show",
   "msg", "agents", "team", "job", "price", "version", "update", "postinstall", "migrate",
-  "graph", "task", "claim", "claims", "unclaim", "report",
+  "graph", "task", "wb", "claim", "claims", "unclaim", "report",
 ]);
 
 export async function main(rawArgv: string[]): Promise<number> {
@@ -2258,6 +2286,7 @@ export async function main(rawArgv: string[]): Promise<number> {
     return rc;
   }
   if (cmd === "task") return taskCli(argv.slice(1));
+  if (cmd === "wb") return wbCli(argv.slice(1));
   if (cmd === "graph") return graphCli(argv.slice(1));
   if (cmd === "msg") return msgCli(argv.slice(1));
   if (cmd === "claim" || cmd === "claims" || cmd === "unclaim") return claimsCli(argv);

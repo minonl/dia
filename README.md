@@ -201,9 +201,12 @@ bun src/cli.ts version  # 直接跑源码
 | `in` | `dia in [--unread] [--all] [--legacy] [--class P0,P1] [--sort priority|arrival] [--expose] [--json]` | 会话收件箱（正文内联） |
 | `out` | `dia out --to <session_id> --subject S (--body B|--body-file F) [--kind K] [--touch p1,p2] [--reply-to ID]` |  |
 | `ack` | `dia ack <id> | dia reply <id> --body B | dia close <id> --reason R | dia show <id>` |  |
-| `msg` | `dia msg send|show|inbox|ack|delivered|deliver [--wait]|reply|needs-info|status|stuck|thread|escalate|agents|migrate` |  |
+| `msg` | `dia msg send <ses_id> --subject S (--body B|--body-file F) | inbox | show <id> | ack <id> | reply <id> --body B | close <id> --reason R` |  |
+| `msg` | `dia msg deliver <ses_id> <id> [--transport file|tmux|acp] [--wait]` | 显式重投（默认异步；日志在 collab/deliver/） |
+| `msg` | `dia msg trace <id> | stats [--since 7d] | seen <id…> | upkeep | retry | escalate --due | dsh [install|check]` |  |
+| `msg` | `dia msg migrate [--dry-run|--apply]` | 旧 ~/.dia/msg 一次性导入 v2（默认只报告） |
+| `msg` | `dia msg analyze-storage [--json]` | 只读体检（v1 残留/v2 现状/事件流健康度） |
 | `agents` | `dia agents list|register|unregister|discover` |  |
-| `msg` | `dia msg deliver <agent> <id> [--transport tmux|acp]` |  |
 | `task` | `dia task add|list|link|plan|split|status|done [--owner S] [--depends a,b] [--touches p1,p2] [--prio P1] [--start D] [--due D] [--progress 0-100]` |  |
 | `task` | `dia task split <id> --into "切片A,切片B" [--slice 切片A] [--role R] [--judge J] [--touches p] [--force]` |  |
 | `graph` | `dia graph [--json] [--task t-...] [--tui [--watch] [--status S] [--owner S] [--width N] [--no-color]]` |  |

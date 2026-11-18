@@ -77,8 +77,7 @@ example-agent 只保留「什么时候用」的 persona 行为规则，不承载
 ├── sessions/<session_id>.json       # 会话注册（可重建）
 ├── inbox/<session_id>/<msg_id>.json # 一消息一文件；状态也在这里
 ├── bodies/<msg_id>.md               # 超过 64KB 的正文；否则内联
-├── threads/<thread_id>.json         # 可选索引：seq/参与者（可由 inbox 重建）
-└── legacy/<slug>/<msg_id>.json      # 迁移的旧消息（只读）
+└── threads/<thread_id>.json         # 可选索引：seq/参与者（可由 inbox 重建）
 ```
 
 - 目录 700、文件 600；不跟随符号链接。
@@ -145,7 +144,7 @@ dia reply <id> --body B             # 回复并关闭原消息（hops+1）
 dia close <id> --reason done|dropped|duplicate|escalated|no-follow-on
 dia show <id> [--json]
 dia msg send ...                    # 兼容别名 -> dia out
-dia msg migrate [--dry-run]         # 旧 ~/.dia/msg -> ~/.dia/collab/legacy
+dia msg migrate [--dry-run|--apply] # 旧 ~/.dia/msg 一次性导入 v2 inbox（可回复）
 ```
 
 - `dia in` 默认**不**自动 ack；只把 `pending` 标 `delivered`（记录 `delivered_at`），并打印“用 `dia ack` 确认”。
@@ -207,9 +206,10 @@ M0 spike 只验证两件事：
 ## 6. 迁移旧数据
 
 - 旧 `~/.dia/msg/<agent>/inbox/*.json`：逐条读取；`body_file` 存在则**复制内容**进新消息（不存在则保留原路径并标 `body_missing`）。
-- 旧 `to` 是会话标题，**不猜 session id**；统一落到 `legacy/<slug>/`，`dia in --legacy` 只读展示，提示“这是旧地址，无法自动回复”。
-- 旧目录名 → slug：保留原文，文件名用 hash 后缀防重名；不删旧数据（M0 只读迁移）。
-- `dia msg agents` 打印 deprecation 提示，列出 legacy 目录。
+- **2026-11-18 改语义**（见 `docs/msg-storage-unify.md`）：不再落 `legacy/<slug>/` 只读，改为**一次性导入**
+  `~/.dia/collab/inbox/<session_id>/`，导入后可 `show`/`ack`/`reply`。本节以下为历史设计，已不成立。
+- 会话 id 只从旧 **agent 目录名**提取 `ses_*`；提不到就整目录进 `unresolved` 报告，**不猜**（`to` 是会话标题也不作数）。
+- 幂等：目标已存在同 id → 跳过不覆盖；不删旧文件（旧目录留第二份，确认后人工清理）。
 
 ---
 
@@ -223,7 +223,7 @@ M0 spike 只验证两件事：
 | V4 | 闭环 | B `dia ack` → A `dia show` 看到 `acked`；B `dia reply` → A `dia in` 看到回复且原消息 `replied` |
 | V5 | 无 daemon/tmux | `ps` 无新增常驻；`tmux ls` 不存在也能全流程 |
 | V6 | close 生效 | `dia close --reason done` 后 `dia in --unread` 不再出现；30 天内 `--gc` 可清理 |
-| V7 | 旧数据不丢 | `dia msg migrate --dry-run` 列出 4 条；执行后 `dia in --legacy` 可读，正文完整 |
+| V7 | 旧数据不丢 | `dia msg migrate` 报告 4 条可导入；`--apply` 后 `dia msg show <id>` 可读、正文完整 |
 | V8 | 使用率（两周） | 统计 `~/.dia/collab/sessions/*.json` 中 `last_seen` 且执行过 `in` 的会话 / 活跃会话 ≥30% |
 | V9 | 默认能力包 | `dia persona create x --dir /tmp/x` → `dia persona add /tmp/x` 后 `dia kit list` 含 `dia-msg`；宿主 skill 目录有 `dia-msg` |
 | V10 | 可关闭 | `dia collab disable` 后 `dia collab status` = disabled；`DIA_MSG=0 dia in` 仍可手动用 |
@@ -258,7 +258,7 @@ M0 spike 只验证两件事：
 | 同一 cwd 多会话 | 身份用 session id，不用 cwd/标题 |
 | 会话 resume 后 id 变化 | M0 以宿主 id 为准；resume 产生新 id 就注册新会话（消息不自动迁移） |
 | 插件注入不可用 | 回退 §5.1 硬规则；不阻塞 M0 |
-| 旧标题映射错误 | 不猜；落 legacy 只读 |
+| 旧标题映射错误 | 不猜；提不到 `ses_*` 的目录进 `unresolved` 报告 |
 | 邮箱增长 | close + 30 天 GC；M0 先手工 |
 | 使用率低 | 两周 <30% ⇒ 回滚到手写 inbox + 硬规则，写回失败原因 |
 

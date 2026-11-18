@@ -132,12 +132,15 @@ rm -rf ~/.dia
 | `collab` | `dia collab stats [--since 7d] [--by session|pair|class] [--json]` | 只读聚合（送达/回复/积压） |
 | `collab` | `dia collab board [--cached|--refresh] [--json] | observe [--interval 300] [--json]` | 一次性 tick/看板（无常驻；定时用 dia job） |
 | `whoami` | `dia whoami [--json] [--name NAME]` | 当前会话身份（session id） |
-| `in` | `dia in [--unread] [--all] [--legacy] [--class P0,P1] [--sort priority|arrival] [--expose] [--json]` | 会话收件箱（正文内联） |
+| `in` | `dia in [--unread] [--all] [--class P0,P1] [--sort priority|arrival] [--expose] [--json]` | 会话收件箱（正文内联） |
 | `out` | `dia out --to <session_id> --subject S (--body B|--body-file F) [--kind K] [--touch p1,p2] [--reply-to ID]` |  |
 | `ack` | `dia ack <id> | dia reply <id> --body B | dia close <id> --reason R | dia show <id>` |  |
-| `msg` | `dia msg send|show|inbox|ack|delivered|deliver [--wait]|reply|needs-info|status|stuck|thread|escalate|agents|migrate` |  |
+| `msg` | `dia msg send <ses_id> --subject S (--body B|--body-file F) | inbox | show <id> | ack <id> | reply <id> --body B | close <id> --reason R` |  |
+| `msg` | `dia msg deliver <ses_id> <id> [--transport file|tmux|acp] [--wait]` | 显式重投（默认异步；日志在 collab/deliver/） |
+| `msg` | `dia msg trace <id> | stats [--since 7d] | seen <id…> | upkeep | retry | escalate --due | dsh [install|check]` |  |
+| `msg` | `dia msg migrate [--dry-run|--apply]` | 旧 ~/.dia/msg 一次性导入 v2（默认只报告） |
+| `msg` | `dia msg analyze-storage [--json]` | 只读体检（v1 残留/v2 现状/事件流健康度） |
 | `agents` | `dia agents list|register|unregister|discover` |  |
-| `msg` | `dia msg deliver <agent> <id> [--transport tmux|acp]` |  |
 | `task` | `dia task add|list|link|plan|split|status|done [--owner S] [--depends a,b] [--touches p1,p2] [--prio P1] [--start D] [--due D] [--progress 0-100]` |  |
 | `task` | `dia task split <id> --into "切片A,切片B" [--slice 切片A] [--role R] [--judge J] [--touches p] [--force]` |  |
 | `wb` | `dia wb [--json] [--summary] [--now ISO] [--depth fast|full] | wb refresh | wb migrate [--dry-run] | wb gc [--apply] | wb explain <id>` |  |
@@ -191,6 +194,8 @@ Agent 入口：[`llms.txt`](https://github.com/minonl/dia/blob/main/llms.txt)（
 | [dia msg M0 使用说明（送达与可读）](msg-collab-m0.md) | 一句话：任意两个活着的 dia 会话可以互发消息；收件方开工就能看到未读，正文不依赖临时文件。 |
 | [dia msg M1：共享热点 claim + 任务依赖 + graph JSON（设计 v0.1）](msg-collab-m1-design.md) | 日期：2026-11-05 ｜ 状态：设计（待实现） ｜ 上游：docs/research/msg-collaboration-grill.md（C1–C3 / D1） |
 | [dia claim：共享热点文件声明（M1a）](msg-collab-m1.md) | 一句话：在改共享文件前先 dia claim，让其它会话看见“谁在改、为什么、什么时候过期”；只告警，不阻断。 |
+| [msg 存储统一 + 分级日志留痕（2026-11-18）](msg-storage-unify.md) | 状态：实现完成，未 push / 未 merge。分支 feat/msg-storage-unify-r3（worktree .worktrees/msg-storage-unify-r3）。 |
+| [msg 子系统改造：ACP 通道 + 存储统一 + 分级日志](msg-subsystem-2026-11.md) | 2026-11-18。PR #226。 |
 | [dia / yan / dabo 现状总览](overview.md) | 2026-11-03 实测。本条是三方合起来的「现在长什么样」；docs/status.md 管 dia 的阶段与证据， |
 | [Patch：对已安装 persona / kit 的本地补丁](patching.md) | 参考 npm/patch-package，但只作用于本地安装副本，不改上游。 |
 | [Persona / Kit 安装：用 dia 从 git 地址装](persona-install.md) | 命名已定：persona = 可被选中的 agent 定义，kit = 知识/技能/工具内容，profile = 宿主运行环境（dsh）。 |

@@ -217,7 +217,13 @@ export function routeMsgSend(argv: string[]): number | null {
       : [];
 
     if (asJson) {
-      out(JSON.stringify({ addr: toText, why: res.why, messages: sent, ...(overlaps.length ? { claim_overlaps: overlaps } : {}) }, null, 1));
+      // 单目标（含 `session:ses_x` 精确寻址）保持与 `dia msg send --to ses_x` 同一输出形状：
+      // 就是那条 MessageV2 本身。多目标才包 { addr, why, messages }（调用方无法用单条消息表达）。
+      if (sent.length === 1 && targets.length === 1) {
+        out(JSON.stringify(overlaps.length ? { ...sent[0], claim_overlaps: overlaps } : sent[0], null, 1));
+      } else {
+        out(JSON.stringify({ addr: toText, why: res.why, messages: sent, ...(overlaps.length ? { claim_overlaps: overlaps } : {}) }, null, 1));
+      }
     } else {
       for (const m of sent) {
         const nt = m.notify ? `\tnotified=${m.notify.channel}${m.notify.reason ? `(${m.notify.reason})` : ""}` : "";

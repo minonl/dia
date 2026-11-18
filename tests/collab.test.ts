@@ -102,36 +102,64 @@ describe("dia collab M0：会话身份与送达", () => {
     expect(again.state).toBe("closed");
   });
 
-  test("dia msg send 位置参数是 session id 时走 collab，且不采纳 --from 伪造", () => {
-    const r = run(["msg", "send", "ses_b", "--from", "ses_victim", "--subject", "位置参数", "--body", "ok", "--json"], "ses_a");
+  test("dia msg send 位置参数是 session id；--from 不能伪装成别的会话", () => {
+    const r = run(["msg", "send", "ses_b", "--subject", "位置参数", "--body", "ok", "--json"], "ses_a");
     expect(r.status).toBe(0);
-    const sent = json(r.stdout);
-    expect(sent.from.session_id).toBe("ses_a");
+    expect(json(r.stdout).from.session_id).toBe("ses_a");
     const inbox = json(run(["in", "--all", "--json"], "ses_b").stdout);
     expect(inbox.some((x: any) => x.subject === "位置参数")).toBe(true);
+    // 伪造 --from：拒绝（身份由 DIA_SESSION_ID 决定）
+    const fake = run(["msg", "send", "ses_b", "--from", "ses_victim", "--subject", "伪造", "--body", "x", "--json"], "ses_a");
+    expect(fake.status).toBe(2);
+    expect(fake.stderr).toContain("不能伪装");
+    // 与自身一致时允许（旧脚本兼容）
+    const same = run(["msg", "send", "ses_b", "--from", "ses_a", "--subject", "兼容", "--body", "x", "--json"], "ses_a");
+    expect(same.status).toBe(0);
   });
 });
 
-describe("dia msg migrate：旧数据只读迁移", () => {
-  test("dry-run 不落盘，实际迁移复制正文，源文件删除后仍可读", () => {
-    const oldDir = join(root, "msg", "旧会话", "inbox");
+describe("dia msg migrate：旧数据一次性导入 v2（默认 dry-run）", () => {
+  test("dry-run 不落盘；--apply 导入后能 show/reply（正文缺失标记 body_missing）", () => {
+    const oldDir = join(root, "msg", "ses_old", "inbox");
     mkdirSync(oldDir, { recursive: true });
     const oldBody = join(root, "old-body.md");
     writeFileSync(oldBody, "旧正文\n");
     writeFileSync(join(oldDir, "m-old1.json"), JSON.stringify({
-      id: "m-old1", thread_id: "th-old", seq: 1, from: "yan", to: "旧会话",
+      id: "m-old1", thread_id: "th-old", seq: 1, from: "ses_src", to: "ses_old",
       kind: "handoff", subject: "旧消息", body_file: oldBody, requires_reply: true,
       hops: 0, idempotency_key: "th-old#1", created_at: "2026-11-05T00:00:00Z", state: "pending",
     }));
-    const dry = json(run(["msg", "migrate", "--dry-run", "--json"], "ses_b").stdout);
-    expect(dry.migrated).toBe(0);
-    const real = json(run(["msg", "migrate", "--json"], "ses_b").stdout);
-    expect(real.migrated).toBe(1);
-    rmSync(oldBody);
-    const legacy = json(run(["in", "--legacy", "--json"], "ses_b").stdout);
-    expect(legacy[0].subject).toBe("旧消息");
-    expect(legacy[0].body).toBe("旧正文\n");
-    expect(legacy[0].body_missing).toBeFalsy();
+    const dry = json(run(["msg", "migrate", "--dry-run", "--json"], "ses_old").stdout);
+    expect(dry.imported).toBe(1);
+    // dry-run 不写盘
+    expect(existsSync(join(root, "collab", "inbox", "ses_old", "m-old1.json"))).toBe(false);
+    const real = json(run(["msg", "migrate", "--apply", "--json"], "ses_old").stdout);
+    expect(real.imported).toBe(1);
+    const shown = json(run(["msg", "show", "m-old1", "--json"], "ses_old").stdout);
+    expect(shown.subject).toBe("旧消息");
+    // v1 的 body_file 不再沿用（旧路径可能已失效）：导入时按「正文缺失」标记，不猜
+    expect(shown.body_missing).toBe(true);
+    // 导入后可用可回复（不是 legacy 只读）
+    const rep = run(["msg", "reply", "m-old1", "--body", "已处理", "--json"], "ses_old");
+    expect(rep.status).toBe(0);
+    // 幂等：再跑一次不会重复导入
+    const again = json(run(["msg", "migrate", "--apply", "--json"], "ses_old").stdout);
+    expect(again.imported).toBe(0);
+    expect(again.skipped).toBe(1);
+    // 旧文件保留（不删）
+    expect(existsSync(join(oldDir, "m-old1.json"))).toBe(true);
+  });
+
+  test("提取不到会话 id 的旧目录：进报告、不导入、不崩", () => {
+    const oldDir = join(root, "msg", "旧会话", "inbox");
+    mkdirSync(oldDir, { recursive: true });
+    writeFileSync(join(oldDir, "m-x.json"), JSON.stringify({ id: "m-x", subject: "s", body: "b" }));
+    const r = run(["msg", "migrate", "--apply", "--json"], "ses_b");
+    expect(r.status).toBe(0);
+    const rep = json(r.stdout);
+    expect(rep.imported).toBe(0);
+    expect(rep.unresolved.map((u: any) => u.agent_dir)).toContain("旧会话");
+    expect(existsSync(join(root, "collab", "inbox", "旧会话"))).toBe(false);
   });
 
   test("body_ref 路径穿越被拦截", () => {
@@ -149,16 +177,17 @@ describe("dia msg migrate：旧数据只读迁移", () => {
     expect(m.body).toBe("");
   });
 
-  test("迁移拒绝路径穿越 id，不写到 legacy 外", () => {
-    const oldDir = join(root, "msg", "坏数据", "inbox");
+  test("导入拒绝路径穿越 id，不写到 inbox 外", () => {
+    const oldDir = join(root, "msg", "ses_evil", "inbox");
     mkdirSync(oldDir, { recursive: true });
     writeFileSync(join(oldDir, "evil.json"), JSON.stringify({
-      id: "../../escape", thread_id: "th-evil", seq: 1, from: "a", to: "坏数据",
+      id: "../../escape", thread_id: "th-evil", seq: 1, from: "ses_a", to: "ses_evil",
       kind: "notify", subject: "evil", body: "x", requires_reply: false,
       hops: 0, idempotency_key: "th-evil#1", created_at: "2026-11-05T00:00:00Z", state: "pending",
     }));
-    const r = json(run(["msg", "migrate", "--json"], "ses_b").stdout);
-    expect(r.skipped).toBeGreaterThanOrEqual(1);
+    const r = json(run(["msg", "migrate", "--apply", "--json"], "ses_b").stdout);
+    expect(r.invalid).toBeGreaterThanOrEqual(1);
     expect(existsSync(join(root, "escape.json"))).toBe(false);
+    expect(existsSync(join(root, "collab", "escape.json"))).toBe(false);
   });
 });

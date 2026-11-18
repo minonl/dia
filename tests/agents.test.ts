@@ -7,9 +7,9 @@ import { existsSync } from "node:fs";
 
 let root: string, msgRoot: string;
 const cli = join(import.meta.dir, "..", "packages", "cli", "src", "index.ts");
-const run = (args: string[]) => spawnSync("bun", [cli, ...args], {
+const run = (args: string[], env: Record<string, string> = {}) => spawnSync("bun", [cli, ...args], {
   encoding: "utf8",
-  env: { ...process.env, DIA_ROOT: root },
+  env: { ...process.env, DIA_ROOT: root, DIA_SESSION_ID: "", OPENCODE_SESSION_ID: "", ...env },
 });
 
 beforeAll(() => {
@@ -30,20 +30,20 @@ describe("dia agents 注册表", () => {
     expect(existsSync(join(root, "agents", "reviewer.json"))).toBe(false);
   });
 
-  test("deliver 对离线 agent 报 E_OFFLINE", () => {
+  test("tmux deliver 对无 pane 的会话报 E_NO_PANE（不猜通道）", () => {
     run(["agents", "register", "--agent", "ghost", "--host", "codex", "--cwd", "/tmp"]);
-    const id = JSON.parse(run(["msg", "send", "ghost", "--from", "ops", "--kind", "notify", "--subject", "s", "--json"]).stdout).id;
-    const r = run(["msg", "deliver", "ghost", id]);
+    const id = JSON.parse(run(["msg", "send", "--to", "ses_ghost", "--kind", "notify", "--subject", "s", "--json"], { DIA_SESSION_ID: "ses_ops" }).stdout).id;
+    const r = run(["msg", "deliver", "ses_ghost", id, "--transport", "tmux", "--wait"], { DIA_SESSION_ID: "ses_ops" });
     expect(r.status).not.toBe(0);
-    expect(r.stderr).toContain("E_OFFLINE");
+    expect(r.stderr).toContain("E_NO_PANE");
     // 状态未被误标
-    const inbox = JSON.parse(run(["msg", "inbox", "ghost", "--json"]).stdout);
-    expect(inbox[0].state).toBe("pending");
+    const shown = JSON.parse(run(["msg", "show", id, "--json"], { DIA_SESSION_ID: "ses_ghost" }).stdout);
+    expect(shown.state).toBe("pending");
   });
 
   test("msg show 返回正文与元信息", () => {
-    const id = JSON.parse(run(["msg", "send", "ops", "--from", "reviewer", "--kind", "question", "--subject", "S", "--body", "BODY-X", "--json"]).stdout).id;
-    const r = run(["msg", "show", "ops", id]);
+    const id = JSON.parse(run(["msg", "send", "--to", "ses_ops", "--kind", "question", "--subject", "S", "--body", "BODY-X", "--json"], { DIA_SESSION_ID: "ses_reviewer" }).stdout).id;
+    const r = run(["msg", "show", id], { DIA_SESSION_ID: "ses_ops" });
     expect(r.status).toBe(0);
     expect(r.stdout).toContain("BODY-X");
     expect(r.stdout).toContain("question");

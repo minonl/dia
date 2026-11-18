@@ -9,14 +9,16 @@ const run = (args: string[], env: Record<string, string>) =>
   spawnSync(process.execPath, [cli, ...args], { encoding: "utf8", env });
 
 describe("paths：单一数据根", () => {
-  test("不设任何 DIA_* 时落在 ~/.dia", () => {
+  test("不设任何 DIA_* 时落在 ~/.dia（消息统一写 collab/，不再写 v1 msg/）", () => {
     const home = mkdtempSync(join(tmpdir(), "dia-paths-home-"));
-    const r = run(["msg", "send", "ops", "--from", "me", "--kind", "notify", "--subject", "s"], {
+    const r = run(["msg", "send", "--to", "ses_ops", "--subject", "s", "--body", "b", "--json"], {
       HOME: home,
+      DIA_SESSION_ID: "ses_me",
       PATH: process.env.PATH || "/usr/bin:/bin",
     });
     expect(r.status).toBe(0);
-    expect(existsSync(join(home, ".dia", "msg", "ops"))).toBe(true);
+    expect(existsSync(join(home, ".dia", "collab", "inbox", "ses_ops"))).toBe(true);
+    expect(existsSync(join(home, ".dia", "msg"))).toBe(false);
     expect(existsSync(join(home, ".local", "share", "dia"))).toBe(false);
   });
 
@@ -24,15 +26,17 @@ describe("paths：单一数据根", () => {
     const home = mkdtempSync(join(tmpdir(), "dia-paths-home2-"));
     const root = mkdtempSync(join(tmpdir(), "dia-paths-root-"));
     const ignored = mkdtempSync(join(tmpdir(), "dia-paths-ignore-"));
-    const r = run(["msg", "send", "ops", "--from", "me", "--kind", "notify", "--subject", "s"], {
+    const r = run(["msg", "send", "--to", "ses_ops", "--subject", "s", "--body", "b", "--json"], {
       HOME: home,
       DIA_ROOT: root,
       DIA_MSG_ROOT: ignored,
+      DIA_SESSION_ID: "ses_me",
       PATH: process.env.PATH || "/usr/bin:/bin",
     });
     expect(r.status).toBe(0);
-    expect(existsSync(join(root, "msg", "ops"))).toBe(true);
+    expect(existsSync(join(root, "collab", "inbox", "ses_ops"))).toBe(true);
     expect(existsSync(join(ignored, "ops"))).toBe(false);
+    expect(existsSync(join(home, ".dia"))).toBe(false);
   });
 });
 

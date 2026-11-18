@@ -73,6 +73,11 @@ function createV2Db(path: string) {
     "ses_dead002", null, "旧会话", "/tmp/demo", "leyantech/glm-4.6", 0,
     7, 1, 0, 0, NOW.getTime() - 60 * HOUR, NOW.getTime() - 48 * HOUR, null, null,
   );
+  // 历史 suspended（早于 time_updated）≠ 当前挂起 → 仍 alive（2026-11-18 真机回归）
+  ins.run(
+    "ses_resumed004", null, "恢复过的会话", "/tmp/demo", "leyantech/deepseek-v4.1-flash", 0,
+    100, 10, 0, 0, NOW.getTime() - 2 * HOUR, NOW.getTime() - 3 * MIN, null, NOW.getTime() - 6 * MIN,
+  );
   const msg = db.prepare("INSERT INTO session_message(id,session_id,type,data) VALUES(?,?,?,?)");
   for (let i = 0; i < 3; i++) msg.run(`m-u${i}`, "ses_alive001", "user", `{"i":${i}}`);
   for (let i = 0; i < 5; i++) msg.run(`m-a${i}`, "ses_alive001", "assistant", `{"i":${i}}`);
@@ -125,7 +130,7 @@ describe("opencode 采集（v2 only）", () => {
     const r = collectOpencode({ dbPath, now: NOW });
     expect(r.source.status).toBe("ok");
     expect(r.source.schema).toBe("v2");
-    expect(r.sessions.length).toBe(3);
+    expect(r.sessions.length).toBe(4);
 
     const byId = new Map(r.sessions.map((s) => [s.session_id, s]));
     const alive = byId.get("ses_alive001")!;
@@ -150,6 +155,12 @@ describe("opencode 采集（v2 only）", () => {
     expect(dead.delivery_ready).toBe(false);
     expect(dead.cost_usd).toBe(null); // 0 ≠ 免费
     expect(dead.priced).toBe(false);
+
+    // time_suspended 是历史事件：早于 time_updated 时不应判死
+    const resumed = byId.get("ses_resumed004")!;
+    expect(resumed.liveness).toBe("alive");
+    expect(resumed.delivery_ready).toBe(true);
+    expect(resumed.route_eligible).toBe(true);
 
     expect(sha256(dbPath)).toBe(before); // ② 宿主库字节不变
   });
@@ -279,7 +290,7 @@ describe("collectAll 聚合", () => {
     }];
 
     const c = collectAll({ opencodeDbPath: dbPath, now: NOW, depth: "fast", tracks, repoPaths: [repo] });
-    expect(c.sessions.length).toBe(3);
+    expect(c.sessions.length).toBe(4);
     expect(c.sources.opencode.status).toBe("ok");
     expect(typeof c.sources.opencode.duration_ms).toBe("number");
     expect(typeof c.sources.worktrees.duration_ms).toBe("number");
@@ -308,8 +319,8 @@ describe("collectAll 聚合", () => {
     const r = run(["wb", "refresh", "--json", "--summary", "--now", NOW.toISOString()], { DIA_WB_OPENCODE_DB: dbPath });
     expect(r.status).toBe(0);
     const s = JSON.parse(r.stdout);
-    expect(s.counts.sessions.total).toBe(3);
-    expect(s.counts.sessions.alive).toBe(1);
+    expect(s.counts.sessions.total).toBe(4);
+    expect(s.counts.sessions.alive).toBe(2);
     expect(s.counts.sessions.dead).toBe(1);
     expect(s.counts.sessions.dead_resumable).toBe(1);
     expect(s.sessions).toBeUndefined();
@@ -317,13 +328,13 @@ describe("collectAll 聚合", () => {
     expect(r.stdout.length).toBeLessThan(200_000);
     // 落盘的仍是全量快照（summary 只影响输出，不影响数据）
     const disk = JSON.parse(readFileSync(join(diaRoot, "workbench", "derived", "snapshot.json"), "utf8"));
-    expect(disk.sessions.length).toBe(3);
+    expect(disk.sessions.length).toBe(4);
 
     // 全量 --json 走管道也不能被截断（>128KB 时曾踩到 process.exit 截断）
     const full = run(["wb", "--json"]);
     expect(full.status).toBe(0);
     const parsed = JSON.parse(full.stdout);
-    expect(parsed.sessions.length).toBe(3);
+    expect(parsed.sessions.length).toBe(4);
     expect(parsed.as_of).toBe(NOW.toISOString());
   }, 30_000);
 });

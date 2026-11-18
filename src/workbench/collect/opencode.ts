@@ -50,8 +50,11 @@ function livenessOf(opts: {
 }): { liveness: Liveness; resumable: boolean; delivery_ready: boolean; route_eligible: boolean; why: string } {
   const { lastActivity, suspended, archived, now, aliveMin, suspectH, claimed } = opts;
   if (archived) return { liveness: "dead", resumable: true, delivery_ready: false, route_eligible: false, why: "host: archived" };
-  if (suspended) return { liveness: "dead", resumable: true, delivery_ready: false, route_eligible: false, why: "host: suspended" };
   const t = lastActivity ? Date.parse(lastActivity) : NaN;
+  // time_suspended 是**历史事件时间**：会话恢复后它会早于 time_updated。
+  // 只有「挂起晚于最后活动」才代表当前确实处于挂起态（2026-11-18 实测当前会话被误判 dead）。
+  const suspendedActive = !!suspended && (Number.isNaN(t) || suspended >= t);
+  if (suspendedActive) return { liveness: "dead", resumable: true, delivery_ready: false, route_eligible: false, why: "host: suspended" };
   if (Number.isNaN(t)) {
     return { liveness: "dead", resumable: true, delivery_ready: false, route_eligible: false, why: "no activity timestamp" };
   }

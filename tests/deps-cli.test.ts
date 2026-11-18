@@ -28,14 +28,23 @@ describe("dia deps", () => {
     expect(rows[0].check.note).toBe(true);
   });
 
-  test("required 缺失 → list 退出 2", () => {
+  test("host_cli required 缺失 → 只告警（list 退出 0），不再判 fail", () => {
     const dir = mkdtempSync(join(tmpdir(), "dia-deps-cli-"));
     const file = join(dir, "deps.jsonl");
     expect(run(["deps", "record", "--id", "host_cli:definitely-not-real-xyz@1.0.0",
       "--kind", "host_cli", "--version", "1.0.0", "--role", "required", "--file", file]).status).toBe(0);
     const r = run(["deps", "list", "--file", file]);
-    expect(r.status).toBe(2);
+    expect(r.status).toBe(0);
     expect(r.stdout).toContain("definitely-not-real-xyz");
+    expect(r.stdout).toContain("未装宿主");
+  });
+
+  test("非 host_cli 的 required 缺失 → 仍退出 2", () => {
+    const dir = mkdtempSync(join(tmpdir(), "dia-deps-cli-"));
+    const file = join(dir, "deps.jsonl");
+    expect(run(["deps", "record", "--id", "datastore:none", "--kind", "datastore", "--version", "unknown",
+      "--resolved", "/nope/none.db", "--role", "required", "--file", file]).status).toBe(0);
+    expect(run(["deps", "list", "--file", file]).status).toBe(2);
   });
 
   test("缺参数 → 用法错误 2", () => {

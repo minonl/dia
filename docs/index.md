@@ -111,6 +111,8 @@ rm -rf ~/.dia
 | `doctor` | `dia doctor [--persona ID] [--paths] [--json]` |  |
 | `deps` | `dia deps list [--json] [--file PATH]` | 派生视图：登记 + 实测 |
 | `deps` | `dia deps record --id ID --kind K --version V [--resolved R] [--role required|optional] [--result pass|fail|unknown] [--evidence P]` |  |
+| `cache` | `dia cache list [--root NAME] [--json]` | 缓存条目：体积/引用/是否有本地独有内容 |
+| `cache` | `dia cache gc [--apply] [--force] [--referenced] [--root NAME] [--json]` | 默认 dry-run；cache 可删，要留就 backup |
 | `env` | `dia env list|check [KEY…] | env [--dry-run] [--redact] <cmd…>` |  |
 | `env` | `dia env bw status|unlock [--passwordfile P]|lock` |  |
 | `env` | `dia env bw run --map KEY=item [--map …] [--task T] -- <cmd…>` | 只注入映射键；BW_SESSION 不进子进程 |
@@ -171,6 +173,7 @@ Agent 入口：[`llms.txt`](https://github.com/minonl/dia/blob/main/llms.txt)（
 | [ACP 集成与降级设计（2026-10）](acp-integration.md) | 问题：通过 ACP 是否更好？fallback 怎么做？配置失败如何降级、体验如何？ |
 | [架构：框架 / 场景入口 / kit](architecture.md) | 本文回答一个问题：什么该留在 dabo-agent，什么该抽到独立框架。 |
 | [内置能力的分层：dia-msg 不该让用户「装」](builtin-kit-design.md) | 日期：2026-11-09 ｜ 状态：实现中（P0 已合，P1 本文档） ｜ 触发：用户质疑「dia 是命令入口，为什么内置的还要单独装？dia-msg 都算内置」 |
+| [缓存治理（`~/.dia/cache`）](cache.md) | 2026-11-18 定口径。回答三件事：cache 里是什么、什么时候可以删、什么不能靠 cache 留。 |
 | [dia CLI 词表（动作规范）](cli.md) | 原则：动作成对、名词分层、不混轴。 |
 | [外部依赖索引与原始记录维护（2026-10）](dependency-registry.md) | 回答两件事：依赖怎么登记/验证/淘汰，原始记录怎么保留/重建/删除。 |
 | [生态与组合：可复用性调研（2026-10）](ecosystem-integration.md) | 问题：dia 的包和集成面应该长什么样，才能同时服务 opencode / dsh（未来 OpenClaw/Hermes/Pi）？ |

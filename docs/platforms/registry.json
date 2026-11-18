@@ -9,12 +9,13 @@
       "probe": [
         "--version"
       ],
-      "range": ">=2.2.0 <2.3.0",
+      "range": ">=2.2.0",
       "tested": [
         "2.2.5",
-        "2.2.6"
+        "2.2.6",
+        "2.3.0"
       ],
-      "tested_note": "口径（2026-11-11 用户定）：固定最近 minor 2.2.*；升 2.3 时先升两台机器再改这里",
+      "tested_note": "口径（2026-11-18 用户定）：**不设上限**，只保留下限；升级后跑冒烟（opencode debug agents 认 agents/*.md、$HOME 权限展开、opencode debug config 认 default_agent），过了就记进 tested[]",
       "notes": [
         "V1 → V2 断代：V1 实现不在 V2 运行，配置键与 hook API 全变",
         "配置文件 opencode.json / opencode.jsonc 二选一；两者都在时宿主先读 .json"

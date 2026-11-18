@@ -33,6 +33,7 @@ import * as doctor from "../../../src/doctor.ts";
 import * as envx from "../../../src/env.ts";
 import * as bw from "../../../src/bw.ts";
 import * as deps from "../../../src/deps.ts";
+import * as cache from "../../../src/cache.ts";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { cpSync, mkdirSync, openSync, renameSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
@@ -182,6 +183,8 @@ usage:
   dia doctor [--persona ID] [--paths] [--json]
   dia deps list [--json] [--file PATH]        # 派生视图：登记 + 实测
   dia deps record --id ID --kind K --version V [--resolved R] [--role required|optional] [--result pass|fail|unknown] [--evidence P]
+  dia cache list [--root NAME] [--json]        # 缓存条目：体积/引用/是否有本地独有内容
+  dia cache gc [--apply] [--force] [--referenced] [--root NAME] [--json]   # 默认 dry-run；cache 可删，要留就 backup
   dia env list|check [KEY…] | env [--dry-run] [--redact] <cmd…>
   dia env bw status|unlock [--passwordfile P]|lock
   dia env bw run --map KEY=item [--map …] [--task T] -- <cmd…>   # 只注入映射键；BW_SESSION 不进子进程
@@ -2014,7 +2017,7 @@ async function runCli(argv: string[]): Promise<number> {
 }
 
 const BUILTIN_COMMANDS = new Set([
-  "kb", "ingest", "audit", "freeze", "guard", "run", "resume", "persona", "doctor", "deps",
+  "kb", "ingest", "audit", "freeze", "guard", "run", "resume", "persona", "doctor", "deps", "cache",
   "env", "kit", "service", "wt", "cmd", "collab", "whoami", "in", "out", "ack", "reply", "close", "show",
   "msg", "agents", "team", "job", "price", "version", "update", "postinstall", "migrate",
   "graph", "task", "wb", "beat", "claim", "claims", "unclaim", "report",
@@ -2272,6 +2275,38 @@ export async function main(rawArgv: string[]): Promise<number> {
       return 0;
     }
     err("usage: dia deps list|record");
+    return 2;
+  }
+  if (cmd === "cache") {
+    const [sub = "list", ...rest] = argv.slice(1);
+    const asJson = has(rest, "--json");
+    const root = flag(rest, "--root");
+    if (sub === "list") {
+      const rows = cache.list(root);
+      if (asJson) out(JSON.stringify(rows, null, 1));
+      else if (!rows.length) out("（缓存为空）");
+      else {
+        for (const r of rows) {
+          const git = r.git ? `git:${r.git.head ?? "-"}${r.localOnly ? " ⚠本地独有" : ""}` : "非 git";
+          const ref = r.referencedBy.length ? `引用 ${r.referencedBy.join(",")}` : "无引用";
+          out(`${r.key.padEnd(24)} ${cache.human(r.bytes).padStart(7)}  ${git}  ${ref}`);
+        }
+      }
+      return 0;
+    }
+    if (sub === "gc") {
+      const r = cache.gc({ apply: has(rest, "--apply"), force: has(rest, "--force"), referenced: has(rest, "--referenced") });
+      const apply = has(rest, "--apply");
+      if (asJson) out(JSON.stringify({ ...r, entries: r.entries.length }, null, 1));
+      else {
+        for (const e of r.removed) out(`${apply ? "✓ 删除" : "· 待删"} ${e.key}  ${cache.human(e.bytes)}`);
+        for (const s of r.skipped) out(`! 跳过 ${s.entry.key}  ${s.reason}`);
+        out(`${apply ? "已删除" : "dry-run（加 --apply 执行）"}：${r.removed.length} 条，${cache.human(r.freedBytes)}${r.skipped.length ? `；跳过 ${r.skipped.length} 条` : ""}`);
+        if (!apply && r.removed.length) out("提示：cache 是可再生的派生数据；需要长期保留的内容请先备份出 cache（如 git bundle）。");
+      }
+      return 0;
+    }
+    err("usage: dia cache list [--root NAME] [--json] | gc [--apply] [--force] [--referenced] [--json]");
     return 2;
   }
   // B：`dia cmd <name>` 只查 persona（外部）命令，允许与内置同名也不回退

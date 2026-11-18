@@ -33,6 +33,7 @@
 - [dia msg M1：共享热点 claim + 任务依赖 + graph JSON（设计 v0.1）](https://github.com/minonl/dia/blob/main/docs/msg-collab-m1-design.md): 日期：2026-11-05 ｜ 状态：设计（待实现） ｜ 上游：docs/research/msg-collaboration-grill.md（C1–C3 / D1）
 - [dia claim：共享热点文件声明（M1a）](https://github.com/minonl/dia/blob/main/docs/msg-collab-m1.md): 一句话：在改共享文件前先 dia claim，让其它会话看见“谁在改、为什么、什么时候过期”；只告警，不阻断。
 - [msg 存储统一 + 分级日志留痕（2026-11-18）](https://github.com/minonl/dia/blob/main/docs/msg-storage-unify.md): 状态：实现完成，未 push / 未 merge。分支 feat/msg-storage-unify-r3（worktree .worktrees/msg-storage-unify-r3）。
+- [msg 子系统改造：ACP 通道 + 存储统一 + 分级日志](https://github.com/minonl/dia/blob/main/docs/msg-subsystem-2026-11.md): 2026-11-18。PR #226。
 - [dia / yan / dabo 现状总览](https://github.com/minonl/dia/blob/main/docs/overview.md): 2026-11-03 实测。本条是三方合起来的「现在长什么样」；docs/status.md 管 dia 的阶段与证据，
 - [Patch：对已安装 persona / kit 的本地补丁](https://github.com/minonl/dia/blob/main/docs/patching.md): 参考 npm/patch-package，但只作用于本地安装副本，不改上游。
 - [Persona / Kit 安装：用 dia 从 git 地址装](https://github.com/minonl/dia/blob/main/docs/persona-install.md): 命名已定：persona = 可被选中的 agent 定义，kit = 知识/技能/工具内容，profile = 宿主运行环境（dsh）。

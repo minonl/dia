@@ -7,6 +7,7 @@
 import { writeSync } from "node:fs";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import * as collab from "../../../src/collab.ts";
 import { buildSnapshot, snapshotText } from "../../../src/workbench/snapshot.ts";
 import { collectAll } from "../../../src/workbench/collect/index.ts";
 import * as store from "../../../src/workbench/store.ts";
@@ -214,8 +215,28 @@ function renderDue(r: ReturnType<typeof computeDue>): string {
   return lines.join("\n");
 }
 
-export function wbCli(argv: string[]): number {
-  const sub = positional(argv)[0];
+/** `dia beat`：会话心跳（只作活性佐证，不是唯一依据）。 */
+export function beatCli(argv: string[]): number {
+  let session = flag(argv, "--session");
+  if (!session) {
+    try { session = collab.resolveSessionId(undefined); } catch { /* 下面统一报错 */ }
+  }
+  if (!session) { err("E_NO_SESSION: 未找到会话标识（--session / DIA_SESSION_ID / OPENCODE_SESSION_ID）"); return 2; }
+  const trackId = flag(argv, "--track");
+  const host = process.env.OPENCODE_SESSION_ID ? "opencode" : "cli";
+  const ts = new Date().toISOString();
+  try {
+    store.appendBeat({ ts, session, host, cwd: process.cwd(), track: trackId, note: flag(argv, "--note") });
+  } catch (e: any) {
+    err(`E_WB_BEAT: ${e?.message || e}`);
+    return 1;
+  }
+  if (has(argv, "--json")) out(JSON.stringify({ ok: true, session, track: trackId || null, ts }));
+  else out(`beat ${session}${trackId ? ` track=${trackId}` : ""}`);
+  return 0;
+}
+
+export function wbCli(argv: string[]): number {  const sub = positional(argv)[0];
   const asJson = has(argv, "--json");
   const summary = has(argv, "--summary");
   const depth = (flag(argv, "--depth") === "full" ? "full" : "fast") as "fast" | "full";

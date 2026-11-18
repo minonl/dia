@@ -2295,7 +2295,7 @@ export async function main(rawArgv: string[]): Promise<number> {
       return 0;
     }
     if (sub === "gc") {
-      const r = cache.gc({ apply: has(rest, "--apply"), force: has(rest, "--force"), referenced: has(rest, "--referenced") });
+      const r = cache.gc({ apply: has(rest, "--apply"), force: has(rest, "--force"), referenced: has(rest, "--referenced"), root: root ?? undefined });
       const apply = has(rest, "--apply");
       if (asJson) out(JSON.stringify({ ...r, entries: r.entries.length }, null, 1));
       else {

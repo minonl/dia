@@ -88,6 +88,17 @@ export function probe(bin: string, entry: PlatformEntry): string | null {
 
 export interface PlatformCheck { name: string; status: "ok" | "warn"; detail: string }
 
+/** 实测版本是否落在 tested[] 覆盖的 minor 里（`2.2.5` 命中 tested 的 `2.2.6`）。 */
+export function testedMinor(version: string, tested: string[]): boolean {
+  const v = versionOf(version);
+  if (!v) return false;
+  const mm = v.split(".").slice(0, 2).join(".");
+  return tested.some((t) => {
+    const tv = versionOf(t);
+    return !!tv && tv.split(".").slice(0, 2).join(".") === mm;
+  });
+}
+
 /** 派生视图：按注册表逐个探测，返回 doctor 可直接用的检查项。 */
 export function checks(reg: Registry): PlatformCheck[] {
   return Object.entries(reg.platforms)
@@ -98,6 +109,10 @@ export function checks(reg: Registry): PlatformCheck[] {
       const v = versionOf(raw);
       if (v && !satisfies(v, e.range)) {
         return { name: `platform:${name}`, status: "warn" as const, detail: `${raw}（超出支持范围 ${e.range}）` };
+      }
+      // 不设上限时（如 `>=2.2.0`），「未实测的 minor」就是唯一的自动信号：升上去没跑过冒烟 → 告警
+      if (v && e.tested?.length && !testedMinor(v, e.tested)) {
+        return { name: `platform:${name}`, status: "warn" as const, detail: `${raw}（在支持范围内，但没实测过：tested=${e.tested.join(", ")}；按 tested_note 跑冒烟后记进 tested[]）` };
       }
       return { name: `platform:${name}`, status: "ok" as const, detail: `${raw}${e.range ? `（支持 ${e.range}）` : ""}` };
     });

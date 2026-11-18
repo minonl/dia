@@ -11,7 +11,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import * as paths from "./paths.ts";
-import * as events from "./msg-events.ts";
+import * as trace from "./trace.ts";
 import { paneBinding, pushPointer } from "./tmux.ts";
 
 export type Kind = "question" | "handoff" | "notify" | "reply";
@@ -381,9 +381,18 @@ export function send(opts: SendOptions): MessageV2 {
     const seq = existing.length ? Math.max(...existing.map((m) => m.seq)) + 1 : 1;
     const idempotencyKey = opts.idempotencyKey || `${threadId}#${seq}`;
     const dup = existing.find((m) => m.idempotency_key === idempotencyKey && m.to.session_id === to && m.from.session_id === from);
-    if (dup) return dup;
+    if (dup) {
+      trace.snapshot("send.idempotent-hit", { id: dup.id, thread: threadId, idempotency_key: idempotencyKey, state: dup.state });
+      return dup;
+    }
 
     const id = newId("m");
+    // 留痕（旁路）：正文大小/优先级依据这类细节走 verbose 日志，不进事件流（事件流字段有 trace 依赖）
+    trace.snapshot("send.begin", {
+      id, thread: threadId, seq, from, to, kind,
+      body_bytes: body.body_bytes, inline: body.body_bytes <= INLINE_BODY,
+      class: opts.classSnapshot, why: opts.classWhy, idempotency_key: idempotencyKey,
+    });
     let bodyRef: string | undefined;
     if (body.body !== undefined && body.body_bytes > INLINE_BODY) {
       ensureDir(bodiesDir());
@@ -417,15 +426,19 @@ export function send(opts: SendOptions): MessageV2 {
     try {
       writeAtomic(messageFile(to, id), JSON.stringify(msg, null, 1) + "\n");
     } catch (e: any) {
-      events.log({ event: "send.failed", msg_id: id, thread_id: threadId, actor: from, error_code: e?.code || "E_WRITE" });
+      trace.fact({ event: "send.failed", msg_id: id, thread_id: threadId, actor: from, error_code: e?.code || "E_WRITE",
+        note: String(e?.message || e).slice(0, 200) });
       throw e;
     }
-    events.log({ event: "send.accepted", msg_id: id, thread_id: threadId, actor: from, to_state: "pending", transport: "file" });
+    trace.fact({ event: "send.accepted", msg_id: id, thread_id: threadId, actor: from, to_state: "pending", transport: "file" });
     return msg;
   });
 
   // push 只做「叫醒一轮」：失败/无 pane 都不阻断发送，结果只记录（不写 acked）
-  return notify(saved);
+  const notified = notify(saved);
+  trace.snapshot("send.notified", { id: saved.id, channel: notified.notify?.channel, reason: notified.notify?.reason,
+    attempts: notified.attempts, injected: !!saved.injected_at });
+  return notified;
 }
 
 /** 记录一次投递尝试（失败按 60s×2^n 退避，封顶 10min；成功后清空退避）。 */
@@ -458,15 +471,15 @@ function notify(msg: MessageV2): MessageV2 {
 
 function tryTmux(msg: MessageV2, pane: string): { ok: boolean; msg: MessageV2 } {
   const attempt = (msg.attempts || 0) + 1;
-  events.log({ event: "inject.attempted", msg_id: msg.id, thread_id: msg.thread_id, transport: "tmux", attempt });
+  trace.fact({ event: "inject.attempted", msg_id: msg.id, thread_id: msg.thread_id, transport: "tmux", attempt });
   const r = pushPointer(pane, { id: msg.id, subject: msg.subject, session: msg.to.session_id });
   if (!r.ok) {
-    events.log({ event: "inject.failed", msg_id: msg.id, thread_id: msg.thread_id, transport: "tmux", attempt, error_code: r.code });
+    trace.fact({ event: "inject.failed", msg_id: msg.id, thread_id: msg.thread_id, transport: "tmux", attempt, error_code: r.code });
     recordAttempt(msg, attempt, r.code);
     msg.notify = { channel: "mailbox-only", reason: r.code };
     return { ok: false, msg };
   }
-  events.log({ event: "inject.verified", msg_id: msg.id, thread_id: msg.thread_id, transport: "tmux", attempt });
+  trace.fact({ event: "inject.verified", msg_id: msg.id, thread_id: msg.thread_id, transport: "tmux", attempt });
   recordAttempt(msg, attempt);
   const hit = findIn(msg.to.session_id, msg.id);
   if (hit && !hit.msg.legacy && !hit.msg.injected_at) {
@@ -481,24 +494,24 @@ function tryTmux(msg: MessageV2, pane: string): { ok: boolean; msg: MessageV2 } 
 /** P3：webhook transport（独立消息服务/网关）。2xx 才算注入成功；失败只记录不重试。 */
 function tryWebhook(msg: MessageV2, url: string): MessageV2 {
   const attempt = (msg.attempts || 0) + 1;
-  events.log({ event: "inject.attempted", msg_id: msg.id, thread_id: msg.thread_id, transport: "webhook", attempt });
+  trace.fact({ event: "inject.attempted", msg_id: msg.id, thread_id: msg.thread_id, transport: "webhook", attempt });
   try {
     const res = spawnSync("curl", ["-sS", "-m", "8", "--connect-timeout", "3", "-o", "/dev/null", "-w", "%{http_code}", "-X", "POST", url,
       "-H", "content-type: application/json", "-d", JSON.stringify({ id: msg.id, thread: msg.thread_id, from: msg.from.session_id, to: msg.to.session_id, subject: msg.subject, kind: msg.kind })],
       { encoding: "utf8" });
     const code = Number((res.stdout || "").trim());
     if (res.status === 0 && code >= 200 && code < 300) {
-      events.log({ event: "inject.verified", msg_id: msg.id, thread_id: msg.thread_id, transport: "webhook", attempt });
+      trace.fact({ event: "inject.verified", msg_id: msg.id, thread_id: msg.thread_id, transport: "webhook", attempt });
       recordAttempt(msg, attempt);
       msg.notify = { channel: "webhook" };
       return msg;
     }
-    events.log({ event: "inject.failed", msg_id: msg.id, thread_id: msg.thread_id, transport: "webhook", attempt, error_code: `E_WEBHOOK_${code || res.status}` });
+    trace.fact({ event: "inject.failed", msg_id: msg.id, thread_id: msg.thread_id, transport: "webhook", attempt, error_code: `E_WEBHOOK_${code || res.status}` });
     recordAttempt(msg, attempt, `E_WEBHOOK`);
     msg.notify = { channel: "mailbox-only", reason: `E_WEBHOOK_${code || res.status}` };
     return msg;
   } catch (e: any) {
-    events.log({ event: "inject.failed", msg_id: msg.id, thread_id: msg.thread_id, transport: "webhook", attempt, error_code: "E_WEBHOOK" });
+    trace.fact({ event: "inject.failed", msg_id: msg.id, thread_id: msg.thread_id, transport: "webhook", attempt, error_code: "E_WEBHOOK" });
     recordAttempt(msg, attempt, "E_WEBHOOK");
     msg.notify = { channel: "mailbox-only", reason: "E_WEBHOOK" };
     return msg;
@@ -586,7 +599,7 @@ export function markDeliveredBatch(sessionId: string, ids: string[]): number {
       msg.delivered_at = at; msg.first_touch_at = at;
       if (msg.state === "pending") msg.state = "delivered";
       writeAtomic(f, JSON.stringify(msg, null, 1) + "\n");
-      events.log({
+      trace.fact({
         event: "read.observed", msg_id: msg.id, thread_id: msg.thread_id, actor: sid,
         from_state: "pending", to_state: "delivered",
         latency_ms: Math.max(0, Date.parse(at) - Date.parse(msg.created_at)),
@@ -611,7 +624,7 @@ export function markExposed(sessionId: string, ids: string[]): number {
       if (!msg.exposed_at) { msg.exposed_at = at; n++; }
       if (msg.state === "pending") msg.state = "delivered";
       writeAtomic(f, JSON.stringify(msg, null, 1) + "\n");
-      events.log({ event: "context.exposed", msg_id: msg.id, thread_id: msg.thread_id, actor: sid, to_state: "exposed" });
+      trace.fact({ event: "context.exposed", msg_id: msg.id, thread_id: msg.thread_id, actor: sid, to_state: "exposed" });
     }
     return n;
   });
@@ -638,7 +651,8 @@ export function ack(sessionId: string, id: string): MessageV2 {
     touchDelivered(m);
     m.state = "acked";
     m.acked_at = now();
-    events.log({ event: "acked", msg_id: id, thread_id: m.thread_id, actor: normalizeSessionId(sessionId), to_state: "acked", latency_ms: Math.max(0, Date.now() - Date.parse(m.delivered_at || m.created_at)) });
+    trace.snapshot("ack", { id, to: "acked", delivered: !!m.delivered_at, exposed: !!m.exposed_at });
+    trace.fact({ event: "acked", msg_id: id, thread_id: m.thread_id, actor: normalizeSessionId(sessionId), to_state: "acked", latency_ms: Math.max(0, Date.now() - Date.parse(m.delivered_at || m.created_at)) });
   });
 }
 
@@ -669,7 +683,8 @@ export function reply(sessionId: string, id: string, body: string, refs?: Record
       m.state = "replied";
       m.replied_at = now();
       m.reply_id = r.id;
-      events.log({ event: "replied", msg_id: id, thread_id: m.thread_id, actor: idNorm, from_state: "acked", to_state: "replied", latency_ms: Math.max(0, Date.now() - Date.parse(m.created_at)) });
+      trace.snapshot("reply", { id, reply_id: r.id, to: "replied", hops: r.hops, body_bytes: r.body_bytes });
+      trace.fact({ event: "replied", msg_id: id, thread_id: m.thread_id, actor: idNorm, from_state: "acked", to_state: "replied", latency_ms: Math.max(0, Date.now() - Date.parse(m.created_at)) });
     });
     return { reply: r, original };
   });
@@ -698,7 +713,8 @@ export function close(sessionId: string, id: string, reason: string): MessageV2 
     cur.closure_reason = why;
     cur.closed_at = now();
     writeAtomic(hit.path, JSON.stringify(cur, null, 1) + "\n");
-    events.log({ event: "closed", msg_id: id, thread_id: cur.thread_id, actor: sid, from_state: cur.state, to_state: "closed", error_code: why });
+    trace.snapshot("close.sender", { id, reason: why, to: "closed" });
+    trace.fact({ event: "closed", msg_id: id, thread_id: cur.thread_id, actor: sid, from_state: cur.state, to_state: "closed", error_code: why });
     return cur;
   });
 }
@@ -713,7 +729,8 @@ function closeAsRecipient(sessionId: string, id: string, why: CloseReason): Mess
     m.state = "closed";
     m.closure_reason = why;
     m.closed_at = now();
-    events.log({ event: "closed", msg_id: id, thread_id: m.thread_id, actor: normalizeSessionId(sessionId), to_state: "closed", error_code: why });
+    trace.snapshot("close.recipient", { id, reason: why, to: "closed" });
+    trace.fact({ event: "closed", msg_id: id, thread_id: m.thread_id, actor: normalizeSessionId(sessionId), to_state: "closed", error_code: why });
   });
 }
 
@@ -910,7 +927,8 @@ export function escalateDue(opts: { now?: Date; ackTtlMs?: number; ttlMs?: numbe
       mutate(sid, m.id, (x) => {
         x.state = "escalated";
         x.escalated_at = now();
-        events.log({ event: "escalated", msg_id: x.id, thread_id: x.thread_id, actor: "escalate-due", to_state: "escalated", latency_ms: age });
+        trace.snapshot("escalate", { id: x.id, to: "escalated", age_ms: age, requires_reply: !!x.requires_reply });
+        trace.fact({ event: "escalated", msg_id: x.id, thread_id: x.thread_id, actor: "escalate-due", to_state: "escalated", latency_ms: age });
       });
       out.push({ id: m.id, session: sid, age_ms: age });
     }

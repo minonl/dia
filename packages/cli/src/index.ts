@@ -6,7 +6,6 @@ import { runWrapped } from "../../../src/run.ts";
 import { countCalls } from "../../../src/runtime.ts";
 import { resumeCard } from "../../../src/resume.ts";
 import * as persona from "../../../src/persona.ts";
-import * as msg from "../../../src/msg.ts";
 import * as collab from "../../../src/collab.ts";
 import * as claims from "../../../src/claims.ts";
 import * as graph from "../../../src/graph.ts";
@@ -19,6 +18,7 @@ import * as seats from "../../../src/seats.ts";
 import { buildNext } from "../../../src/graph-next.ts";
 import * as defaultMsg from "../../../src/default-msg.ts";
 import * as msgEvents from "../../../src/msg-events.ts";
+import * as msgImport from "../../../src/msg-import.ts";
 import * as msgDsh from "../../../src/msg-dsh.ts";
 import * as paths from "../../../src/paths.ts";
 import * as agents from "../../../src/agents.ts";
@@ -202,9 +202,12 @@ usage:
   dia in [--unread] [--all] [--legacy] [--class P0,P1] [--sort priority|arrival] [--expose] [--json]   # 会话收件箱（正文内联）
   dia out --to <session_id> --subject S (--body B|--body-file F) [--kind K] [--touch p1,p2] [--reply-to ID]
   dia ack <id> | dia reply <id> --body B | dia close <id> --reason R | dia show <id>
-  dia msg send|show|inbox|ack|delivered|deliver [--wait]|reply|needs-info|status|stuck|thread|escalate|agents|migrate
+  dia msg send <ses_id> --subject S (--body B|--body-file F) | inbox | show <id> | ack <id> | reply <id> --body B | close <id> --reason R
+  dia msg deliver <ses_id> <id> [--transport file|tmux|acp] [--wait]   # 显式重投（默认异步；日志在 collab/deliver/）
+  dia msg trace <id> | stats [--since 7d] | seen <id…> | upkeep | retry | escalate --due | dsh [install|check]
+  dia msg migrate [--dry-run|--apply]   # 旧 ~/.dia/msg 一次性导入 v2（默认只报告）
+  dia msg analyze-storage [--json]      # 只读体检（v1 残留/v2 现状/事件流健康度）
   dia agents list|register|unregister|discover
-  dia msg deliver <agent> <id> [--transport tmux|acp]
   dia task add|list|link|plan|split|status|done [--owner S] [--depends a,b] [--touches p1,p2] [--prio P1] [--start D] [--due D] [--progress 0-100]
   dia task split <id> --into "切片A,切片B" [--slice 切片A] [--role R] [--judge J] [--touches p] [--force]
   dia graph [--json] [--task t-...] [--tui [--watch] [--status S] [--owner S] [--width N] [--no-color]]
@@ -786,37 +789,96 @@ async function agentsCli(argv: string[]): Promise<number> {
   return 2;
 }
 
+/** 会话 id 形状：v2 只认 `ses_*`（`session:ses_*` 前缀也接受，去掉前缀）；其它一律报错，**不猜**。 */
+function normalizeTo(raw?: string): string | null {
+  const s = String(raw ?? "").trim().replace(/^session:/, "");
+  return /^ses_[A-Za-z0-9]+$/.test(s) ? s : null;
+}
+
+/** 给「to 不是会话 id」的调用方一句能照做的提示（不静默落到任何其它存储）。 */
+function toFormatError(raw: string | undefined, cmd: string): number {
+  err(`E_USAGE: ${cmd} 的收件人必须是会话 id（形如 ses_xxx / session:ses_xxx），收到 ${JSON.stringify(raw ?? "")}`);
+  err(`  提示：先 \`dia whoami\` 查自己的会话 id；对方会话 id 用 \`dia msg inbox --json\` 里的 from.session_id 或 \`dia collab board\` 确认`);
+  err(`  （v1 的「按 agent 名投递」已下线，所有消息只落在 ~/.dia/collab/inbox/<session_id>/）`);
+  return 2;
+}
+
+/** 等一条消息进入终态（v2）。返回最终 state；超时返回 "timeout"。 */
 async function waitTerminal(id: string, timeoutMs: number): Promise<string> {
   const started = Date.now();
+  const terminal = new Set(["replied", "closed", "escalated"]);
   while (Date.now() - started < timeoutMs) {
-    const hit = msg.find(id);
-    if (hit && msg.isTerminal(hit.msg.state)) return hit.msg.state;
+    try {
+      const m = collab.show(id);
+      if (terminal.has(m.state)) return m.state;
+    } catch { /* 尚未落盘/刚被移动：继续等 */ }
     await new Promise((r) => setTimeout(r, 1000));
   }
   return "timeout";
 }
 
-function spawnDetachedDelivery(args: string[]): { pid?: number; log: string } {
-  const root = msg.msgRoot();
-  const agent = positional(args)[0] || "unknown";
-  const id = positional(args)[1] || `unknown-${Date.now()}`;
-  const dir = join(root, agent);
-  mkdirSync(dir, { recursive: true });
+/** 异步投递日志落在 v2 目录（`~/.dia/collab/deliver/`），不再污染 v1 的 `~/.dia/msg/<agent>/`。 */
+function deliverLogDir(): string { return join(paths.diaHome(), "collab", "deliver"); }
+
+function spawnDetachedDelivery(rest: string[]): { pid?: number; log: string } {
+  const id = rest[0] || `unknown-${Date.now()}`;
+  const dir = deliverLogDir();
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
   const log = join(dir, `deliver-${id}.log`);
   const fd = openSync(log, "a");
   const bin = process.argv[1];
-  const child = spawn(process.execPath, [bin, "msg", "deliver", ...args, "--wait"], {
+  const child = spawn(process.execPath, [bin, "msg", "deliver", ...rest, "--wait"], {
     detached: true, stdio: ["ignore", fd, fd], env: process.env,
   });
   child.unref();
   return { pid: child.pid, log };
 }
 
+/** 已下线的 v1 子命令：不再维护，给出替代命令并退出 2（不留半吊子行为）。 */
+const RETIRED: Record<string, string> = {
+  "needs-info": "用 `dia close <id> --reason no-follow-on` 说明不需要跟进，或 `dia reply <id> --body \"缺什么\"` 说明缺什么",
+  stuck: "用 `dia collab board --refresh`（按优先级/积压看板）或 `dia msg stats`（积压与最老消息年龄）",
+  thread: "用 `dia msg trace <id> --json` 看全链路，或 `dia show <id>` 看单条",
+  agents: "用 `dia collab board` / `dia agents list`（后者查的是注册表，不是消息目录）",
+  delivered: "传输层回写由 `dia msg deliver --transport acp|tmux` 自动完成，不需要手动 `delivered`",
+};
+/** 只改名不改语义的别名：直接转给新名字。 */
+const ALIASES: Record<string, string> = { status: "show" };
+
+function msgOutcome(m: collab.MessageV2, asJson: boolean, extra?: Record<string, unknown>): number {
+  const nt = m.notify ? `\tnotified=${m.notify.channel}${m.notify.reason ? `(${m.notify.reason})` : ""}` : "";
+  out(asJson
+    ? JSON.stringify(extra ? { ...m, ...extra } : m, null, 1)
+    : `${m.id}\t${m.thread_id}#${m.seq}\t${m.from.session_id} → ${m.to.session_id}\t${m.kind}\t${m.subject}${nt}`);
+  return 0;
+}
+
 async function msgCli(argv: string[]): Promise<number> {
-  const [sub, ...args] = argv;
+  const [rawSub, ...args] = argv;
+  const sub = rawSub && ALIASES[rawSub] ? ALIASES[rawSub] : rawSub;
   const asJson = has(args, "--json");
-  const looksSession = (s?: string) => !!s && /^ses_[A-Za-z0-9]+$/.test(s);
-  // v2 兼容入口：显式 --to / 位置参数是 session id 时走会话级 collab；旧 agent 名路径保持原样。
+  if (!sub || sub === "help" || sub === "--help" || sub === "-h") {
+    out(`dia msg —— 跨会话消息（单一存储：~/.dia/collab/，收件人一律是会话 id）
+
+  dia msg send <ses_id> --subject S (--body B|--body-file F) [--kind K] [--requires-reply] [--to ses_id]
+  dia msg inbox [--unread] [--all] [--expose] [--json]
+  dia msg show <id> [--json]
+  dia msg ack <id> | dia msg reply <id> --body B | dia msg close <id> --reason R
+  dia msg deliver <ses_id> <id> [--transport file|tmux|acp] [--wait]     # 显式重投（默认异步）
+  dia msg trace <id> [--json] | dia msg stats [--since 7d] | dia msg seen <id…>
+  dia msg migrate [--dry-run|--apply]   # 旧 ~/.dia/msg → ~/.dia/collab/inbox（默认只报告）
+  dia msg analyze-storage [--json]      # 只读体检：v1 残留 / v2 现状 / 事件流健康度
+  dia msg upkeep | dia msg retry | dia msg escalate --due | dia msg dsh [install|check]
+
+  （v1 的 <agent> 名投递已下线：needs-info / stuck / thread / agents / delivered 见 --help 里的替代命令）`);
+    return 0;
+  }
+  if (sub in RETIRED) {
+    err(`E_RETIRED: dia msg ${sub} 已下线（v1 存储不再维护）。替代：${RETIRED[sub]}`);
+    return 2;
+  }
+
+  // ── 系统维护类（与「收发某条消息」无关）────────────────────────────
   if (sub === "upkeep") {
     const r = collab.upkeep();
     if (asJson) { out(JSON.stringify(r, null, 1)); return 0; }
@@ -825,18 +887,19 @@ async function msgCli(argv: string[]): Promise<number> {
     for (const x of r.escalated) out(`  escalate ${x.id} age=${Math.round(x.age_ms / 60000)}min`);
     return 0;
   }
-  if (sub === "escalate" && has(args, "--due")) {
-    const due = collab.escalateDue();
-    if (asJson) { out(JSON.stringify({ escalated: due }, null, 1)); return 0; }
-    if (!due.length) out("(nothing due)");
-    for (const d of due) out(`${d.id}\t${d.session}\tage=${Math.round(d.age_ms / 60000)}min`);
-    return 0;
-  }
   if (sub === "retry") {
     const r = collab.retryDue();
     if (asJson) { out(JSON.stringify({ retried: r }, null, 1)); return 0; }
     if (!r.length) out("(nothing to retry)");
     for (const x of r) out(`${x.id}\t${x.session}\tnotified=${x.channel}${x.reason ? `(${x.reason})` : ""}`);
+    return 0;
+  }
+  if (sub === "escalate") {
+    if (!has(args, "--due")) { err("usage: dia msg escalate --due（按 TTL 升级到期消息；日常由 dia collab enable 注册的定时任务跑）"); return 2; }
+    const due = collab.escalateDue();
+    if (asJson) { out(JSON.stringify({ escalated: due }, null, 1)); return 0; }
+    if (!due.length) out("(nothing due)");
+    for (const d of due) out(`${d.id}\t${d.session}\tage=${Math.round(d.age_ms / 60000)}min`);
     return 0;
   }
   if (sub === "dsh") {
@@ -882,159 +945,150 @@ async function msgCli(argv: string[]): Promise<number> {
   if (sub === "seen") {
     const ids = positional(args);
     if (!ids.length) { err("usage: dia msg seen <id…>"); return 2; }
-    const sid = collab.resolveSessionId(undefined);
+    const sid = collab.resolveSessionId(flag(args, "--session"));
     const n = collab.markExposed(sid, ids);
     out(asJson ? JSON.stringify({ session: sid, exposed: n }, null, 1) : `exposed ${n}/${ids.length}（${sid}）`);
     return 0;
   }
-  if (sub === "send") {
-    const toFlag = flag(args, "--to");
-    const pos = positional(args)[0];
-    const to = toFlag || (looksSession(pos) ? pos : undefined);
-    if (to) {
-      const rest = toFlag ? [...args] : args.filter((a, i) => !(a === pos && i === args.indexOf(pos)));
-      return collabCli(["out", "--to", to, ...rest]);
-    }
+  // ── 旧数据导入 / 存储体检（只读优先）──────────────────────────────
+  if (sub === "migrate") {
+    const dry = !has(args, "--apply");
+    const r = msgImport.importLegacyV1({ dryRun: dry, from: flag(args, "--from") });
+    if (asJson) { out(JSON.stringify(r, null, 1)); return 0; }
+    out(`${dry ? "dry-run（未写盘；加 --apply 执行）" : "已导入"}：扫描 ${r.total} 条，导入 ${r.imported}，已存在跳过 ${r.skipped}，不合格 ${r.invalid}`);
+    for (const u of r.unresolved) out(`  ⚠ 提取不到会话 id：${u.agent_dir}（${u.files} 条，${u.reason}）—— 未导入，需人工判断归属`);
+    if (has(args, "--verbose")) for (const row of r.rows) out(`  ${row.action}\t${row.agent_dir}/${row.file}\t${row.id}\t→ ${row.to}\t${row.state}`);
+    out(`旧目录保留未删除：${join(paths.diaHome(), "msg")}（确认无误后手动清理）`);
+    return 0;
   }
-  // 无位置参数（或显式 --session）时走 v2 收件箱：doctor/SKILL 都只教 `dia msg inbox --unread`
-  if (sub === "inbox" && (flag(args, "--session") || positional(args).length === 0)) return collabCli(["in", ...args]);
-  // ack/reply/close/show 带 --session 时同样走 v2：v1 要求 <agent> <id>，而 agent 不该知道 v1 存储
-  if (["ack", "reply", "close", "show"].includes(sub) && flag(args, "--session")) return collabCli([sub, ...args]);
+  if (sub === "analyze-storage") {
+    const a = msgImport.analyzeStorage({ from: flag(args, "--from") });
+    if (asJson) { out(JSON.stringify(a, null, 1)); return 0; }
+    out(`v2 ${a.v2.root}`);
+    out(`  sessions=${a.v2.sessions}  messages=${a.v2.messages}  states=${Object.entries(a.v2.by_state).map(([k, v]) => `${k}:${v}`).join(" ") || "-"}`);
+    out(`  legacy（只读）=${a.v2.legacy_ids.length}`);
+    out(`v1 ${a.v1.root}  ${a.v1.present ? "" : "(不存在)"}`);
+    for (const g of a.v1.agents) {
+      out(`  ${g.agent_dir}\tfiles=${g.files}\tsession=${g.session_id ?? "(提取不到)"}\t可导入=${g.importable}\t已导入=${g.already_imported}`);
+    }
+    out(`events ${a.events.dir}  files=${a.events.files}  lines=${a.events.lines}  坏行=${a.events.bad_lines}  月份=${a.events.first_month ?? "-"}..${a.events.last_month ?? "-"}`);
+    for (const v of a.verdict) out(`  · ${v}`);
+    return 0;
+  }
+
+  // ── 收发：唯一存储 v2，收件人必须是会话 id ──────────────────────────
   const refs: Record<string, string> = {};
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--ref" && args[i + 1]) { const [k, ...v] = args[i + 1].split("="); if (k && v.length) refs[k] = v.join("="); i++; }
+    if (args[i] === "--touch" || args[i] === "--touches") { const v = args[i + 1] || ""; if (v) refs.touches = v; i++; }
   }
   try {
     if (sub === "send") {
-      const to = positional(args)[0];
-      const from = flag(args, "--from") || process.env.DIA_AGENT || process.env.DIA_PERSONA;
-      if (!to || !from) { err("usage: dia msg send <to> --from <me> --kind <k> --subject S [--body B|--body-file F]"); return 2; }
-      const m = msg.send({
-        from, to,
-        kind: (flag(args, "--kind") || "notify") as any,
+      const toFlag = flag(args, "--to");
+      const posArgs = positional(args);
+      // 位置参数的第一个是收件人，除非它其实是 flag 的值（如 --subject 后跟的值不会被 positional 收进来）
+      const posTo = posArgs[0];
+      const to = normalizeTo(toFlag ?? posTo);
+      const fromExplicit = flag(args, "--from");
+      if (!to) return toFormatError(toFlag ?? posTo, `dia msg send`);
+      // 身份只认 --session / DIA_SESSION_ID / OPENCODE_SESSION_ID。
+      // `--from` 仍接受（旧脚本在用），但必须与当前会话一致：
+      // 否则任意进程都能把自己伪装成别的会话（发送方身份是审计/回复路由的依据）。
+      const from = collab.resolveSessionId(flag(args, "--session") ?? undefined);
+      if (fromExplicit && fromExplicit !== from) {
+        err(`E_USAGE: --from ${fromExplicit} 与当前会话 ${from} 不一致（身份由 --session/DIA_SESSION_ID 决定，不能伪装）`);
+        return 2;
+      }
+      const kind = (flag(args, "--kind") || "notify") as collab.Kind;
+      const requiresReply = has(args, "--requires-reply") ? true : undefined;
+      let classSnapshot: number | undefined;
+      // 优先级（v2 语义）：按发送者「doing 任务」的 eff 派生；显式 --class 优先
+      const explicitClass = flag(args, "--class");
+      if (explicitClass) {
+        const m = /^P?([0-3])$/i.exec(explicitClass.trim());
+        if (!m) { err(`E_USAGE: --class 必须是 P0..P3`); return 2; }
+        classSnapshot = Number(m[1]);
+      } else {
+        try {
+          const dr = plan.derive(task.list());
+          const mine = task.list().filter((t) => t.owner === from && t.status === "doing");
+          if (mine.length) classSnapshot = Math.min(3, plan.prioIndex(mine.map((t) => dr.byId.get(t.id)?.eff_prio ?? "P99")
+            .sort((a, b) => plan.prioIndex(a) - plan.prioIndex(b))[0]));
+        } catch { /* 任务账本不可读：不阻断发送 */ }
+      }
+      const m = collab.send({
+        from,
+        to,
+        kind,
+        classSnapshot,
+        classWhy: classSnapshot !== undefined ? [`sender doing tasks`] : undefined,
         subject: flag(args, "--subject") || "",
         body: flag(args, "--body"),
         bodyFile: flag(args, "--body-file"),
         refs: Object.keys(refs).length ? refs : undefined,
-        requiresReply: has(args, "--requires-reply") ? true : undefined,
+        requiresReply,
         deadline: flag(args, "--deadline"),
         threadId: flag(args, "--thread"),
+        replyTo: flag(args, "--reply-to") || flag(args, "--reply-to-id"),
+        idempotencyKey: flag(args, "--idempotency-key"),
         hops: flag(args, "--hops") ? Number(flag(args, "--hops")) : undefined,
       });
-      out(asJson ? JSON.stringify(m) : `${m.id}\t${m.thread_id}#${m.seq}\t${m.from} → ${m.to}\t${m.kind}\t${m.subject}`);
-      return 0;
+      if (m.reply_to) { try { collab.markReplied(m.reply_to, m.id); } catch { /* 原消息可能已关闭 */ } }
+      const touchPaths = Object.values(refs).flatMap((v) => String(v).split(",")).map((x) => x.trim()).filter(Boolean);
+      const overlaps = touchPaths.length ? claims.list({}).filter((c) => touchPaths.includes(c.path) && c.holder !== m.from.session_id) : [];
+      if (!asJson) for (const c of overlaps) out(`  ⚠ claim overlap: ${c.path} 由 ${c.holder} 持有（${c.reason || "no reason"}）`);
+      return msgOutcome(m, asJson, overlaps.length ? { claim_overlaps: overlaps } : undefined);
     }
-    if (sub === "needs-info") {
-      const [agent, id] = positional(args);
-      if (!agent || !id) { err("usage: dia msg needs-info <agent> <id> --reason \"...\""); return 2; }
-      const m = msg.needsInfo(agent, id, flag(args, "--reason") || "");
-      out(asJson ? JSON.stringify(m) : `${m.id}\t${m.state}`);
-      return 0;
+    if (sub === "inbox") {
+      // 位置参数（旧的 agent 名）已无意义：v1 存储下线后它不再是合法收件箱标识
+      if (positional(args).length) return toFormatError(positional(args)[0], "dia msg inbox");
+      return collabCli(["in", ...args]);
     }
-    if (sub === "status") {
-      const id = positional(args)[0];
-      if (!id) { err("usage: dia msg status <id> [--json]"); return 2; }
-      const hit = msg.find(id);
-      if (!hit) { err(`E_NOT_FOUND: ${id}`); return 21; }
-      const age = Math.round((Date.now() - new Date(hit.msg.created_at).getTime()) / 1000);
-      out(asJson ? JSON.stringify({ agent: hit.agent, ...hit.msg, age_s: age }, null, 1)
-        : `${hit.msg.id}\t${hit.msg.state}\t${hit.agent}\t${hit.msg.kind}\t${hit.msg.subject}\tage=${age}s${msg.isTerminal(hit.msg.state) ? "" : "  (处理中)"}`);
-      return 0;
-    }
-    if (sub === "stuck") {
-      const rows = msg.stuck(Number(flag(args, "--minutes") || 30));
-      out(asJson ? JSON.stringify(rows, null, 1) : rows.map((m) => `${m.id}\t${m.state}\t${m.to}\t${m.subject}`).join("\n") || "(none)");
-      return 0;
-    }
-    if (sub === "show") {
-      const [agent, id] = positional(args);
-      if (!agent || !id) { err("usage: dia msg show <agent> <id>"); return 2; }
-      const m = msg.get(agent, id);
-      const body = m.body_file ? `(见文件) ${m.body_file}` : (m.body ?? "");
-      out(asJson ? JSON.stringify(m, null, 1) : `${m.id}  [${m.state}]  ${m.from} → ${m.to}  ${m.kind}\n主题: ${m.subject}\n${body}`);
-      return 0;
+    if (sub === "ack" || sub === "reply" || sub === "close" || sub === "show") {
+      // 旧形态是 `ack <agent> <id>`；现在只接受 <id>（会话由 --session/DIA_SESSION_ID 决定）。
+      // 多出来的第二个位置参数一定是旧写法 → 明确报错，不猜哪个是 id。
+      const posArgs = positional(args);
+      if (posArgs.length > 1) {
+        err(`E_USAGE: dia msg ${sub} 只接受 <id>（会话由 --session/DIA_SESSION_ID 决定），收到 ${JSON.stringify(posArgs)}`);
+        return 2;
+      }
+      return collabCli([sub, ...args]);
     }
     if (sub === "deliver") {
-      const [agent, id] = positional(args);
-      if (!agent || !id) { err("usage: dia msg deliver <agent> <id> [--transport tmux|acp] [--wait] [--force]"); return 2; }
-      const transport = flag(args, "--transport") || "tmux";
-      // 默认异步：投递即返回，回执走 dia msg reply / 状态机；长任务不再阻塞调用方。
-      // 但目标必须**先校验**（离线/身份不符直接报错，不能把错误留给后台子进程吞掉）。
-      if (!has(args, "--wait") && transport === "tmux") {
-        try { agents.resolveTarget(agent); }
-        catch (e: any) { err(String(e?.message || e)); return 1; }
-      }
+      const posArgs = positional(args);
+      // 兼容 `deliver <ses_id> <id>`：第一个参数是收件人
+      const to = normalizeTo(flag(args, "--to") ?? (posArgs.length > 1 ? posArgs[0] : undefined));
+      const id = posArgs.length > 1 && !has(args, "--to") ? posArgs[1] : posArgs[0];
+      if (!to) return toFormatError(flag(args, "--to") ?? posArgs[0], "dia msg deliver");
+      if (!id) { err("usage: dia msg deliver <ses_id> <id> [--transport file|tmux|acp] [--wait] [--force]"); return 2; }
+      const transport = flag(args, "--transport") || "file";
+      if (!["file", "tmux", "acp"].includes(transport)) { err(`E_USAGE: --transport 必须是 file|tmux|acp`); return 2; }
+      // 子进程参数：只保留与「投递这一条」有关的 flag（--wait 由子进程自己加）
+      const extra: string[] = [];
+      for (const a of ["--force", "--timeout"]) if (has(args, a)) extra.push(a, flag(args, a)!);
+      const rest = [to, id, ...extra, "--transport", transport];
       if (!has(args, "--wait")) {
-        const child = spawnDetachedDelivery(args);
-        out(asJson ? JSON.stringify({ dispatched: true, pid: child.pid, agent, id, transport, log: child.log })
-                   : `dispatched ${id} → ${agent}（${transport}，异步 ${child.pid}；日志 ${child.log}）`);
+        const child = spawnDetachedDelivery(rest);
+        out(asJson ? JSON.stringify({ dispatched: true, pid: child.pid, id, to, transport, log: child.log })
+          : `dispatched ${id} → ${to}（${transport}，异步 ${child.pid}；日志 ${child.log}）`);
         return 0;
       }
       let r: any;
       if (transport === "acp") {
-        r = await msgAcp.deliverAcp(agent, id);
-        if (!asJson) out(`delivered ${r.id} → ${r.agent} (acp)${r.reply ? `\nreply: ${r.reply.slice(0, 200)}` : ""}`);
-      } else {
-        r = tmux.deliver(agent, id, { force: has(args, "--force") });
+        r = await msgAcp.deliverAcp(to, id);
+        if (!asJson) out(`delivered ${r.id} → ${r.to ?? to} (acp)${r.reply ? `\nreply: ${r.reply.slice(0, 200)}` : ""}`);
+      } else if (transport === "tmux") {
+        r = tmux.deliver(to, id, { force: has(args, "--force") });
         if (!asJson) out(`delivered ${r.id} → ${r.agent} (${r.pane})`);
+      } else {
+        // file：只记事实（落盘即送达；不注入终端）
+        r = collab.markDelivered(to, id);
+        if (!asJson) out(`delivered ${r.id} → ${r.to.session_id} (file)`);
       }
-      // --wait：等的是**终态**（replied/needs_info/closed/escalated），不是 ACP 回合结束
       const finalState = await waitTerminal(id, Number(flag(args, "--timeout") || process.env.DIA_MSG_WAIT_MS || 600_000));
       if (asJson) out(JSON.stringify({ ...r, state: finalState }));
-      else out(`state=${finalState}${finalState === "timeout" ? "（仍在处理，可 dia msg status 查看）" : ""}`);
+      else out(`state=${finalState}${finalState === "timeout" ? "（仍在处理，可 dia msg show <id> 查看）" : ""}`);
       return finalState === "timeout" ? 7 : 0;
-    }
-    if (sub === "inbox") {
-      const agent = positional(args)[0];
-      if (!agent) { err("usage: dia msg inbox <agent> [--unread]"); return 2; }
-      const rows = msg.inbox(agent, { unread: has(args, "--unread") });
-      out(asJson ? JSON.stringify(rows, null, 1) : rows.map((m) => `${m.id}\t${m.state}\t${m.from}\t${m.subject}`).join("\n") || "(empty)");
-      return 0;
-    }
-    if (sub === "ack") {
-      const [agent, id] = positional(args);
-      if (!agent || !id) { err("usage: dia msg ack <agent> <id>"); return 2; }
-      const m = msg.ack(agent, id);
-      out(asJson ? JSON.stringify(m) : `${m.id}\t${m.state}`);
-      return 0;
-    }
-    if (sub === "delivered") {
-      const [agent, id] = positional(args);
-      const transport = flag(args, "--transport") || "unknown";
-      if (!agent || !id) { err("usage: dia msg delivered <agent> <id> --transport tmux|acp"); return 2; }
-      const m = msg.markDelivered(agent, id, transport);
-      out(asJson ? JSON.stringify(m) : `${m.id}\t${m.state}\t${m.transport}`);
-      return 0;
-    }
-    if (sub === "reply") {
-      const [agent, id] = positional(args);
-      if (!agent || !id) { err("usage: dia msg reply <agent> <id> --body B"); return 2; }
-      const r = msg.reply(agent, id, flag(args, "--body") || "", { refs: Object.keys(refs).length ? refs : undefined });
-      out(asJson ? JSON.stringify(r) : `${r.reply.id}\t${r.reply.thread_id}#${r.reply.seq}\t${r.reply.from} → ${r.reply.to}`);
-      return 0;
-    }
-    if (sub === "thread") {
-      const tid = positional(args)[0];
-      if (!tid) { err("usage: dia msg thread <thread_id>"); return 2; }
-      const rows = msg.thread(tid);
-      out(asJson ? JSON.stringify(rows, null, 1) : rows.map((m) => `${m.id}\t${m.state}\t${m.from} → ${m.to}\t${m.kind}\t${m.subject}`).join("\n") || "(empty)");
-      return 0;
-    }
-    if (sub === "escalate") {
-      const rows = msg.escalateOverdue();
-      out(asJson ? JSON.stringify(rows, null, 1) : rows.map((m) => `${m.id}\t${m.to}\t${m.subject}`).join("\n") || "(none)");
-      return 0;
-    }
-    if (sub === "agents") {
-      const rows = msg.agents();
-      out(asJson ? JSON.stringify(rows) : rows.join("\n") || "(none)");
-      return 0;
-    }
-    if (sub === "migrate") {
-      const r = collab.migrateLegacy({ dryRun: has(args, "--dry-run") });
-      if (asJson) out(JSON.stringify(r, null, 1));
-      else out(`${has(args, "--dry-run") ? "dry-run" : "migrated"}: total=${r.total} migrated=${r.migrated} skipped=${r.skipped}`);
-      return 0;
     }
   } catch (e: any) {
     const m = e?.message || String(e);
@@ -1044,7 +1098,7 @@ async function msgCli(argv: string[]): Promise<number> {
     if (m.startsWith("E_USAGE") || m.startsWith("E_SESSION") || m.startsWith("E_NO_SESSION") || m.startsWith("E_LEGACY") || m.startsWith("E_KIND")) return 2;
     return 31;
   }
-  err("usage: dia msg send|inbox|ack|delivered|reply|close|thread|escalate|agents|trace|stats|seen|retry|upkeep|dsh");
+  err(`E_USAGE: 未知子命令 ${sub}（dia msg --help 看全部可用命令）`);
   return 2;
 }
 
@@ -1102,7 +1156,7 @@ function migrateCli(argv: string[]): number {
   const from = flag(argv, "--from") || join(homedir(), ".local", "share", "dia");
   const to = paths.diaHome();
   const dry = has(argv, "--dry-run");
-  const subs = ["personas", "msg", "agents", "state", "cache", "job", "runs", "audit", "tasks", "ingest", "runtime", "eval", "backups"];
+  const subs = ["personas", "msg", "collab", "agents", "state", "cache", "job", "runs", "audit", "tasks", "ingest", "runtime", "eval", "backups"];
   if (!existsSync(from)) { out(`无需迁移：${from} 不存在`); return 0; }
   let moved = 0, failed = 0;
   for (const d of subs) {

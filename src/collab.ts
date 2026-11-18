@@ -299,11 +299,13 @@ function readAll(sessionId: string): { msg: MessageV2; path: string }[] {
   return out.sort((a, b) => ms(a.msg) - ms(b.msg) || a.msg.id.localeCompare(b.msg.id));
 }
 
-/** 全部 v2 消息（跨收件箱）；stats/观察器用 */
+/** 全部 v2 消息（跨收件箱）；stats/观察器用
+ *  ⚠️ 只认 `ses_*` 收件箱：旧版 `dia out --to <人名>` 会落下 `inbox/<人名>/` 这种孤儿目录，
+ *  扫进来会让 board/stats 把「不是会话的东西」当会话统计（也会让 board 列出非法 id）。 */
 export function allMessages(): MessageV2[] {
   const out: MessageV2[] = [];
   for (const sid of allSessionsWithInbox()) {
-    if (!SESSION_RE.test(sid)) continue; // 脏目录容错：不因一个坏目录让全量扫描失败
+    if (!SESSION_RE.test(sid) || !/^ses_/.test(sid)) continue; // 脏目录容错 + 只认会话 id 形状
     try { out.push(...readAll(sid).map((x) => x.msg)); } catch { /* skip */ }
   }
   return out;
@@ -373,9 +375,20 @@ function readBody(opts: SendOptions): { body?: string; body_ref?: string; body_b
   return { body: buf.toString("utf8"), body_bytes: buf.byteLength };
 }
 
+/** `dia out --to` 的收件人约束：与 `dia msg send` 同口径（v2 只认 `ses_*` 会话 id）。
+ *  显式调用它，不要依赖 normalizeSessionId 的宽松规则——那条接受任何 `^[A-Za-z0-9][A-Za-z0-9_.-]*`，
+ *  旧脚本 `dia out --to <人名>` 就会静默造出 `inbox/<人名>/` 孤儿消息。 */
+export function normalizeTo(raw: string): string {
+  const id = String(raw || "").trim().replace(/^session:/, "");
+  if (!/^ses_[A-Za-z0-9_.-]+$/.test(id) || id.includes("..")) {
+    throw new Error(`E_USAGE: 收件人必须是会话 id（形如 ses_xxx / session:ses_xxx），收到 ${JSON.stringify(raw ?? "")}`);
+  }
+  return id;
+}
+
 export function send(opts: SendOptions): MessageV2 {
   const from = resolveSessionId(opts.from);
-  const to = normalizeSessionId(opts.to);
+  const to = normalizeTo(opts.to);
   if (!opts.subject) throw new Error("E_USAGE: --subject 必填");
   const kind = validateKind(opts.kind);
   if (opts.deadline && Number.isNaN(new Date(opts.deadline).getTime())) throw new Error(`E_USAGE: 非法 deadline: ${opts.deadline}`);
@@ -485,13 +498,20 @@ function mailboxOnly(msg: MessageV2, reason: string): MessageV2 {
 }
 
 /** 把 ACP 投递丢到 detached 子进程，立刻返回 `notified=acp(queued)`；
- *  子进程跑完会写 `inject.verified` / `inject.failed`（transport=acp）。 */
+ *  子进程跑完会写 `inject.verified` / `inject.failed`（transport=acp）。
+ *  子进程 stdout/stderr 落 `collab/deliver/acp-auto-<id>.log`（手动投递是 `deliver-<id>.log`）——
+ *  自动通道原来用 `stdio:"ignore"`，verbose 日志全丢，出问题只能看到一行事件码。 */
 function startAcpNotify(msg: MessageV2, rec: SessionRecord): MessageV2 {
   const attempt = (msg.attempts || 0) + 1;
   trace.fact({ event: "inject.attempted", msg_id: msg.id, thread_id: msg.thread_id, transport: "acp", attempt });
+  let logPath: string | undefined;
+  let fd: number | undefined;
   try {
+    logPath = join(root(), "deliver", `acp-auto-${msg.id}.log`);
+    mkdirSync(dirname(logPath), { recursive: true, mode: 0o700 });
+    fd = openSync(logPath, "a", 0o600);
     const child = spawn(process.execPath, [process.argv[1], "msg", ACP_NOTIFY_ENTRY, msg.to.session_id, msg.id], {
-      detached: true, stdio: "ignore", cwd: rec.cwd || process.cwd(),
+      detached: true, stdio: ["ignore", fd, fd], cwd: rec.cwd || process.cwd(),
       env: { ...process.env, DIA_ACP_CMD: rec.acp_cmd || "" },
     });
     child.unref();
@@ -499,6 +519,9 @@ function startAcpNotify(msg: MessageV2, rec: SessionRecord): MessageV2 {
     trace.fact({ event: "inject.failed", msg_id: msg.id, thread_id: msg.thread_id, transport: "acp", attempt, error_code: "E_ACP_SPAWN" });
     msg.notify = { channel: "mailbox-only", reason: "E_ACP_SPAWN" };
     return msg;
+  } finally {
+    // 父进程必须关掉自己的 fd 副本，否则日志句柄一直挂着（子进程已 dup 了一份）
+    if (fd !== undefined) { try { closeSync(fd); } catch { /* ignore */ } }
   }
   msg.notify = { channel: "acp", reason: "queued" };
   return msg;
@@ -513,6 +536,8 @@ export async function acpNotify(sessionId: string, id: string): Promise<{ ok: bo
   const attempt = (findIn(sid, id)?.msg.attempts || 0) + 1;
   const errorCode = (e: any): string => {
     const s = String(e?.message || e || "");
+    // spawn 失败（二进制不存在/无执行权限）必须单独成码：这类失败是配置错误，不是网络/协议错误
+    if (/E_ACP_SPAWN/.test(s)) return "E_ACP_SPAWN";
     if (/-32602|session not found/i.test(s)) return "E_ACP_NO_SESSION";
     if (/E_ACP: timeout/.test(s)) return "E_ACP_TIMEOUT";
     if (/E_ACP: exited/.test(s)) return "E_ACP_EXITED";
@@ -783,12 +808,14 @@ export function close(sessionId: string, id: string, reason: string): MessageV2 
     const cur = readJson<MessageV2>(hit.path);
     if (!cur) throw new Error(`E_NOT_FOUND: ${id}`);
     if (cur.state === "closed") return cur;
+    // from_state 必须是**改之前**的真实状态（先写 cur.state="closed" 再读会恒得 closed→closed）
+    const fromState = cur.state;
     cur.state = "closed";
     cur.closure_reason = why;
     cur.closed_at = now();
     writeAtomic(hit.path, JSON.stringify(cur, null, 1) + "\n");
-    trace.snapshot("close.sender", { id, reason: why, to: "closed" });
-    trace.fact({ event: "closed", msg_id: id, thread_id: cur.thread_id, actor: sid, from_state: cur.state, to_state: "closed", error_code: why });
+    trace.snapshot("close.sender", { id, reason: why, from: fromState, to: "closed" });
+    trace.fact({ event: "closed", msg_id: id, thread_id: cur.thread_id, actor: sid, from_state: fromState, to_state: "closed", error_code: why });
     return cur;
   });
 }
@@ -800,11 +827,12 @@ function closeAsRecipient(sessionId: string, id: string, why: CloseReason): Mess
       throw new Error(`E_STATE: ${id} 已关闭（${m.closure_reason}），不能改成 ${why}`);
     }
     touchDelivered(m);
+    const fromState = m.state;
     m.state = "closed";
     m.closure_reason = why;
     m.closed_at = now();
-    trace.snapshot("close.recipient", { id, reason: why, to: "closed" });
-    trace.fact({ event: "closed", msg_id: id, thread_id: m.thread_id, actor: normalizeSessionId(sessionId), to_state: "closed", error_code: why });
+    trace.snapshot("close.recipient", { id, reason: why, from: fromState, to: "closed" });
+    trace.fact({ event: "closed", msg_id: id, thread_id: m.thread_id, actor: normalizeSessionId(sessionId), from_state: fromState, to_state: "closed", error_code: why });
   });
 }
 

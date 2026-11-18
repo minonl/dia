@@ -51,16 +51,20 @@ export interface AcpSessionDeliverResult { session: string; id: string; reply: s
 
 /** 把一个指针 prompt 投进**已存在的**会话（opencode v2 `session/load`）。
  *  与 deliverAcp 的区别：不调 `session/new`，所以要显式给 sessionId / acp_cmd / cwd。
- *  ⚠️ init → load → prompt 必须在同一个 AcpClient（同一子进程）内完成；拆开会 `-32602 session not found`。 */
+ *  ⚠️ 本实现按「init → load → prompt 在同一个 AcpClient（同一子进程）内完成」写。
+ *  「拆开会 `-32602 session not found`」为实测观察（opencode 2.2.6 / WSL，2026-11-18），
+ *  不是协议硬约束，未在其他版本/环境验证；拆开前请先自己验证。 */
 export async function deliverAcpSession(
   sessionId: string, acpCmd: string, cwd: string, id: string, timeoutMs?: number,
 ): Promise<AcpSessionDeliverResult> {
   if (!acpCmd) throw new Error(`E_NO_ACP: ${sessionId} 未登记 acp_cmd`);
   const argv = acpCmd.split(/\s+/).filter(Boolean);
   const workdir = cwd || process.cwd();
-  // 指针 prompt：不依赖 v1 msg 存储（v2 消息在 collab/inbox，只有 subject 能可靠拿到）
+  // 指针 prompt 的标题：从 v2 账本（collab/inbox/<sid>/）取**真实** subject。
+  // ⚠️ 原来这里调 `msg.get(...)`（v1 模块，r3 已删）——未定义标识符被 catch 吞掉，
+  //    目标 agent 收到的标题恒为「(见 dia msg show)」。现在按「消息落在哪个收件箱」找。
   const subject = (() => {
-    try { return msg.get(sessionId, id).subject; } catch { return "(见 dia msg show)"; }
+    try { return collab.get(sessionId, id).subject || "(无标题)"; } catch { return "(见 dia msg show)"; }
   })();
   const text = [
     `[dia-msg ${id}] ${subject}`,
@@ -77,13 +81,14 @@ export async function deliverAcpSession(
     const r = await acp.prompt(sessionId, text);
     // 成功即协议层已送达；v2 的 delivered/injected 由 collab.acpNotify 记（v1 msg 账本不参与）
     const reply = (r.text || "").trim();
-    try {
-      if (reply) msg.markDelivered(sessionId, id, "acp");
-    } catch { /* 没有 v1 账本时跳过 */ }
-    try {
-      const cur = msg.get(sessionId, id);
-      if (reply && !cur.reply_id) msg.reply(sessionId, id, reply);
-    } catch {}
+    // 「目标没回复就自动落 reply」：只在 v2 账本里能找到这条消息、且它还没 reply/close 时补一条。
+    // （原实现用的是已删除的 v1 `msg.*`，两个 try/catch 把 ReferenceError 全吞了 → 功能静默失效。）
+    if (reply) {
+      try {
+        const cur = collab.get(sessionId, id);
+        if (!cur.reply_id && cur.state !== "replied" && cur.state !== "closed") collab.reply(sessionId, id, reply);
+      } catch { /* 目标已自行 reply / 已关闭 / 消息不在该收件箱：都不算投递失败 */ }
+    }
     return { session: sessionId, id, reply, usage: r.usage };
   } finally {
     acp.close();

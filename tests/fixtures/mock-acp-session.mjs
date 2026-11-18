@@ -9,6 +9,7 @@
 //   · 只有被 `session/load` 加载进**本进程**的 session 才能 prompt；否则回 -32602。
 //     （所以「load 在 A 进程、prompt 在 B 进程」的回归用例是两个实例各自隔离。）
 //   · 不提供 session/new：老路径若误用会得到 -32601。
+//   · session/prompt 的正文原样记进 transcript（`params`），测试靠它断言「指针 prompt 里的标题对不对」。
 //
 // 环境变量：
 //   MOCK_ACP_EXPECT_SESSION=<ses_…>  session/load 只接受这个 id，其余 -32602

@@ -4,7 +4,7 @@
 // （不再是「legacy 只读」那套；`collab.migrateLegacy` 那批 legacy:* 只读数据不在本命令处理范围）
 //
 // 规则：
-//   · 会话标识只从旧 **agent 目录名**里提取 `ses_[A-Za-z0-9]+`（也接受 `session:ses_xxx` 前缀）；
+//   · 会话标识只从旧 **agent 目录名**里提取 `ses_[A-Za-z0-9_.-]+`（也接受 `session:ses_xxx` 前缀）；
 //     提取不到就**报告、不猜**（标题 / cwd / 昵称一律不作数），该目录整体进 skipped 报告
 //   · 幂等：同一 id 目标已存在 → 跳过，不覆盖（重跑不重复导入，也不覆盖已读/已回复的状态）
 //   · 不删旧文件（旧目录留作第二份；确认无误后由人手动清理）
@@ -23,8 +23,10 @@ import { log } from "./log.ts";
 const KINDS = ["question", "handoff", "notify", "reply"] as const;
 type Kind = (typeof KINDS)[number];
 const STATES = ["pending", "delivered", "acked", "replied", "needs_info", "closed", "escalated"];
-/** 会话标识形状：与 collab.normalizeSessionId 同口径的宽松前缀匹配 */
-const SID_RE = /ses_[A-Za-z0-9]+/;
+/** 会话标识形状：与 collab.normalizeSessionId / SESSION_RE **同口径**（前缀宽松匹配）。
+ *  ⚠️ 老实现是 `/ses_[A-Za-z0-9]+/`：`dir=ses_abc.def` 会被截成 `ses_abc`，导入到**错误的会话**。
+ *  `_` 与 `.`/`-` 都在合法字符集内，所以必须整体吃下（并明确排除 `..`，防路径穿越）。 */
+const SID_RE = /ses_[A-Za-z0-9_.-]+/;
 
 export interface ImportedMessage {
   id: string;
@@ -68,10 +70,12 @@ export interface ImportReport {
 const v1Root = () => join(paths.diaHome(), "msg");
 const v2InboxRoot = () => join(paths.diaHome(), "collab", "inbox");
 
-/** 从旧 agent 目录名提取会话标识；提不到返回 null（**不猜**）。 */
+/** 从旧 agent 目录名提取会话标识；提不到返回 null（**不猜**）。
+ *  形状与 collab 的会话 id 同口径：`ses_` + [A-Za-z0-9_.-]，且不允许 `..`。 */
 export function sessionIdFromAgentDir(agentDir: string): string | null {
   const m = SID_RE.exec(String(agentDir || ""));
-  return m ? m[0] : null;
+  if (!m || m[0].includes("..")) return null;
+  return m[0];
 }
 
 function readJson<T>(path: string): T | null {
@@ -93,9 +97,10 @@ function toV2(old: any, agentDir: string, sid: string, file: string, at: string)
   if (!SAFE_ID.test(id) || id.includes("..")) return null;
   const body = typeof old?.body === "string" ? old.body : undefined;
   const fromRaw = String(old?.from || "");
-  const fromSid = SID_RE.exec(fromRaw)?.[0] || fromRaw || "legacy:unknown";
+  const fromSid = (() => { const s = SID_RE.exec(fromRaw)?.[0]; return s && !s.includes("..") ? s : (fromRaw || "legacy:unknown"); })();
   const toRaw = String(old?.to || "");
-  const toSid = SID_RE.exec(toRaw)?.[0] || sid; // 旧数据的 to 若本身是别的 agent（非 ses 形状）→ 收件人以「文件落在哪个 inbox」为准
+  // 旧数据的 to 若本身是别的 agent（非 ses 形状）→ 收件人以「文件落在哪个 inbox」为准
+  const toSid = (() => { const s = SID_RE.exec(toRaw)?.[0]; return s && !s.includes("..") ? s : sid; })();
   return {
     schema: 2,
     id,
@@ -142,7 +147,7 @@ export function importLegacyV1(opts: { dryRun?: boolean; from?: string } = {}): 
     report.total += files.length;
     const sid = sessionIdFromAgentDir(agentDir);
     if (!sid) {
-      report.unresolved.push({ agent_dir: agentDir, files: files.length, reason: "目录名里没有 ses_[A-Za-z0-9]+" });
+      report.unresolved.push({ agent_dir: agentDir, files: files.length, reason: "目录名里提取不到合法 ses_*（只认 [A-Za-z0-9_.-]，不含 ..）" });
       log.warn("import: 提取不到会话标识，整目录跳过（不猜）", { agent_dir: agentDir, files: files.length });
       for (const file of files) report.rows.push({ agent_dir: agentDir, file, id: "(unknown)", to: "-", state: "-", action: "invalid" });
       continue;

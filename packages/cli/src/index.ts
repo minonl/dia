@@ -1426,8 +1426,9 @@ async function collabCli(argv: string[]): Promise<number> {
       return 0;
     }
     if (sub === "out") {
-      const to = flag(args, "--to");
-      if (!to) { err("usage: dia out --to <session_id> --subject S (--body B|--body-file F) [--kind K]"); return 2; }
+      if (!flag(args, "--to")) { err("usage: dia out --to <session_id> --subject S (--body B|--body-file F) [--kind K]"); return 2; }
+      // 收件人校验与 `dia msg send` 同一口径（collab.send → normalizeTo）：非 ses_* 一律 E_USAGE
+      const to = collab.normalizeTo(flag(args, "--to")!);
       const kind = (flag(args, "--kind") || "notify") as collab.Kind;
       const requiresReply = has(args, "--requires-reply") ? true : undefined;
       const senderId = collab.resolveSessionId(session);

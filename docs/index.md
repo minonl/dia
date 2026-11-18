@@ -138,6 +138,9 @@ rm -rf ~/.dia
 | `msg` | `dia msg deliver <agent> <id> [--transport tmux|acp]` |  |
 | `task` | `dia task add|list|link|plan|split|status|done [--owner S] [--depends a,b] [--touches p1,p2] [--prio P1] [--start D] [--due D] [--progress 0-100]` |  |
 | `task` | `dia task split <id> --into "切片A,切片B" [--slice 切片A] [--role R] [--judge J] [--touches p] [--force]` |  |
+| `wb` | `dia wb [--json] [--summary] [--now ISO] [--depth fast|full] | wb refresh | wb migrate [--dry-run] | wb gc [--apply] | wb explain <id>` |  |
+| `wb` | `dia wb track open|list|show|bind|unbind|stage|next|handoff|attach|close` |  |
+| `wb` | `dia wb metrics|due|brief [--json] [--track tr-x] [--since 7d]` |  |
 | `graph` | `dia graph [--json] [--task t-...] [--tui [--watch] [--status S] [--owner S] [--width N] [--no-color]]` |  |
 | `graph` | `dia graph --serve [--port N] [--no-open]` | 本机只读 web（需 packages/graph-web） |
 | `graph` | `dia graph --export-html [path] [--out path] [--now ISO] [--redact] [--all] [--limit N] [--force]` |  |
@@ -259,4 +262,5 @@ Agent 入口：[`llms.txt`](https://github.com/minonl/dia/blob/main/llms.txt)（
 | [dia graph Web 视觉设计稿（v0.3）](design/graph-web.md) | 落地状态（2026-11-06）：M1 已实现 dia graph --export-html（真实账本 → 单文件静态 HTML，无网络）； |
 | [dia msg 重新设计：从「能发」到「可证送达、可复盘」](design/msg-reliability-redesign.md) | 日期：2026-11-10 ｜ 状态：P0–P3 已实现（dsh 插件：包 + 安装器 + dump-config 校验；真机 dsh 启动未实跑） ｜ 触发：用户实测「对方在处理完等我回复时，完全没收到我们消息的迹象」；团队三角色复核（现状口径 / 传输层 / 指标与测试） |
 | [固定席位 + 上下文亲和（M2 设计）](design/seat-scheduling-m2.md) | 状态：M2a 已实现（2026-11-09）：dia graph --next --seats N｜src/seats.ts |
+| [任务工作台（workbench）：长任务跨会话管理](design/workbench.md) | 状态：设计 v2 已评审 · M0–M4 已实现并完成本机验收（待 MR；github.com 恢复后推送）｜2026-11-18 |
 

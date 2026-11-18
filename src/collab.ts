@@ -39,6 +39,10 @@ export interface MessageV2 {
   seq: number;
   from: ActorRef;
   to: ActorRef;
+  /** 原始路由地址（如 `track:tr-x`）；只在经路由发送时写，老消息无此键 */
+  to_addr?: string;
+  /** 解析后的会话 id（`to.session_id` 的显式副本，便于读者不猜） */
+  to_resolved?: string;
   kind: Kind;
   subject: string;
   body?: string;
@@ -100,6 +104,9 @@ export interface SessionRecord {
 export interface SendOptions {
   from?: string;
   to: string;
+  /** 原始地址（`track:…` / `group:…`）；给了才在消息里落 to_addr/to_resolved */
+  toAddr?: string;
+  toResolved?: string;
   kind?: Kind;
   subject: string;
   body?: string;
@@ -386,10 +393,7 @@ export function send(opts: SendOptions): MessageV2 {
     const id = newId("m");
     let bodyRef: string | undefined;
     if (body.body !== undefined && body.body_bytes > INLINE_BODY) {
-      ensureDir(bodiesDir());
-      const ref = join("bodies", `${id}.md`);
-      writeAtomic(join(root(), ref), body.body);
-      bodyRef = ref;
+      bodyRef = stashBody(id, body.body);
     }
     const msg: MessageV2 = {
       schema: 2,
@@ -398,6 +402,8 @@ export function send(opts: SendOptions): MessageV2 {
       seq,
       from: actorOf(from),
       to: actorOf(to),
+      // 只在路由发送时落这两个键：老路径（--to ses_x）字节不变
+      ...(opts.toAddr ? { to_addr: opts.toAddr, to_resolved: opts.toResolved || to } : {}),
       kind,
       subject: opts.subject,
       body: bodyRef ? undefined : body.body,
@@ -536,16 +542,27 @@ export function show(id: string): MessageV2 {
   return hit.msg;
 }
 
+/** 把正文落到 `~/.dia/collab/bodies/<id>.md`，返回可持久化的 ref（相对 collab 根）。 */
+export function stashBody(id: string, body: string): string {
+  const safe = String(id).replace(/[^A-Za-z0-9_.-]/g, "-").slice(0, 100) || newId("body");
+  const ref = join("bodies", `${safe}.md`);
+  ensureDir(bodiesDir());
+  writeAtomic(join(root(), ref), body);
+  return ref;
+}
+
+/** 读 body_ref；越界（不在 bodies/ 内）一律返回空串，防路径穿越。 */
+export function readBodyRef(ref: string): string {
+  const base = resolve(bodiesDir());
+  const path = resolve(root(), ref);
+  if (path !== base && !path.startsWith(base + sep)) return "";
+  try { return readFileSync(path, "utf8"); } catch { return ""; }
+}
+
 /** 读取消息正文：内联优先，其次 body_ref（迁移/大正文）。 */
 export function bodyOf(m: MessageV2): string {
   if (m.body !== undefined) return m.body;
-  if (m.body_ref) {
-    // body_ref 来自消息文件（可能是迁移来的脏数据）：必须落在 bodies/ 内，防止路径穿越读任意文件。
-    const base = resolve(bodiesDir());
-    const path = resolve(root(), m.body_ref);
-    if (path !== base && !path.startsWith(base + sep)) return "";
-    try { return readFileSync(path, "utf8"); } catch { return ""; }
-  }
+  if (m.body_ref) return readBodyRef(m.body_ref);
   return "";
 }
 

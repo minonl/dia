@@ -100,7 +100,7 @@ dia persona remove dabo
 | `postinstall` | **已实现** | 全局安装后自举：装配内置 `dia-msg` kit + 写自举戳；幂等、永不失败（供 npm `postinstall` 与 `--ignore-scripts` 用户手动补跑） |
 | `migrate data [--from DIR] [--dry-run]` | **已实现** | 旧数据根 → `~/.dia`：只搬数据子目录，目标已存在则合并，失败计数退 1（取代已删除的 `install.sh --migrate`） |
 | `update [--check]` | **已实现** | 查 npm `dist-tags`；`--check` 有新版 exit 1、领先/最新 exit 0；**按安装方式分流**：npm 全局包 → `npm i -g`；脚本安装 → **统一引导切到 npm**（`npm i -g` + 回链），`bash install.sh` 只作为「开发/离线通道」备选 |
-| `deps list / record` | **已实现** | `list` = 登记 + 实测派生视图（**`host_cli` 未装只告警、exit 0**；其余 required 缺失 exit 2）；`record` = 只追加一行（`--id/--kind/--version` 必填）；`src/deps.ts` + `tests/deps*.test.ts` |
+| `deps list / record` | **已实现** | `list` = 登记 + 实测派生视图（**`host_cli` 未装只告警、exit 0；被已安装 service 依赖时升 fail、exit 2**；其余 required 缺失 exit 2）；`record` = 只追加一行（`--id/--kind/--version` 必填）；`src/deps.ts` + `tests/deps*.test.ts` |
 | `doctor` | **已实现** | 组合自检：persona verify / **persona.render（宿主产物只读漂移，warn + 修复命令）** / default_agent / kit（**只查该 persona 引用的**，孤儿 kit 不拖红）/ knowledge（**索引新鲜度三态**，过期给重建命令）/ dsh preset / **deps 登记校验** / **platform 版本（读 `docs/platforms/registry.json`）** / wt / **install_shadow（遮蔽提示，warn）** / **bootstrap（内置能力是否跟随包版本）**（脚本安装 vs 包管理器全局安装互相遮挡：双向一致判定，不一致 fail + 一行修复命令；shim 形态按内容识别）**；exit 0/1/2。不指定 persona 且装了多个 → **逐个自检**（条目加 `<id>.` 前缀），不再整体 `E_SCOPE` |
 | `wt …` | **已实现（需安装包）** | 转发 `packages/wt/bin/dia-wt`（create/adopt/doctor/gate/list/status/check/clean/prune-merged；详见 [worktree.md](worktree.md)）；未装时 `E_WT`（exit 33），`install.sh` 会分发 |
 | `kb index/search/query/get/lint/path/review` | **已实现** | persona 作用域下索引过期自动重建；显式 `--root` 保持「缺索引即报错」 |

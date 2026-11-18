@@ -38,7 +38,7 @@
 
 1. `resolved` 用**可移植写法**（`command:opencode`、`~/...`），不写死某台机器的绝对路径。
 2. 人读视图由 `dia doctor` 派生（`deps` 项，`--json` 给机器）；**本文不抄登记数据**。
-3. `dia doctor` 判定：required 缺失 = `fail`（**例外：`host_cli` 未装只 `warn`**——渲染不需要宿主，运行才需要）；版本/路径漂移 = `warn`；可选未装 = note（不拉红）。
+3. `dia doctor` 判定：required 缺失 = `fail`（**例外：`host_cli` 未装默认只 `warn`**——渲染不需要宿主，运行才需要；**但已安装 service 的 `entry.agent.host` 声明了该宿主 → 升 `fail`**，因为服务真跑不起来）；版本/路径漂移 = `warn`；可选未装 = note（不拉红）。
    **`host_cli` 的版本判定权在 `docs/platforms/registry.json` 的 `range`**（如 `>=0.2.0 <0.3.0`）：
    deps 行的 `version` 只是登记当时的快照，宿主补丁/预发布演进不该反复报漂移；注册表里没有该命令时才退回按登记版本匹配。
 4. 追加用 `dia deps record`（`--id/--kind/--version` 必填；`verified_at` 自动填当天，`method=manual`）；

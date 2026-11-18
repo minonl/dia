@@ -94,6 +94,16 @@ describe("依赖校验", () => {
     expect(opt.note).toBe(true);
   });
 
+  test("已安装 service 依赖该宿主 → 缺宿主升 fail（required/optional 都算）", () => {
+    const missing = "definitely-not-a-real-binary-xyz";
+    const hosts = new Map([[missing, ["svc-a", "svc-b"]]]);
+    const req = deps.check({ id: `host_cli:${missing}@1.0.0`, kind: "host_cli", version: "1.0.0", role: "required" }, { requiredHosts: hosts });
+    expect(req.status).toBe("fail");
+    expect(req.detail).toContain("svc-a, svc-b");
+    const opt = deps.check({ id: `host_cli:${missing}@1.0.0`, kind: "host_cli", version: "1.0.0", role: "optional" }, { requiredHosts: hosts });
+    expect(opt.status).toBe("fail");
+  });
+
   test("非 host_cli 的 required 缺失仍 fail（边界不动）", () => {
     const r = deps.check({ id: "datastore:none", kind: "datastore", version: "unknown", resolved: "/nope/none.db", role: "required" });
     expect(r.status).toBe("fail");

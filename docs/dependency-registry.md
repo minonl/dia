@@ -38,11 +38,11 @@
 
 1. `resolved` 用**可移植写法**（`command:opencode`、`~/...`），不写死某台机器的绝对路径。
 2. 人读视图由 `dia doctor` 派生（`deps` 项，`--json` 给机器）；**本文不抄登记数据**。
-3. `dia doctor` 判定：required 缺失 = `fail`；版本/路径漂移 = `warn`；可选未装 = note（不拉红）。
+3. `dia doctor` 判定：required 缺失 = `fail`（**例外：`host_cli` 未装只 `warn`**——渲染不需要宿主，运行才需要）；版本/路径漂移 = `warn`；可选未装 = note（不拉红）。
    **`host_cli` 的版本判定权在 `docs/platforms/registry.json` 的 `range`**（如 `>=0.2.0 <0.3.0`）：
    deps 行的 `version` 只是登记当时的快照，宿主补丁/预发布演进不该反复报漂移；注册表里没有该命令时才退回按登记版本匹配。
 4. 追加用 `dia deps record`（`--id/--kind/--version` 必填；`verified_at` 自动填当天，`method=manual`）；
-   看现状用 `dia deps list [--json]`（登记 + 实测，required 缺失 exit 2）。
+   看现状用 `dia deps list [--json]`（登记 + 实测；`host_cli` 未装 exit 0，其余 required 缺失 exit 2）。
 
 ---
 
@@ -51,7 +51,7 @@
 | 步 | 判据 |
 |---|---|
 | 登记 | id 唯一 + source + integrity；缺就记 `unknown`，不猜 |
-| 探测 | 存在 + 版本符合 + smoke 通过 → `active`；版本不符 → `degraded`；required 缺失 → **exit 2**（与 `dia deps list` 实际退出码一致） |
+| 探测 | 存在 + 版本符合 + smoke 通过 → `active`；版本不符 → `degraded`；required 缺失 → **exit 2**（`host_cli` 例外：exit 0，仅告警） |
 | 启用 | `verified_at` ≤90 天 且 integrity 复核一致 |
 | 升级 | 新 id（版本/hash 变），旧行保留；**禁止原地改写** |
 | 废弃 | `support=deprecated` + `removal_after` ≥1 个 minor 周期 + 有替代 |

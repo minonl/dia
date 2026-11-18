@@ -27,6 +27,8 @@
 3. `range` 只写简单约束（`>=2.0.0 <3.0.0`）；垫脚石版本先写进 `tested[]`。
    **可以不设上限**（如 `>=2.2.0`）：此时「升级后跑冒烟 → 记进 `tested[]`」就是唯一的守门动作，
    冒烟判据写在条目的 `tested_note` 里（例：opencode 走 `opencode debug agents` / `debug config`）。
+   守门不是纯人工：`dia doctor` 会对「在 range 内、但 minor 不在 `tested[]`」的版本给 `warn`
+   （`platforms.checks` 的 `testedMinor`），跑完冒烟把版本记进 `tested[]` 即转绿。
 4. `supported: false` 的平台只做记录，不参与探测判定。
 
 ---

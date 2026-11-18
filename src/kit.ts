@@ -457,7 +457,7 @@ export function install(from: string, opts: { ref?: string; dryRun?: boolean; js
         const stagedHash = hashTree(staging);
         if (stagedHash === EMPTY_TREE_HASH) throw new Error(`E_KIT_EMPTY: kit ${m.id}@${m.version} 内容为空（检查 source 与清单路径）`);
         writeFileSync(join(staging, "kit.lock"), JSON.stringify({
-          id: m.id, version: m.version, commit: src.commit, root: kitRootRel, hash: stagedHash,
+          id: m.id, version: m.version, commit: src.commit, source: from, root: kitRootRel, hash: stagedHash,
           rendered: [], commands: m.commands ?? [], knowledge: m.knowledge ?? [], dataRoot: m.data_root ?? null, env: m.env ?? null, config: [],
         }, null, 1));
         mkdirSync(dirname(target), { recursive: true });
@@ -479,7 +479,7 @@ export function install(from: string, opts: { ref?: string; dryRun?: boolean; js
     const appliedConfig = config.apply(m.config ?? []);
     const hash = hashTree(target);
     writeFileSync(join(target, "kit.lock"), JSON.stringify({
-      id: m.id, version: m.version, commit: src.commit, root: kitRootRel, hash,
+      id: m.id, version: m.version, commit: src.commit, source: from, root: kitRootRel, hash,
       rendered, commands: m.commands ?? [], knowledge: m.knowledge ?? [], dataRoot: m.data_root ?? null, env: m.env ?? null, config: appliedConfig,
     }, null, 1));
     return { id: m.id, version: m.version, dir: target, root: kitRoot, rendered, hash, changed };

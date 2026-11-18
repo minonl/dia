@@ -20,6 +20,18 @@ export interface RenderOptions {
   liveRev?: string;
 }
 
+export interface WebTrack {
+  id: string;
+  label: string;
+  status: string;
+  prio: string;
+  owner: string | null;
+  next: string;
+  repo: string[];
+  lead: string | null;
+  waiting_on: { kind: string; ref: string; note?: string } | null;
+}
+
 export interface WebTask {
   id: string;
   label: string;
@@ -69,6 +81,17 @@ export function buildPayload(graph: Graph, opts: RenderOptions = {}) {
   const redact = !!opts.redact;
 
   const taskNodes = graph.nodes.filter((n) => n.kind === "task");
+  const tracks: WebTrack[] = graph.nodes.filter((n) => n.kind === "track").map((n) => ({
+    id: n.id.replace(/^track:/, ""),
+    label: n.label,
+    status: n.status ?? "open",
+    prio: n.prio ?? "P2",
+    owner: n.owner ?? null,
+    next: n.next ?? "",
+    repo: n.repo ?? [],
+    lead: n.lead ?? null,
+    waiting_on: (n.waiting_on as WebTrack["waiting_on"]) ?? null,
+  }));
   const known = new Set(taskNodes.map((n) => n.id));
   // 稳定排序：优先级 → 开始 → id，截断时不随账本顺序抖动
   const ordered = [...taskNodes].sort((a, b) =>
@@ -131,6 +154,7 @@ export function buildPayload(graph: Graph, opts: RenderOptions = {}) {
     today,
     generated_at: `${today} ${pad(now.getHours())}:${pad(now.getMinutes())}`,
     tasks,
+    tracks,
     edges,
     next,
     cycles: graph.cycles.map((c) => c.map(bare)),

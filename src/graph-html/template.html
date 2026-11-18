@@ -261,6 +261,10 @@
         <div class="item"><span class="k">claims</span><b id="stat-claims">0</b></div>
       </div>
     </div>
+    <div class="panel" id="tracks-panel" style="display:none">
+      <div class="side-title"><h2>任务线</h2><span>track</span></div>
+      <div class="list" id="track-list"></div>
+    </div>
     <div class="panel">
       <div class="side-title"><h2>下一步</h2><span id="next-policy">kahn-v1</span></div>
       <div class="list" id="next-list"></div>
@@ -321,10 +325,24 @@ const tasks=(payload.tasks||[]).map(t=>{
   };
 });
 const taskEdges=(payload.edges||[]).filter(e=>e&&e.kind==='depends_on').map(e=>({from:String(e.from),to:String(e.to),kind:'depends_on'}));
+const tracks=(payload.tracks||[]).map(t=>({id:String(t.id),label:String(t.label||t.id),status:String(t.status||'open'),prio:normPrio(t.prio),owner:t.owner?String(t.owner):null,next:String(t.next||''),repo:Array.isArray(t.repo)?t.repo.map(String):[],lead:t.lead?String(t.lead):null,waiting_on:t.waiting_on||null}));
 const truncated=payload.truncated||null;
 const state={view:'graph', layout:'priority', mode:'simple', zoom:28, window:7, q:'', sel:[], fd:2, pl:'eff', from:null, to:null};
 const canvas=document.getElementById('canvas'), layer=document.getElementById('canvas-scroll'), rail=document.getElementById('lane-rail'), svg=document.getElementById('edges');
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function renderTracks(){
+  if(!tracks.length) return;
+  const panel=document.getElementById('tracks-panel'); if(!panel) return;
+  panel.style.display='';
+  const color=s=>({active:'var(--muted)',done:'var(--muted)',blocked:'var(--red)',paused:'var(--amber)',awaiting_human:'var(--amber)'}[s]||'var(--muted)');
+  const list=document.getElementById('track-list');
+  list.innerHTML=tracks.map(t=>{
+    const wait=t.waiting_on?`<small>wait ${esc(String(t.waiting_on.kind))}:${esc(String(t.waiting_on.ref))}</small>`:'';
+    const next=t.next?`<small>${esc(t.next)}</small>`:'';
+    return `<div class="item"><span class="k"><i class="dot" style="background:${color(t.status)}"></i>${esc(t.prio)} ${esc(t.status)}</span><b>${esc(t.label)}</b>${next}${wait}</div>`;
+  }).join('');
+}
+renderTracks();
 const stIcon={doing:'▶',blocked:'⏸',review:'◐',done:'✓',accepted:'✓',todo:'○',dropped:'⨯',rejected:'✗',escalated:'▲',awaiting_acceptance:'…'};
 const stIconOf=s=>stIcon[s]||'·';
 

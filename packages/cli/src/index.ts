@@ -2322,7 +2322,15 @@ export async function main(rawArgv: string[]): Promise<number> {
     return rc;
   }
   if (cmd === "task") return taskCli(argv.slice(1));
-  if (cmd === "wb") return wbCli(argv.slice(1));
+  if (cmd === "wb") {
+    const rest = argv.slice(1);
+    if (rest.includes("--web")) {
+      // `wb --web` = 复用 graph 的本机只读 web（track 节点/面板已在 graph 里）
+      const fwd = ["--serve", ...rest.filter((a) => a !== "--web")];
+      return graphCli(fwd);
+    }
+    return wbCli(rest);
+  }
   if (cmd === "beat") return beatCli(argv.slice(1));
   if (cmd === "graph") return graphCli(argv.slice(1));
   if (cmd === "msg") return msgCli(argv.slice(1));

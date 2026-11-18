@@ -583,7 +583,8 @@ CONTEND  fed/lyzr/hummus: tr-3f9a1c2e / tr-8b2d4f01 建议先合 !1975
 ```
 
 - 多仓：一行内 `repo a+b`，需要展开用 `--track tr-x --json`。
-- `--web` 复用 `dia graph --serve`；M1 只渲染 task/claim，track 渲染在 M3 前为 `--json` only（**不假装有**）。
+- `--web` 复用 `dia graph --serve`：graph 新增 `track-v1` 能力（track 节点 + `belongs_to`/`serves` 边），
+  web 侧边栏有「任务线」面板（id / 优先级 / 状态 / 下一步 / waiting_on）。
 - 退出码：`0` 正常；`1` 有 drift/due/告警；`2` 用法错误；`40–49` 见 §7.3。
 
 ### 9.3 推送式「未来关注」
@@ -702,6 +703,7 @@ CONTEND  fed/lyzr/hummus: tr-3f9a1c2e / tr-8b2d4f01 建议先合 !1975
 | 指标 | 1149 会话（778 root + 371 subagent）；tokens total 441,626,663；cost `$0.794`（host 2 条有价）；219 runs / 7 mock 排除 |
 | 到期/简报 | 到期时 `due` exit 1；`brief` 恒 exit 0（开工自检不阻塞脚本） |
 | 工作树 | 真机 8 repos / 54 wt，`wt list --orphan` 正常列出 unclaimed/not_checked |
+| Web 渲染（M5） | `graph --json` 含 `track-v1` + track 节点/边；导出 HTML 含「任务线」面板与 track id |
 
 **本机实测发现并修复的坑**（已进代码）：
 
@@ -714,7 +716,7 @@ CONTEND  fed/lyzr/hummus: tr-3f9a1c2e / tr-8b2d4f01 建议先合 !1975
 
 **明确未做（后续，不影响本验收）**：
 
-- `dia wb --web` 的 track 渲染：`graph` 的 kind 仍是闭合联合，track 节点目前只在 `--json` 可见；Web 渲染留 M5（需同时改 `graph.ts`/`graph-tui.ts`/`render.ts` 三处白名单）。
+- ~~`dia wb --web` 的 track 渲染~~：**已实现**（graph `track-v1` + web「任务线」面板，2026-11-18）。
 - 跨机只读拉取：按决策留到 v2。
 - leyan 型号价格表：现为 `unpriced`（不猜价），补价后成本即可用。
 - `dia wt list --orphan` 依赖新版 `dia`（发布后自然可用；开发态用 `DIA_BIN` 指向源码入口）。

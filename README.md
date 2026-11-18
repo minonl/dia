@@ -179,6 +179,8 @@ bun src/cli.ts version  # 直接跑源码
 | `doctor` | `dia doctor [--persona ID] [--paths] [--json]` |  |
 | `deps` | `dia deps list [--json] [--file PATH]` | 派生视图：登记 + 实测 |
 | `deps` | `dia deps record --id ID --kind K --version V [--resolved R] [--role required|optional] [--result pass|fail|unknown] [--evidence P]` |  |
+| `cache` | `dia cache list [--root NAME] [--json]` | 缓存条目：体积/引用/是否有本地独有内容 |
+| `cache` | `dia cache gc [--apply] [--force] [--referenced] [--root NAME] [--json]` | 默认 dry-run；cache 可删，要留就 backup |
 | `env` | `dia env list|check [KEY…] | env [--dry-run] [--redact] <cmd…>` |  |
 | `env` | `dia env bw status|unlock [--passwordfile P]|lock` |  |
 | `env` | `dia env bw run --map KEY=item [--map …] [--task T] -- <cmd…>` | 只注入映射键；BW_SESSION 不进子进程 |

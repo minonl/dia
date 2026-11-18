@@ -20,6 +20,12 @@ describe("版本范围判定", () => {
     expect(platforms.versionOf("opencode v2.2.5")).toBe("2.2.5");
     expect(platforms.versionOf("0.2.1-rc.2")).toBe("0.2.1");
   });
+
+  test("只有下限时（不设上限）新 minor 也通过", () => {
+    expect(platforms.satisfies("2.3.0", ">=2.2.0")).toBe(true);
+    expect(platforms.satisfies("3.0.0", ">=2.2.0")).toBe(true);
+    expect(platforms.satisfies("2.1.9", ">=2.2.0")).toBe(false);
+  });
 });
 
 describe("注册表", () => {
@@ -44,6 +50,9 @@ describe("注册表", () => {
       expect(r.platforms.opencode.supported).toBe(true);
       expect(r.platforms.dsh.supported).toBe(true);
       expect(r.platforms.opencode.range).toContain("2.2.0");
+      // 2026-11-18 口径：不设上限（2.3.0 实测通过），只保留下限
+      expect(r.platforms.opencode.range).not.toContain("<");
+      expect(r.platforms.opencode.tested).toContain("2.3.0");
     } finally { delete process.env.DIA_PLATFORMS_FILE; }
   });
 });

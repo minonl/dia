@@ -84,12 +84,19 @@ describe("依赖校验", () => {
     } finally { process.env.PATH = old; }
   });
 
-  test("required 缺失 → fail；optional 缺失 → ok + note", () => {
+  test("host_cli required 缺失 → warn（缺宿主最多告警，不判 fail）；optional 缺失 → ok + note", () => {
     const missing = "definitely-not-a-real-binary-xyz";
-    expect(deps.check({ id: `host_cli:${missing}@1.0.0`, kind: "host_cli", version: "1.0.0", role: "required" }).status).toBe("fail");
+    const req = deps.check({ id: `host_cli:${missing}@1.0.0`, kind: "host_cli", version: "1.0.0", role: "required" });
+    expect(req.status).toBe("warn");
+    expect(req.detail).toContain("本机未装宿主");
     const opt = deps.check({ id: `host_cli:${missing}@1.0.0`, kind: "host_cli", version: "1.0.0", role: "optional" });
     expect(opt.status).toBe("ok");
     expect(opt.note).toBe(true);
+  });
+
+  test("非 host_cli 的 required 缺失仍 fail（边界不动）", () => {
+    const r = deps.check({ id: "datastore:none", kind: "datastore", version: "unknown", resolved: "/nope/none.db", role: "required" });
+    expect(r.status).toBe("fail");
   });
 
   test("summary 汇总状态", () => {
@@ -98,8 +105,8 @@ describe("依赖校验", () => {
       { id: "datastore:none", kind: "datastore", version: "unknown", resolved: "/nope/none.db", role: "optional" },
     ];
     const s = deps.summary(rows);
-    expect(s.status).toBe("fail");
-    expect(s.detail).toContain("缺 1");
+    expect(s.status).toBe("warn");
+    expect(s.detail).toContain("告警 1");
   });
 });
 

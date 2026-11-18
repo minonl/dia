@@ -116,9 +116,15 @@ function platformOf(id: string): { name: string; entry: platforms.PlatformEntry 
 export function check(e: DepEntry): DepCheck {
   const required = e.role === "required";
   // 可选依赖缺失 ≠ 不健康：记 note，不拉红；required 缺失才 fail。
-  const missing = (why: string): DepCheck => required
-    ? { id: e.id, status: "fail", detail: `${e.id}：${why}（required：此机运行需要它，装好后重跑 dia doctor）` }
-    : { id: e.id, status: "ok", note: true, detail: `${e.id}：${why}（可选，未装）` };
+  // 例外：host_cli 缺宿主**最多 warn**（2026-11-18 用户定）——渲染不需要宿主，运行才需要；
+  // 与 platforms.ts 的「不判定缺宿主为不健康」同一口径，缺 dsh 不该让整机 doctor 判 fail。
+  const missing = (why: string): DepCheck => {
+    if (e.kind === "host_cli" && required)
+      return { id: e.id, status: "warn", detail: `${e.id}：${why}（本机未装宿主：渲染不需要，运行需要；装好后重跑 dia doctor）` };
+    return required
+      ? { id: e.id, status: "fail", detail: `${e.id}：${why}（required：此机运行需要它，装好后重跑 dia doctor）` }
+      : { id: e.id, status: "ok", note: true, detail: `${e.id}：${why}（可选，未装）` };
+  };
 
   if (e.kind === "host_cli" || e.kind === "npm") {
     const bin = binOf(e.id);
@@ -163,7 +169,7 @@ export function check(e: DepEntry): DepCheck {
 
 export function checks(entries: DepEntry[]): DepCheck[] { return entries.map(check); }
 
-/** 汇总成一条 doctor 检查：required 缺失 = fail；版本/路径漂移 = warn；可选未装只记 note。 */
+/** 汇总成一条 doctor 检查：required 缺失 = fail；版本/路径漂移、缺宿主 = warn；可选未装只记 note。 */
 export function summary(entries: DepEntry[]): { status: "ok" | "warn" | "fail"; detail: string } {
   const rows = checks(entries);
   const fail = rows.filter((r) => r.status === "fail");
@@ -172,7 +178,7 @@ export function summary(entries: DepEntry[]): { status: "ok" | "warn" | "fail"; 
   const bad = [...fail, ...warn];
   const parts = [`${rows.length} 条`];
   if (fail.length) parts.push(`缺 ${fail.length}`);
-  if (warn.length) parts.push(`漂移 ${warn.length}`);
+  if (warn.length) parts.push(`告警 ${warn.length}`);
   if (notes.length) parts.push(`可选未装 ${notes.length}`);
   const detail = bad.length
     ? `${parts.join("，")}：${bad.slice(0, 3).map((r) => r.id).join(", ")}${bad.length > 3 ? " …" : ""}`

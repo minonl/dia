@@ -25,6 +25,8 @@
 1. **一条经验 = 版本范围 + 复现命令 + 判据**；没有复现命令的写「未验证」。
 2. 数据只改 `registry.json`；不要在 md / README / 知识库里再抄一份（同步必然漂）。
 3. `range` 只写简单约束（`>=2.0.0 <3.0.0`）；垫脚石版本先写进 `tested[]`。
+   **可以不设上限**（如 `>=2.2.0`）：此时「升级后跑冒烟 → 记进 `tested[]`」就是唯一的守门动作，
+   冒烟判据写在条目的 `tested_note` 里（例：opencode 走 `opencode debug agents` / `debug config`）。
 4. `supported: false` 的平台只做记录，不参与探测判定。
 
 ---

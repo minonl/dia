@@ -24,7 +24,8 @@ describe("CLI 管道输出不被截断", () => {
       maxBuffer: 32 * 1024 * 1024,
     });
     expect(r.status).toBe(0);
-    expect(r.stdout.length).toBeGreaterThan(128 * 1024);
+    // 按字节判定：stdout.length 是 UTF-16 字符数，CJK 每字符 3 字节（Linux CI 曾因此卡在阈值边界）
+    expect(Buffer.byteLength(r.stdout, "utf8")).toBeGreaterThan(128 * 1024);
     const g = JSON.parse(r.stdout);
     expect(g.nodes.filter((n: any) => n.kind === "task").length).toBe(500);
   });

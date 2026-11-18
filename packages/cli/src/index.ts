@@ -2380,17 +2380,13 @@ export async function main(rawArgv: string[]): Promise<number> {
   return 2;
 }
 
-/** 退出前排空 stdout/stderr：管道（| node / jq）下直接 process.exit 会截断未写出的数据
- *  （2026-11-18 实测：`dia graph --json | node` 在 54KB 处被切，重定向到文件正常）。 */
+/** 退出前让 stdout/stderr 自然排空：管道（| node / jq）下直接 process.exit 会截断未写出的数据
+ *  （2026-11-18 实测：`dia graph --json | node` 在 54KB 处被切，重定向到文件正常）。
+ *  做法：只设 exitCode，让 Node 在事件循环空时退出；1s 兜底强制退出（unref，不阻止正常退出）。 */
 function exitAfterFlush(code: number): void {
-  const flush = (s: NodeJS.WriteStream, next: () => void) => {
-    try {
-      if (s.destroyed || !s.writable) return next();
-      if (s.writableLength === 0) return next();
-      s.write("", () => next());
-    } catch { next(); }
-  };
-  flush(process.stdout, () => flush(process.stderr, () => process.exit(code)));
+  process.exitCode = code;
+  const t = setTimeout(() => process.exit(code), 1000);
+  t.unref();
 }
 
 main(process.argv.slice(2)).then(exitAfterFlush).catch((e) => {

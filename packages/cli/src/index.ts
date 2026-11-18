@@ -16,7 +16,7 @@ import * as plan from "../../../src/plan.ts";
 import * as msgPriority from "../../../src/msg-priority.ts";
 import * as observer from "../../../src/observer.ts";
 import * as seats from "../../../src/seats.ts";
-import { wbCli } from "./wb-cli.ts";
+import { wbCli, beatCli } from "./wb-cli.ts";
 import { routeMsgRetry, routeMsgSend, routeGroupCli } from "./route-cli.ts";
 import { buildNext } from "../../../src/graph-next.ts";
 import * as defaultMsg from "../../../src/default-msg.ts";
@@ -212,6 +212,7 @@ usage:
   dia wb [--json] [--summary] [--now ISO] [--depth fast|full] | wb refresh | wb migrate [--dry-run] | wb gc [--apply] | wb explain <id>
   dia wb track open|list|show|bind|unbind|stage|next|handoff|attach|close
   dia wb metrics|due|brief [--json] [--track tr-x] [--since 7d]
+  dia beat [--session S] [--track tr-x] [--note N]
   dia graph [--json] [--task t-...] [--tui [--watch] [--status S] [--owner S] [--width N] [--no-color]]
   dia graph --serve [--port N] [--no-open]   # 本机只读 web（需 packages/graph-web）
   dia graph --export-html [path] [--out path] [--now ISO] [--redact] [--all] [--limit N] [--force]
@@ -2016,7 +2017,7 @@ const BUILTIN_COMMANDS = new Set([
   "kb", "ingest", "audit", "freeze", "guard", "run", "resume", "persona", "doctor", "deps",
   "env", "kit", "service", "wt", "cmd", "collab", "whoami", "in", "out", "ack", "reply", "close", "show",
   "msg", "agents", "team", "job", "price", "version", "update", "postinstall", "migrate",
-  "graph", "task", "wb", "claim", "claims", "unclaim", "report",
+  "graph", "task", "wb", "beat", "claim", "claims", "unclaim", "report",
 ]);
 
 export async function main(rawArgv: string[]): Promise<number> {
@@ -2287,6 +2288,7 @@ export async function main(rawArgv: string[]): Promise<number> {
   }
   if (cmd === "task") return taskCli(argv.slice(1));
   if (cmd === "wb") return wbCli(argv.slice(1));
+  if (cmd === "beat") return beatCli(argv.slice(1));
   if (cmd === "graph") return graphCli(argv.slice(1));
   if (cmd === "msg") return msgCli(argv.slice(1));
   if (cmd === "claim" || cmd === "claims" || cmd === "unclaim") return claimsCli(argv);

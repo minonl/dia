@@ -1,6 +1,6 @@
 ---
 name: dia-msg
-description: dia 跨会话消息（框架默认能力）——开工先看未读、收工发交接；用 `dia msg inbox/show/ack/reply/close/send` 沟通，`dia msg trace/stats` 复盘。Use when 你会话开始/收工、需要找另一个会话确认、交接任务、请求评审、同步进度、或收到「有 N 条未读」提示。
+description: dia 跨会话消息（框架默认能力，单一存储 ~/.dia/collab/）——开工先看未读、收工发交接；用 `dia msg inbox/show/ack/reply/close/send` 沟通，`dia msg trace/stats` 复盘，`dia msg analyze-storage` 体检。Use when 你会话开始/收工、需要找另一个会话确认、交接任务、请求评审、同步进度、或收到「有 N 条未读」提示。
 ---
 
 # dia-msg — 跨会话沟通（默认开启）
@@ -50,10 +50,25 @@ dia msg send --to <session_id> --subject "交接" --body-file ./handoff.md --kin
 - 同一 thread 回复用 `dia reply`，不要另起新 thread。
 - 同一 thread 往返 ≥3 次会拒绝，转人工。
 
+## 存储（只有一处）
+
+- 所有消息都在 `~/.dia/collab/inbox/<session_id>/`；**收件人一律是会话 id**（`ses_xxx`），
+  旧的「按 agent 名投递」（`~/.dia/msg/<agent>/`）已下线：`dia msg send ops` 会直接报 `E_USAGE`，不会静默写别处。
+- 旧数据导入：`dia msg migrate --dry-run` 先看报告，确认后 `dia msg migrate --apply`（幂等、不删旧文件；导入后可 show/reply）。
+- 存储体检（只读）：`dia msg analyze-storage` —— v1 残留、v2 现状、事件流健康度、下一步建议。
+
+## 运行日志（排障用）
+
+- 日志走 **stderr**（不污染 `--json`），分级 `verbose|debug|info|warn|error`，**默认 verbose 全量**。
+- 想只看关键：`DIA_LOG_LEVEL=info dia msg inbox`；彻底关掉：`DIA_LOG_LEVEL=off`。
+- 事件流（`~/.dia/collab/events/*.jsonl`）与运行日志是**两回事**：`trace/stats` 只读事件流，日志开关不影响它们。
+
 ## 关闭 / 排查
 
 - `dia msg trace <id>`：一条消息的全链路时间线（send → inject → read → exposed → ack → reply），失败 attempt 也在里面。
 - `dia msg stats [--since 7d]`：业务率 + `inject_rate`（通道成功率，二者分开看）。
+- `dia msg analyze-storage`：存储体检（只读，不改任何东西）。
+- `dia msg --help` 是唯一权威命令表；`needs-info/stuck/thread/agents/delivered` 已下线（会打印替代命令）。
 - `dia collab status` 看当前是否启用、observer 定时；`dia collab stats` 是旧入口（等价）。
 - `dia collab board` 看快照（只读；过期会标 stale）；`dia collab observe` 手动刷一次，定时交给 `dia job`（建议 300s）。
 - 宿主提示（opencode 插件 / dsh 插件）只是**计数**，5 分钟节流；看到后跑 `dia msg inbox --unread`，不要凭计数转述内容。

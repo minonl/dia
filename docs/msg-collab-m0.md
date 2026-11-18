@@ -71,12 +71,14 @@ DIA_MSG=0 dia in                # 临时关闭自动行为（skill 保留）
 ## 7. 旧数据迁移
 
 ```bash
-dia msg migrate --dry-run   # 只列，不写
-dia msg migrate             # 旧 ~/.dia/msg → ~/.dia/collab/legacy（正文复制）
-dia in --legacy             # 只读查看旧消息
+dia msg migrate             # 默认 dry-run：只报告，不写盘
+dia msg migrate --apply     # 旧 ~/.dia/msg → ~/.dia/collab/inbox/<session_id>/（可 show/ack/reply）
+dia msg analyze-storage     # 只读体检：v1 残留 / v2 现状 / 事件流健康度
 ```
 
-旧消息的 `to` 是会话标题，**不猜 session id**；只读展示，不能直接 reply。
+> 2026-11-18 起**改语义**：v1 一次性导入 v2，导入后可回复；旧的「迁到 `collab/legacy/` 只读」路径
+> 与 `dia in --legacy` 已删除（老版本遗留的 `legacy/<slug>/` 文件不再被读取）。会话 id 只从旧
+> agent 目录名提取 `ses_*`，提不到就整目录进 `unresolved` 报告，**不猜**。详见 `msg-storage-unify.md`。
 
 ## 8. 文件位置
 
@@ -85,7 +87,6 @@ dia in --legacy             # 只读查看旧消息
 ├── sessions/<session_id>.json
 ├── inbox/<session_id>/<message_id>.json
 ├── bodies/<message_id>.md
-├── legacy/<slug>/<message_id>.json
 └── config.json              # enabled / disabled_personas
 ```
 

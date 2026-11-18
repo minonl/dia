@@ -35,8 +35,9 @@ export function render(g: Graph, opts: RenderOptions = {}): string {
   const countText = [...ORDER.filter((s) => counts.has(s)), ...[...counts.keys()].filter((s) => !ORDER.includes(s))]
     .map((s) => `${s}=${counts.get(s)}`).join(" ");
   const claims = g.edges.filter((e) => e.kind === "claims");
+  const trackCount = g.nodes.filter((n) => n.kind === "track").length;
   const filter = [opts.status ? `status=${opts.status}` : "", opts.owner ? `owner=${opts.owner}` : ""].filter(Boolean).join(" ");
-  lines.push(color(`dia graph  tasks=${tasksAll.length}  ${countText}  claims=${claims.length}${filter ? `  filter: ${filter}` : ""}`, "1", on));
+  lines.push(color(`dia graph  tasks=${tasksAll.length}  ${countText}  claims=${claims.length}${trackCount ? `  tracks=${trackCount}` : ""}${filter ? `  filter: ${filter}` : ""}`, "1", on));
   if (opts.now) lines.push(color(`updated ${opts.now.toLocaleTimeString()}`, "2", on));
   lines.push("");
 

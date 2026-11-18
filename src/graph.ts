@@ -5,14 +5,21 @@
 import * as task from "./task.ts";
 import * as claims from "./claims.ts";
 import * as plan from "./plan.ts";
+import { foldTracks } from "./workbench/store.ts";
+import type { Track } from "./workbench/schema.ts";
 
 export interface GraphNode {
   id: string;
-  kind: "task" | "session" | "path";
+  kind: "task" | "session" | "path" | "track";
   label: string;
   status?: string;
   owner?: string;
   blocked_by?: string[];
+  /** track 节点的派生展示字段（additive） */
+  next?: string;
+  repo?: string[];
+  lead?: string | null;
+  waiting_on?: { kind: string; ref: string; note?: string } | null;
   /** 计划优先级 P0–P99（M1.1，additive） */
   prio?: string;
   /** 计划开始日 YYYY-MM-DD */
@@ -51,7 +58,7 @@ export interface GraphNode {
 export interface GraphEdge {
   from: string;
   to: string;
-  kind: "depends_on" | "touches" | "claims";
+  kind: "depends_on" | "touches" | "claims" | "belongs_to" | "serves";
   source: "declared";
 }
 
@@ -70,6 +77,7 @@ const DERIVED_PROGRESS: Record<string, number> = { todo: 0, doing: 50, review: 8
 const taskNode = (id: string) => `task:${id}`;
 const sessionNode = (id: string) => `session:${id}`;
 const pathNode = (p: string) => `path:${p}`;
+const trackNode = (id: string) => `track:${id}`;
 
 function findCycles(tasks: task.Task[]): string[][] {
   const byId = new Map(tasks.map((t) => [t.id, t]));
@@ -153,6 +161,27 @@ export function build(opts: { task?: string } = {}): Graph {
     edges.push({ from: sessionNode(c.holder), to: pathNode(c.path), kind: "claims", source: "declared" });
   }
 
+  // workbench 任务线：track 节点 + task belongs_to + session serves。
+  // 读失败（未安装/损坏）不影响任务图——track-v1 只是附加能力。
+  let tracks: Track[] = [];
+  try { tracks = foldTracks().tracks; } catch { tracks = []; }
+  for (const tr of tracks) {
+    const lead = tr.sessions.filter((s) => s.role === "lead" && !s.unbound_at).slice(-1)[0]?.session_id ?? null;
+    nodes.set(trackNode(tr.id), {
+      id: trackNode(tr.id), kind: "track", label: tr.title, status: tr.status,
+      owner: tr.owner, prio: tr.prio, next: tr.next, repo: tr.repo, lead,
+      waiting_on: tr.waiting_on ?? null,
+      created_at: tr.created_at, updated_at: tr.updated_at,
+    });
+    for (const taskId of tr.tasks) {
+      if (byId.has(taskId)) edges.push({ from: taskNode(taskId), to: trackNode(tr.id), kind: "belongs_to", source: "declared" });
+    }
+    for (const s of tr.sessions.filter((x) => !x.unbound_at)) {
+      nodes.set(sessionNode(s.session_id), { id: sessionNode(s.session_id), kind: "session", label: s.session_id });
+      edges.push({ from: sessionNode(s.session_id), to: trackNode(tr.id), kind: "serves", source: "declared" });
+    }
+  }
+
   let filteredNodes = [...nodes.values()];
   let filteredEdges = edges;
   if (opts.task) {
@@ -165,11 +194,16 @@ export function build(opts: { task?: string } = {}): Graph {
       keep.add(pathNode(p));
       for (const c of active) if (c.path === p) { keep.add(pathNode(c.path)); keep.add(sessionNode(c.holder)); }
     }
+    for (const tr of tracks) {
+      if (!tr.tasks.includes(opts.task)) continue;
+      keep.add(trackNode(tr.id));
+      for (const s of tr.sessions.filter((x) => !x.unbound_at)) keep.add(sessionNode(s.session_id));
+    }
     filteredNodes = filteredNodes.filter((n) => keep.has(n.id));
     filteredEdges = edges.filter((e) => keep.has(e.from) && keep.has(e.to));
   }
 
   filteredNodes.sort((a, b) => a.id.localeCompare(b.id));
   filteredEdges.sort((a, b) => (a.from + "\0" + a.to + "\0" + a.kind).localeCompare(b.from + "\0" + b.to + "\0" + b.kind));
-  return { schema: 1, capabilities: ["prio", "timeline", "progress", "eff-prio", "ready", "rank", "split"], ranking: derived.ranking, nodes: filteredNodes, edges: filteredEdges, cycles: findCycles(tasks) };
+  return { schema: 1, capabilities: ["prio", "timeline", "progress", "eff-prio", "ready", "rank", "split", ...(tracks.length ? ["track-v1"] : [])], ranking: derived.ranking, nodes: filteredNodes, edges: filteredEdges, cycles: findCycles(tasks) };
 }

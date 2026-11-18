@@ -6,7 +6,7 @@
 import {
   closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync,
 } from "node:fs";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
@@ -24,6 +24,8 @@ const TERMINAL: State[] = ["replied", "closed", "escalated"];
 const MAX_BODY = 256 * 1024;
 const INLINE_BODY = 64 * 1024;
 const SESSION_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
+/** ACP 后台通知子命令（`dia msg notify-acp <session> <id>`）：由 startAcpNotify spawn，不面向用户。 */
+export const ACP_NOTIFY_ENTRY = "notify-acp";
 
 export interface ActorRef {
   session_id: string;
@@ -70,7 +72,7 @@ export interface MessageV2 {
   /** 传输层确认注入的时间（≠ 被模型看到；exposed_at 才是） */
   injected_at?: string;
   /** 本次发送的投递结果（不持久化语义，仅返回给调用方显示） */
-  notify?: { channel: "tmux" | "webhook" | "mailbox-only"; reason?: string };
+  notify?: { channel: "tmux" | "webhook" | "acp" | "mailbox-only"; reason?: string };
   /** 投递尝试（P2：重投/复盘用） */
   attempts?: number;
   last_attempt_at?: string;
@@ -95,6 +97,9 @@ export interface SessionRecord {
   pane_pid?: string;
   pane_start?: string;
   pane_cwd?: string;
+  /** ACP 投递命令（由 `DIA_ACP_CMD` 在 whoami 时读入，如 `opencode acp`）。
+   *  没设就没有这个字段 —— 不探测进程、不按 host 猜。当前只打通 opencode v2 `session/load`。 */
+  acp_cmd?: string;
 }
 
 export interface SendOptions {
@@ -261,6 +266,8 @@ export function whoami(opts: { session?: string; name?: string; cwd?: string } =
       ...(paneBinding() || {
         pane: prev?.pane, pane_pid: prev?.pane_pid, pane_start: prev?.pane_start, pane_cwd: prev?.pane_cwd,
       }),
+      // ACP 通道只认显式环境变量（DIA_ACP_CMD="opencode acp"）；未设则沿用上次记录，不猜测、不探测进程
+      ...(process.env.DIA_ACP_CMD ? { acp_cmd: process.env.DIA_ACP_CMD } : (prev?.acp_cmd ? { acp_cmd: prev.acp_cmd } : {})),
     };
     writeAtomic(sessionFile(id), JSON.stringify(rec, null, 1) + "\n");
     return rec;
@@ -439,21 +446,88 @@ function recordAttempt(msg: MessageV2, attempt: number, errorCode?: string) {
   writeAtomic(hit.path, JSON.stringify(hit.msg, null, 1) + "\n");
 }
 
-/** 尽力注入一次消息指针；返回带 notify 结果的消息快照。 */
+/** 尽力注入一次消息指针；返回带 notify 结果的消息快照。
+ *  通道优先级：tmux(pane) → ACP(仅 opencode + acp_cmd) → webhook → mailbox-only。
+ *  **降级到 mailbox-only 一定写 `inject.failed`**（error_code 至少 E_NO_CHANNEL）——静默降级是之前的 bug。 */
 function notify(msg: MessageV2): MessageV2 {
   const rec = readSession(msg.to.session_id);
-  const mark = (channel: "tmux" | "mailbox-only", reason?: string): MessageV2 => {
-    msg.notify = { channel, reason: reason || undefined };
-    return msg;
-  };
   if (rec?.pane) {
     const r = tryTmux(msg, rec.pane);
     if (r.ok) return r.msg;
     // tmux 失败（忙/离线/未验证）但仍配置了 webhook → 继续走 webhook
-    if (!process.env.DIA_MSG_WEBHOOK_URL) return r.msg;
+    if (!process.env.DIA_MSG_WEBHOOK_URL && !(rec.host === "opencode" && rec.acp_cmd)) return r.msg;
   }
+  // 异步 ACP：send 立即返回，子进程在后台跑完整一轮
+  if (rec?.host === "opencode" && rec.acp_cmd) return startAcpNotify(msg, rec);
   if (process.env.DIA_MSG_WEBHOOK_URL) return tryWebhook(msg, process.env.DIA_MSG_WEBHOOK_URL);
-  return mark("mailbox-only", "no-pane");
+  return mailboxOnly(msg, "E_NO_CHANNEL");
+}
+
+/** 降级到纯邮箱：必须留事件，否则 `dia msg trace` 什么都看不到。 */
+function mailboxOnly(msg: MessageV2, reason: string): MessageV2 {
+  const attempt = (msg.attempts || 0) + 1;
+  events.log({ event: "inject.failed", msg_id: msg.id, thread_id: msg.thread_id, transport: "mailbox", attempt, error_code: reason });
+  msg.notify = { channel: "mailbox-only", reason };
+  return msg;
+}
+
+/** 把 ACP 投递丢到 detached 子进程，立刻返回 `notified=acp(queued)`；
+ *  子进程跑完会写 `inject.verified` / `inject.failed`（transport=acp）。 */
+function startAcpNotify(msg: MessageV2, rec: SessionRecord): MessageV2 {
+  const attempt = (msg.attempts || 0) + 1;
+  events.log({ event: "inject.attempted", msg_id: msg.id, thread_id: msg.thread_id, transport: "acp", attempt });
+  try {
+    const child = spawn(process.execPath, [process.argv[1], "msg", ACP_NOTIFY_ENTRY, msg.to.session_id, msg.id], {
+      detached: true, stdio: "ignore", cwd: rec.cwd || process.cwd(),
+      env: { ...process.env, DIA_ACP_CMD: rec.acp_cmd || "" },
+    });
+    child.unref();
+  } catch (e: any) {
+    events.log({ event: "inject.failed", msg_id: msg.id, thread_id: msg.thread_id, transport: "acp", attempt, error_code: "E_ACP_SPAWN" });
+    msg.notify = { channel: "mailbox-only", reason: "E_ACP_SPAWN" };
+    return msg;
+  }
+  msg.notify = { channel: "acp", reason: "queued" };
+  return msg;
+}
+
+/** CLI `dia msg notify-acp <session> <id>` 的实现：同步跑完一轮 ACP，失败只记事件、不抛到用户面前。
+ *  返回结果供子进程 exit code 用（0=投递成功）。
+ *  注意：不走 v1 `msg.markDelivered`（v1 有独立 msgRoot）；v2 的 delivered 由 ACP 一轮成功即证明。 */
+export async function acpNotify(sessionId: string, id: string): Promise<{ ok: boolean; reason?: string }> {
+  const sid = normalizeSessionId(sessionId);
+  const rec = readSession(sid);
+  const attempt = (findIn(sid, id)?.msg.attempts || 0) + 1;
+  const errorCode = (e: any): string => {
+    const s = String(e?.message || e || "");
+    if (/-32602|session not found/i.test(s)) return "E_ACP_NO_SESSION";
+    if (/E_ACP: timeout/.test(s)) return "E_ACP_TIMEOUT";
+    if (/E_ACP: exited/.test(s)) return "E_ACP_EXITED";
+    if (/E_NO_ACP/.test(s)) return "E_NO_ACP";
+    return "E_ACP";
+  };
+  try {
+    if (!rec?.acp_cmd || rec.host !== "opencode") throw new Error("E_NO_ACP: 目标会话无 opencode acp_cmd");
+    const { deliverAcpSession } = await import("./msg-acp.ts");
+    await deliverAcpSession(sid, rec.acp_cmd, rec.cwd || process.cwd(), id,
+      Number(process.env.DIA_ACP_TIMEOUT_MS || process.env.DIA_ACP_TIMEOUT || 300_000));
+    events.log({ event: "inject.verified", msg_id: id, thread_id: findIn(sid, id)?.msg.thread_id, transport: "acp", attempt });
+    const hit = findIn(sid, id);
+    if (!hit) return { ok: true };
+    recordAttempt(hit.msg, attempt);
+    if (!hit.msg.legacy && !hit.msg.injected_at) {
+      hit.msg.injected_at = now();
+      hit.msg.transport = "acp";
+      writeAtomic(hit.path, JSON.stringify(hit.msg, null, 1) + "\n");
+    }
+    return { ok: true };
+  } catch (e: any) {
+    const code = errorCode(e);
+    events.log({ event: "inject.failed", msg_id: id, thread_id: findIn(sid, id)?.msg.thread_id, transport: "acp", attempt, error_code: code });
+    const hit = findIn(sid, id);
+    if (hit) recordAttempt(hit.msg, attempt, code);
+    return { ok: false, reason: code };
+  }
 }
 
 function tryTmux(msg: MessageV2, pane: string): { ok: boolean; msg: MessageV2 } {

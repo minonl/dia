@@ -1108,6 +1108,8 @@ cmd_own_tasks() {  case "${1:-}" in
 
 cmd_install() {
   local name="${1:-}" cmd="" interval="-" calendar="-" weekdays="-" desc="" type="periodic" allow_unstable=0 takeover=0
+  # 名字位以 `-` 开头 ⇒ 一定是参数误传（如 --help 漏拦）；直接拒绝，绝不落盘（issue #228）
+  case "$name" in -*) echo "用法：yan-task install <name> --cmd '<shell>'（名字不能以 - 开头）" >&2; return 2 ;; esac
   # 临时根绝不允许注册真调度（测试/沙箱请设 DIA_JOB_NO_LAUNCHD=1 或 DIA_JOB_ALLOW_EPHEMERAL=1）
   case "$DIA_JOB_ROOT" in
     /tmp/*|/var/folders/*|/private/var/folders/*|/run/user/*|/dev/shm/*)
@@ -1313,6 +1315,7 @@ cron_present_spec() { _cron_read | grep -F "$(_cron_marker "$1")" | head -1 | cu
 
 cmd_uninstall() {
   local name="${1:-}"
+  case "$name" in -*) echo "用法：yan-task uninstall <name>（名字不能以 - 开头）" >&2; return 2 ;; esac
   [ -n "$name" ] || { echo "用法：yan-task uninstall <name>" >&2; return 2; }
   local backend=""
   [ -f "$REG" ] && backend="$(json field "$REG" "$name" backend 2>/dev/null || true)"
@@ -1351,6 +1354,7 @@ cmd_uninstall() {
 
 cmd_adopt() {
   local label="${1:-}"; shift || true
+  case "$label" in -*) echo "用法：yan-task adopt <launchd-label> [--desc 说明]（label 不能以 - 开头）" >&2; return 2 ;; esac
   local desc="" type="periodic" cmd=""
   while [ $# -gt 0 ]; do case "$1" in --desc) desc="$2"; shift 2 ;; --type) type="$2"; shift 2 ;; --cmd) cmd="$2"; shift 2 ;; *) shift ;; esac; done
   [ -n "$label" ] || { echo "用法：yan-task adopt <launchd-label> [--desc 说明] [--type periodic|service]" >&2; return 2; }
@@ -1554,7 +1558,13 @@ cmd_registry_gc() {
 
 cmd_gc() {  # 清理 <数据根>/tasks 下超过 N 天的 state/日志/心跳（Q2：默认 30 天）
   local days=30 dry=0
-  while [ $# -gt 0 ]; do case "$1" in --days) days="$2"; shift 2 ;; --dry-run) dry=1; shift ;; *) shift ;; esac; done
+  while [ $# -gt 0 ]; do case "$1" in
+    --days) days="$2"; shift 2 ;;
+    --dry-run) dry=1; shift ;;
+    -h|--help) echo "用法：yan-task gc [--days N] [--dry-run]   # 清理旧 state/日志/心跳（registry.json 永不清理）"; return 0 ;;
+    -*) echo "用法：yan-task gc [--days N] [--dry-run]（未知参数：$1）" >&2; return 2 ;;
+    *) shift ;;
+  esac; done
   local dir="$YAN_DATA_ROOT/tasks"
   [ -d "$dir" ] || { echo "无 $dir"; return 0; }
   local n=0 f
@@ -1702,7 +1712,13 @@ echo "══ yan-task selfcheck（边界=$PLATFORM${_dry_banner}）══"
 }
 
 cmd_bootstrap() {  # 幂等重建本边界全部条目（设计 §6.1 兜底入口）；--dry-run 只打印解析结果
-  local dry=0; [ "${1:-}" = "--dry-run" ] && dry=1
+  local dry=0
+  case "${1:-}" in
+    --dry-run) dry=1 ;;
+    "") ;;
+    -h|--help) echo "用法：yan-task bootstrap [--dry-run]   # 幂等重建本边界全部条目"; return 0 ;;
+    -*) echo "用法：yan-task bootstrap [--dry-run]（未知参数：$1）" >&2; return 2 ;;
+  esac
   [ -f "$REG" ] || { echo "无 registry（${REG}）—— 没有可重建的任务"; return 0; }
   json bootstrap-rows "$REG" | \
   while IFS=$'\t' read -r n c i cal dsc wd type pcls; do
@@ -1734,6 +1750,28 @@ cmd_bootstrap() {  # 幂等重建本边界全部条目（设计 §6.1 兜底入�
 }
 
 case "${1:-list}" in
+  # `--help` 必须**先于**任何动作（issue #228：`dia job uninstall --help` 曾真的执行了 uninstall）。
+  # 退出码 0（与 `dia job --help` 的约定一致；未知子命令才是 2）。
+  -h|--help)
+    cat <<'EOF'
+dia job —— 后台/定时任务适配器（macOS launchd / Linux cron|systemd-timer|systemd）
+
+用法:
+  dia job list | status | doctor | platform
+  dia job install <name> --cmd '<shell>' [--interval 300 | --calendar HH:MM [--weekdays 1-5]]
+                          [--desc 说明] [--type periodic|service] [--allow-unstable] [--takeover] [--label L]
+  dia job uninstall <name>
+  dia job adopt <launchd-label> [--desc 说明] [--type periodic|service] [--cmd '<shell>']
+  dia job bootstrap [--dry-run]
+  dia job registry [gc [--dry-run|--apply] [--json]]
+  dia job gc [--days N] [--dry-run]
+  dia job logs <name> [-n N]
+  dia job selfcheck [--dry-run]
+  dia job migrate --from <旧 job 根> [--to DIR] [--dry-run]
+
+退出码: 0 成功 / 1 失败 / 2 用法 / 3 平台不支持 / 4-5 安全门控拒绝
+EOF
+    exit 0 ;;
   list)    cmd_list ;;
   status)  cmd_status ;;
   doctor)  cmd_doctor ;;

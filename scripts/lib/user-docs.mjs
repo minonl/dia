@@ -7,11 +7,15 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-/** 从 packages/cli/src/index.ts 的 help() 文本里抽 usage 块。 */
+/** 从 packages/cli/src/help.ts 的 HELP_TEXTS.root 里抽 usage 块。
+ *  ⚠️ 2026-11-19（issue #228）：help 正文从 index.ts 的 help() 搬到 help.ts（单一事实源，
+ *     子命令级 --help 也读同一张表），此处随之改读 help.ts —— 解析失败必须报错（fail closed）。 */
 export function readUsage(root) {
-  const src = readFileSync(join(root, "packages/cli/src/index.ts"), "utf8");
-  const m = src.match(/usage:\n([\s\S]*?)`\);/);
-  if (!m) throw new Error("E_DOCS: 找不到 help() 的 usage 块（packages/cli/src/index.ts）");
+  const src = readFileSync(join(root, "packages/cli/src/help.ts"), "utf8");
+  const entry = src.match(/"root":\n\s*`([\s\S]*?)`,\n/);
+  if (!entry) throw new Error("E_DOCS: 找不到 HELP_TEXTS.root（packages/cli/src/help.ts）");
+  const m = entry[1].match(/usage:\n([\s\S]*)$/);
+  if (!m) throw new Error("E_DOCS: HELP_TEXTS.root 里没有 usage 块（packages/cli/src/help.ts）");
   return m[1].replace(/^\n+/, "").replace(/\s+$/, "");
 }
 

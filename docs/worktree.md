@@ -89,9 +89,9 @@ dia wt gate <repo> <feature>
 ```bash
 dia wt create <repo> <feature> [--base main] [--install] [--dry-run]
 dia wt list [<repo>]
-dia wt status [<repo>] [--stale-days N]
+dia wt status [<repo>]
 dia wt check [<repo>...] [--all] [--deep]
-dia wt clean <repo> <feature|--branch B> [--force] [--keep-branch]
+dia wt clean <repo> <feature>
 dia wt prune-merged [<repo>] [--all] [--apply]
 ```
 

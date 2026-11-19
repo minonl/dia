@@ -1,5 +1,5 @@
-import { describe, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, readdirSync, lstatSync } from "node:fs";
+import { afterAll, describe, expect, test } from "bun:test";
+import { mkdtempSync, mkdirSync, readdirSync, lstatSync, writeFileSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -21,8 +21,15 @@ interface Sandbox { dir: string; env: Record<string, string> }
  *  （audit.test.ts 实测），子进程会读它们 ⇒ 沙箱被绕过（曾出现「frozen: test」串味）。 */
 const HOST_ENV = ["PATH", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "SHELL", "USER", "LOGNAME", "TMPDIR", "TZ", "SystemRoot"];
 
+/** 用例建的沙箱目录（跑完统一删）：本文件用例多，不清理会把 /tmp（tmpfs）吃满。 */
+const SANDBOXES: string[] = [];
+afterAll(() => {
+  for (const d of SANDBOXES) { try { rmSync(d, { recursive: true, force: true }); } catch { /* 忽略 */ } }
+});
+
 function sandbox(): Sandbox {
   const dir = mkdtempSync(join(tmpdir(), "dia-help-"));
+  SANDBOXES.push(dir);
   const home = join(dir, "home");
   const data = join(dir, "data");
   const job = join(dir, "job");
@@ -249,4 +256,136 @@ describe("dia job --help 退出码", () => {
     expect(r.status).toBe(0);
     expect(hasHelp(r.stdout, "job")).toBe(true);
   });
+});
+
+// ── 追补（2026-11-19 对抗评审）：`env` 的透传判定要细化 ──────────────────────
+// 事故：`dia env bw serve --help` 真的起了常驻 broker（`env` 在透传名单里，
+// probe 只看第一个 token 是不是 `bw` ⇒ 整个 bw 家族被放过）。
+// 但 `env bw` 是 dia 自己的子命令，不是透传给系统的命令 ⇒ 必须拦。
+describe("dia env bw … --help：dia 自己的 bw 子命令必须只打印用法", () => {
+  test("env bw serve --help 不启动 broker（无 broker listening / 退出码 0）", () => {
+    const sb = sandbox();
+    run(sb, ["version"]); // 预热 bun 缓存，再拍快照
+    const before = snapshot(sb.dir);
+    const r = run(sb, ["env", "bw", "serve", "--help"]);
+    const after = snapshot(sb.dir);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("dia env bw");
+    expect(r.stdout).not.toContain("broker listening");
+    expect(after).toEqual(before);
+  });
+
+  test("env bw unlock --help 不走解锁路径", () => {
+    const sb = sandbox();
+    const r = run(sb, ["env", "bw", "unlock", "--help"]);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("dia env bw");
+    expect(r.stdout).not.toContain("unlocked");
+  });
+
+  test("env bw 的其余 action 也走同一条闸（get/lock/status/run）", () => {
+    for (const act of ["get", "lock", "status", "run"]) {
+      const sb = sandbox();
+      const r = run(sb, ["env", "bw", act, "--help"]);
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain("dia env bw");
+    }
+  });
+
+  test("透传仍然透传：env ls --help 交给系统的 ls", () => {
+    const sb = sandbox();
+    const r = run(sb, ["env", "ls", "--help"]);
+    expect(r.stdout).not.toContain("dia env bw");
+    expect(r.stdout).not.toContain("用法: dia env");
+  });
+
+  test("env --dry-run <cmd> --help：--help 属于系统命令，不属于 dia", () => {
+    const sb = sandbox();
+    const r = run(sb, ["env", "--dry-run", "ls", "--help"]);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("将注入");
+    expect(r.stdout).not.toContain("dia env bw");
+  });
+});
+
+// ── 追补：白名单**误收** ⇒ 命令照常执行（评审复现时真的删了数据）───────────
+// `--force-with-lease` 零消费方却被收进 VALUE_FLAGS ⇒ 紧跟的 --help 被当值吞掉。
+describe("值位白名单误收回归（--force-with-lease）", () => {
+  test("cache gc --apply --force-with-lease --help 不删任何文件", () => {
+    const sb = sandbox();
+    const victim = join(sb.dir, "data", "cache", "src", "victim");
+    mkdirSync(victim, { recursive: true });
+    writeFileSync(join(victim, "f"), "x");
+    run(sb, ["version"]); // 预热
+    const before = snapshot(sb.dir);
+    const r = run(sb, ["cache", "gc", "--apply", "--force-with-lease", "--help"]);
+    const after = snapshot(sb.dir);
+    expect(r.status).toBe(0);
+    expect(hasHelp(r.stdout, "cache")).toBe(true);
+    expect(r.stdout).not.toContain("已删除");
+    expect(existsSync(join(victim, "f"))).toBe(true);
+    expect(after).toEqual(before);
+  });
+
+  test("跨命令形态：cache gc --apply --<其它命令的取值 flag> --help 也一律当帮助", () => {
+    // 白名单是全局的；若任何取值 flag 都能吃掉 --help，则 `--id --help` 会变成真删。
+    const sb = sandbox();
+    const victim = join(sb.dir, "data", "cache", "src", "victim2");
+    mkdirSync(victim, { recursive: true });
+    writeFileSync(join(victim, "f"), "y");
+    for (const f of ["--id", "--item", "--session", "--workspace", "--timeout"]) {
+      const r = run(sb, ["cache", "gc", "--apply", f, "--help"]);
+      expect(r.status).toBe(0);
+      expect(hasHelp(r.stdout, "cache")).toBe(true);
+      expect(existsSync(join(victim, "f"))).toBe(true);
+    }
+  });
+});
+
+// ── 追补：`dia wt <sub> --help` 对 form/route/scope/gate/guard/doctor 无效 ──
+// 评审实测 form 真算选型、gate 真跑 check+doctor、guard 零输出 exit 0、doctor 报未知参数…
+describe("dia wt <sub> --help → exit 0 + 有用法（6 个子命令）", () => {
+  const WT_BIN = join(ROOT, "packages", "wt", "bin", "dia-wt");
+  const SUBS = ["form", "route", "scope", "gate", "guard", "doctor"];
+  for (const sub of SUBS) {
+    test(`wt ${sub} --help`, () => {
+      const sb = sandbox();
+      const r = spawnSync("bash", [WT_BIN, sub, "--help"], {
+        cwd: sb.dir,
+        env: { ...sb.env, DIA_WT_DATA_ROOT: join(sb.dir, "wtd") },
+        encoding: "utf8",
+        timeout: 60_000,
+      });
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain(`dia wt ${sub}`);
+      expect(r.stderr).toBe("");
+    });
+  }
+
+  test("wt gate <repo> <feat> --help 不真跑 check+doctor", () => {
+    const sb = sandbox();
+    const r = spawnSync("bash", [WT_BIN, "gate", join(sb.dir, "repos", "nope"), "feat-x", "--help"], {
+      cwd: sb.dir,
+      env: { ...sb.env, DIA_WT_DATA_ROOT: join(sb.dir, "wtd") },
+      encoding: "utf8",
+      timeout: 60_000,
+    });
+    expect(r.status).toBe(0);
+    expect(r.stdout).not.toContain("== check");
+    expect(r.stdout).not.toContain("gate FAIL");
+  });
+});
+
+// ── 追补：5 条帮助文本的机械重复后缀 ────────────────────────────────────────
+describe("帮助文本没有重复后缀", () => {
+  const KEYS = ["agents list", "agents unregister", "task list", "task plan", "task done"];
+  for (const key of KEYS) {
+    test(`dia ${key} --help`, () => {
+      const sb = sandbox();
+      const r = run(sb, [...key.split(" "), "--help"]);
+      expect(r.status).toBe(0);
+      expect(r.stdout).not.toContain("（完整参数见 dia --help）（完整参数见 dia --help）");
+      expect(r.stdout.split("（完整参数见 dia --help）").length - 1).toBeLessThanOrEqual(1);
+    });
+  }
 });

@@ -12,16 +12,32 @@
  *      宁可多打印一次帮助，也不让 `--help` 触发破坏性动作。
  *   4) 帮助文本集中在本文件 HELP_TEXTS（key = "cmd" 或 "cmd sub"），逐字搬迁，
  *      保证 `dia --help` 输出与改造前**完全一致**。
+ *
+ * ── 判定原则（两个方向的错误代价不对称，2026-11-19 对抗评审后写死）─────────────
+ *
+ *   误收（把真 `--help` 当值） ⇒ `helpRequested=false` ⇒ **命令照常执行** ⇒ 危险
+ *   漏收（把值当 `--help`）     ⇒ 只多打印一次帮助、不执行     ⇒ 安全
+ *
+ *   ⇒ **拿不准就不收。** 往 VALUE_FLAGS 里加一项的唯一门槛是「有真实取值点」：
+ *     - TS：某处的 `flag(args, "--x")` / `flags(args, "--x")`（值位唯一口径）
+ *     - bash：`--x) v="$2"` / `--x) v="${2:-}"`（且该子命令确实经过本 gate）
+ *   实测反例（评审给出并复现）：`--force-with-lease` 零消费方却被收 ⇒
+ *     `dia cache gc --apply --force-with-lease --help` 把 --help 当值吞掉 ⇒ **真删了 cache**。
  */
 
 /** 取值的 flag（白名单）：紧跟其后的 token 是值，即使它长得像 --help。
  *  来源 = 代码里 `flag(args,"--x")` / `flags(args,"--x")` 的实际调用点（值位为唯一口径）。
- *  ⚠️ 只收**确实取值**的 flag：误收会反过来把 `--help` 当值吞掉 ⇒ 变成执行（与目标相反）。 */
+ *  ⚠️ 只收**确实取值**的 flag：误收会反过来把 `--help` 当值吞掉 ⇒ 变成执行（与目标相反）。
+ *  ⚠️ 只被 `dia wt`（packages/wt/bin/dia-wt）消费的 flag **不收** —— wt 不走本 gate，
+ *     它自己在各子命令参数循环最前面判 `-h|--help`（见 cmd_* 的早退）。
+ *     实测移除：`--base` / `--protect`（仅 wt 用）、`--force-with-lease`（零消费方）。
+ *  ⚠️ 「存在性开关 + 可选值」的 flag **刻意不收**（见 EXCLUDED_OPTIONAL_VALUE 的说明）。
+ *  ⚠️ 即使收进来，`--flag --help` 也只有 HELP_AS_VALUE_FLAGS 里的自由文本字段会吃掉 --help；
+ *     其余一律按「请求帮助」处理 —— 否则 `dia cache gc --apply --id --help` 会真删数据。 */
 export const VALUE_FLAGS: ReadonlySet<string> = new Set([
   "--acp-cmd",
   "--addr",
   "--agent",
-  "--base",
   "--blocked-reason",
   "--body",
   "--body-file",
@@ -50,7 +66,6 @@ export const VALUE_FLAGS: ReadonlySet<string> = new Set([
   "--fanout",
   "--file",
   "--files",
-  "--force-with-lease",
   "--from",
   "--gen",
   "--goal",
@@ -92,7 +107,6 @@ export const VALUE_FLAGS: ReadonlySet<string> = new Set([
   "--profile",
   "--progress",
   "--project",
-  "--protect",
   "--reason",
   "--ref",
   "--remind-at",
@@ -106,7 +120,6 @@ export const VALUE_FLAGS: ReadonlySet<string> = new Set([
   "--role",
   "--root",
   "--runtime",
-  "--seats",
   "--section",
   "--session",
   "--sessions-root",
@@ -145,14 +158,45 @@ export const VALUE_FLAGS: ReadonlySet<string> = new Set([
   "--worktree",
 ]);
 
+/** 「存在性开关 + **可选**值」的 flag —— **刻意不收**进 VALUE_FLAGS（fail-safe）。
+ *
+ *  为什么：这些 flag 既可以裸用（当布尔），也可以带一个值；一旦收进白名单，
+ *  `--due --help` 就会被当成「--help 是 --due 的值」⇒ 不打印帮助 ⇒ 命令执行（危险方向）。
+ *  不收的代价只是「用户真想传值 --help 时多看到一次帮助」（安全方向）。
+ *  ⇒ 拿不准就不收。新增同形态 flag 时按此表登记，别偷偷塞进 VALUE_FLAGS。 */
+export const EXCLUDED_OPTIONAL_VALUE: ReadonlySet<string> = new Set([
+  "--due",          // `dia msg escalate --due`（开关）/ `dia task add --due D`（值）
+  "--export-html",  // `dia graph --export-html [path]`
+  "--next",         // `dia graph --next [n]`
+  "--seats",        // `dia graph --next --seats N`（不带值时按默认席位）
+  "--gc",           // `dia claims --gc [--days 7]`
+]);
+
 function isHelpToken(a: string): boolean { return a === "--help" || a === "-h"; }
+
+/** **值就是字符串 `--help`** 的自由文本 flag —— 只有这几种才允许「值位吃掉 help」。
+ *
+ *  为什么必须缩到这么小：白名单是**全局**的（gate 不知道当前命令吃哪些 flag），
+ *  若任何取值 flag 都能吃掉 `--help`，那么
+ *    `dia cache gc --apply --id --help`  →  `--help` 成了 `--id` 的值  →  **真删 cache**。
+ *  ⇒ 只有「用户真的可能把 --help 当正文写进去」的文本字段保留值位语义：
+ *    `dia msg send … --body --help`（`HELP_TEXTS["msg send"]` 里有显式说明）、
+ *    `--subject` / `--desc` / `--reason`（commit a9635a5 的测试钉住了这三个）。
+ *  其余 flag（id/path/数字/枚举/env）后面跟 `--help` 一律当**请求帮助**（fail-safe）。
+ *  ⚠️ 往这里加一项 = 重新打开一条「误收 ⇒ 执行」的通道，必须同时说明为什么该字段可能是 --help。 */
+export const HELP_AS_VALUE_FLAGS: ReadonlySet<string> = new Set([
+  "--body",
+  "--subject",
+  "--desc",
+  "--reason",
+]);
 
 /**
  * 这串参数是否在「请求帮助」？
  *   · 遇到 `--` 立即返回 false（其后全是给子进程的数据）
  *   · `--x=--help`（attached 写法）不算
- *   · 若 `--help` 的前一个 token 是取值 flag（白名单）⇒ 它是值，跳过
- *   · 拿不准 ⇒ true（fail-safe：绝不把 help 当执行）
+ *   · 值位：`--body --help` 是值（仅限 HELP_AS_VALUE_FLAGS 里的自由文本字段）
+ *   · 其它取值 flag 后面跟 help token ⇒ 仍算请求帮助（拿不准 ⇒ 不执行）
  */
 export function helpRequested(args: string[]): boolean {
   for (let i = 0; i < args.length; i++) {
@@ -160,10 +204,14 @@ export function helpRequested(args: string[]): boolean {
     if (a === "--") return false;
     if (isHelpToken(a)) {
       const prev = i > 0 ? args[i - 1] : undefined;
-      if (prev !== undefined && VALUE_FLAGS.has(prev)) continue; // 值位
+      if (prev !== undefined && HELP_AS_VALUE_FLAGS.has(prev)) continue; // 值位（自由文本）
       return true;
     }
-    if (VALUE_FLAGS.has(a)) i++; // 跳过该 flag 的值，避免把值里的 --help 当请求
+    if (VALUE_FLAGS.has(a)) {
+      const next = args[i + 1];
+      // 值本身不是 help token 才跳过；若长得像 --help，留给下一轮按「请求帮助」判定
+      if (next !== undefined && !isHelpToken(next)) i++;
+    }
   }
   return false;
 }
@@ -297,7 +345,19 @@ usage:
     `用法: dia cache list [--root NAME] [--json] | dia cache gc [--apply] [--force] [--referenced] [--root NAME] [--json]
       默认 dry-run；cache 是可再生派生数据，要保留的内容请先备份出 cache。`,
   "env":
-    `用法: dia env list|check [KEY…] | dia env [--dry-run] [--redact] <cmd…> | dia env bw status|unlock|lock|run|serve|get`,
+    `用法: dia env list|check [KEY…] | dia env [--dry-run] [--redact] <cmd…> | dia env bw status|unlock|lock|run|serve|get
+      dia env <cmd…> 把环境变量注入后执行系统命令（--help 在命令之后时属该命令，不拦）。`,
+  "env bw":
+    `用法: dia env bw status|unlock|lock|run|serve|get [参数…]
+
+  dia env bw status [--json]                        # 只读：锁状态
+  dia env bw unlock [--passwordfile P]              # 解锁（session 落盘 0600）
+  dia env bw lock                                   # 上锁
+  dia env bw run --map KEY=item [--map …] [--task T] -- <cmd…>   # 只注入映射键
+  dia env bw serve [--socket PATH] [--passwordfile P]            # 常驻 broker（会起进程！）
+  dia env bw get --item ITEM [--env KEY] [--task T] [--json]`,
+  "env run":
+    `用法: dia env run [--dry-run] [--redact] [--bw KEY=item …] <cmd…>   # 与 dia env <cmd…> 等价`,
   "kit":
     `用法: dia kit add --from SRC [--ref REF] [--dry-run] [--json] | list | verify <id> | remove <id> | gc [--json]`,
   "service":
@@ -511,23 +571,23 @@ usage:
   "migrate data":
     `用法: dia migrate data [--from DIR] [--dry-run]   # 旧数据根 → 数据根（只搬数据子目录，合并同名目录）`,
   "agents list":
-    `用法: dia agents list [--json]（完整参数见 dia --help）（完整参数见 dia --help）`,
+    `用法: dia agents list [--json]（完整参数见 dia --help）`,
   "agents register":
     `用法: dia agents register [--json]   # 登记本机 agent 身份（完整参数见 dia --help）`,
   "agents unregister":
-    `用法: dia agents unregister <id> [--json]（完整参数见 dia --help）（完整参数见 dia --help）`,
+    `用法: dia agents unregister <id> [--json]（完整参数见 dia --help）`,
   "agents discover":
     `用法: dia agents discover [--json]   # 自动发现本机可用 agent（完整参数见 dia --help）`,
   "task add":
     `用法: dia task add "<title>" [--owner S] [--depends a,b] [--touches p1,p2] [--prio P0..P3] [--start D] [--due D] [--progress 0-100]`,
   "task list":
-    `用法: dia task list [--json]（完整参数见 dia --help）（完整参数见 dia --help）`,
+    `用法: dia task list [--json]（完整参数见 dia --help）`,
   "task plan":
-    `用法: dia task plan <id> [--json]（完整参数见 dia --help）（完整参数见 dia --help）`,
+    `用法: dia task plan <id> [--json]（完整参数见 dia --help）`,
   "task split":
     `用法: dia task split <id> --into "切片A,切片B" [--slice 切片A] [--role R] [--judge J] [--touches p] [--force]`,
   "task done":
-    `用法: dia task done <id> [--json]（完整参数见 dia --help）（完整参数见 dia --help）`,
+    `用法: dia task done <id> [--json]（完整参数见 dia --help）`,
 };
 
 
@@ -543,6 +603,48 @@ export function renderHelp(key: string): boolean {
  *  （`dia run --session S -- cmd --help` 里的 --help 是给 cmd 的，不能拦）。 */
 export const PASSTHROUGH_FIRST_ONLY: ReadonlySet<string> = new Set(["env", "run", "cmd"]);
 
+/** `dia env` 下 **dia 自己的**子命令（不是透传给系统的命令名）。
+ *  依据 index.ts 的 env 分支：status/list/check/bw 是 dia 实现，run 是别名。
+ *  ⚠️ 之前只看 rest[0:] 的第一段「是不是 bw」，漏了 `env bw serve --help` 真的起了 broker；
+ *     反过来 `dia env ls --help` 必须继续透传给系统 ls。 */
+const ENV_OWN_SUBCOMMANDS: ReadonlySet<string> = new Set(["bw", "list", "check", "run"]);
+
+/** `dia env` 自己的取值 flag（决定「env 之后的第一个位置参数」从哪开始）。 */
+const ENV_OWN_VALUE_FLAGS: ReadonlySet<string> = new Set(["--files", "--keys", "--bw", "--task", "--persona"]);
+
+/**
+ * 判定 `dia env …` 的参数区归谁：
+ *   · "own"         ⇒ dia 自己的参数（`env bw …` / `env list` / `env --dry-run --help` …）
+ *   · "passthrough" ⇒ 第一个非 flag token 是**要执行的系统命令**（`env ls --help`）
+ * 判据顺序：`--` ⇒ 透传；help token ⇒ dia；env 自己的子命令 ⇒ dia；其它位置参数 ⇒ 透传。
+ */
+function envArgScope(rest: string[]): "own" | "passthrough" {
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i];
+    if (a === "--") return "passthrough";
+    if (isHelpToken(a)) return "own";
+    if (ENV_OWN_SUBCOMMANDS.has(a)) return "own";
+    if (a.startsWith("-")) {
+      if (ENV_OWN_VALUE_FLAGS.has(a)) i++; // 跳过它自己的值，避免把值当命令名
+      continue;
+    }
+    return "passthrough";
+  }
+  return "own";
+}
+
+/** 判定前要扫哪段参数（值位判定只看 dia 自己的那段）。 */
+function helpProbe(cmd: string, rest: string[]): string[] {
+  if (cmd === "env") return envArgScope(rest) === "own" ? rest : rest.slice(0, 1);
+  if (cmd === "run") {
+    // `--` 之前是 dia 的 flag 区，之后是给子进程的数据
+    const sep = rest.indexOf("--");
+    return sep < 0 ? rest : rest.slice(0, sep);
+  }
+  if (PASSTHROUGH_FIRST_ONLY.has(cmd)) return rest.slice(0, 1);
+  return rest;
+}
+
 /**
  * 单一拦截点：返回退出码（已打印帮助）或 null（放行，按原有逻辑分派）。
  * 查找链：`cmd sub` → `cmd`。job / wt 各有专门通路（job 在 main 的 job 分支，
@@ -551,8 +653,7 @@ export const PASSTHROUGH_FIRST_ONLY: ReadonlySet<string> = new Set(["env", "run"
 export function helpGate(cmd: string, rest: string[]): number | null {
   if (!cmd) return null;
   if (cmd === "job" || cmd === "wt") return null;
-  const probe = PASSTHROUGH_FIRST_ONLY.has(cmd) ? rest.slice(0, 1) : rest;
-  if (!helpRequested(probe)) return null;
+  if (!helpRequested(helpProbe(cmd, rest))) return null;
   const first = rest[0];
   if (first && !isHelpToken(first) && renderHelp(`${cmd} ${first}`)) return 0;
   return renderHelp(cmd) ? 0 : null;

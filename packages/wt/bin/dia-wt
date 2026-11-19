@@ -103,9 +103,48 @@ EOF
 }
 wt_usage_prune_merged() {
   cat <<'EOF'
-用法：dia wt prune-merged [<repo>] [--apply] [--base <ref>] [--protect a,b] [--quiet]
+用法：dia wt prune-merged [<repo>] [--all] [--apply] [--base <ref>] [--protect a,b] [--quiet]
   ★ R25 定期闸口：扫出「已并入 main 的本地分支」。默认 dry-run（只列）；--apply 才删（用 -d，非 -D）。
   跳过当前分支 / 被 worktree 占用 / 保护名单（默认 main,master,develop,dev）。
+EOF
+}
+wt_usage_form() {
+  cat <<'EOF'
+用法：dia wt form <repo-path>
+  只打印该仓的选型结论（平级 / 隐藏）与理由，不创建任何东西。
+EOF
+}
+wt_usage_route() {
+  cat <<'EOF'
+用法：dia wt route <repo-path>
+  ★ 开工前必查：打印该仓的合并通道（owner 自合 / LGTM+bot）与 MR 平台信息（只读）。
+EOF
+}
+wt_usage_scope() {
+  cat <<'EOF'
+用法：dia wt scope <repo|worktree> [--feature <slug>] [--session <id>]
+      dia wt scope --show      # 按当前目录匹配作用域声明
+      dia wt scope --list      # 列出全部作用域文件（按 worktree 分文件）
+  产出作用域声明（设计 §4.5）：写 <数据根>/tasks/scopes/<name>.json。
+EOF
+}
+wt_usage_gate() {
+  cat <<'EOF'
+用法：dia wt gate <repo-path> <feature>
+  提交 MR 前门禁：check（R20 依赖体检）→ doctor → 目标 worktree 无未提交改动 → ahead origin/<default> > 0。
+  只做本地门禁，不做 merge / push；合并仍走 MR + @bot mergeme。
+EOF
+}
+wt_usage_guard() {
+  cat <<'EOF'
+用法：dia wt guard <pre-commit|pre-push|post-checkout>
+  守卫本体（供 hook manager 调用）；其它钩子名静默放行（exit 0）。
+EOF
+}
+wt_usage_doctor() {
+  cat <<'EOF'
+用法：dia wt doctor [<repo>...] [--all] [--json] [--fix]
+  巡检：配置 / 守卫钩子 / 探针 / 主 checkout / worktree 卫生。--fix 重装守卫钩子。
 EOF
 }
 
@@ -215,6 +254,7 @@ JS
 
 cmd_scope() {   # scope <repo-or-worktree> [--feature <slug>] [--session <id>] | scope --show
   local target="" feature="" session="" show=false list=false
+  for _a in "$@"; do case "$_a" in -h|--help) wt_usage_scope; return 0 ;; esac; done
   while [ $# -gt 0 ]; do case "$1" in
     --feature) feature="${2:-}"; shift 2 ;;
     --session) session="${2:-}"; shift 2 ;;
@@ -416,6 +456,7 @@ cmd_create() {
 }
 
 cmd_form() {
+  for _a in "$@"; do case "$_a" in -h|--help) wt_usage_form; return 0 ;; esac; done
   local repo="${1:-}"; [ -n "$repo" ] || die "用法：form <repo-path>"
   repo="$(cd "$repo" 2>/dev/null && pwd)" || die "仓库不存在：$repo"
   echo "  仓库: $repo"
@@ -1126,6 +1167,7 @@ JS
 }
 
 cmd_route() {
+  for _a in "$@"; do case "$_a" in -h|--help) wt_usage_route; return 0 ;; esac; done
   local repo="${1:-}"
   [ -n "$repo" ] || die "用法：dia wt route <repo-path>"
 
@@ -1468,6 +1510,7 @@ PYCHAIN
 
 cmd_guard() {
   local name="${1:-}"
+  for _a in "$@"; do case "$_a" in -h|--help) wt_usage_guard; return 0 ;; esac; done
   case "$name" in
     pre-commit|pre-push|post-checkout) ;;
     "")
@@ -1711,6 +1754,7 @@ PY
 
 cmd_doctor() {
   local json=0 all=0 fix=0 repos=()
+  for _a in "$@"; do case "$_a" in -h|--help) wt_usage_doctor; return 0 ;; esac; done
   while [ $# -gt 0 ]; do case "$1" in
     --json) json=1; shift ;;
     --all) all=1; shift ;;
@@ -1816,6 +1860,7 @@ RC
 
 cmd_gate() {
   local repo="" feature=""
+  for _a in "$@"; do case "$_a" in -h|--help) wt_usage_gate; return 0 ;; esac; done
   while [ $# -gt 0 ]; do case "$1" in
     -*) shift ;;
     *) if [ -z "$repo" ]; then repo="$1"; elif [ -z "$feature" ]; then feature="$1"; fi; shift ;;

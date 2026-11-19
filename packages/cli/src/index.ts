@@ -2001,7 +2001,7 @@ const BUILTIN_COMMANDS = new Set([
   "kb", "ingest", "audit", "freeze", "guard", "run", "resume", "persona", "doctor", "deps", "cache",
   "env", "kit", "service", "wt", "cmd", "collab", "whoami", "in", "out", "ack", "reply", "close", "show",
   "msg", "agents", "team", "job", "price", "version", "update", "postinstall", "migrate",
-  "graph", "task", "wb", "beat", "claim", "claims", "unclaim", "report",
+  "graph", "task", "wb", "beat", "claim", "claims", "unclaim",
 ]);
 
 export async function main(rawArgv: string[]): Promise<number> {

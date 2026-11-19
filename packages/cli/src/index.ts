@@ -47,6 +47,7 @@ import { loadPrices } from "../../../src/pricing.ts";
 import { propose } from "../../../src/proposal.ts";
 import { runJob, runJobCapture, jobRootResolved } from "../../../src/job.ts";
 import * as service from "../../../src/service.ts";
+import { helpGate, helpRequested, renderHelp } from "./help.ts";
 
 function out(s: string) { process.stdout.write(s + "\n"); }
 function err(s: string) { process.stderr.write(s + "\n"); }
@@ -149,91 +150,8 @@ function personaCommandNames(): string[] {
 }
 
 function help() {
-  out(`dia (嗲) — agent framework
-
-usage:
-  dia kb index [--root DIR] [--db PATH] [--json]
-  dia kb search <query> [--root DIR] [--db PATH] [--limit N] [--json]
-  dia kb query <query> [--root DIR] [--db PATH] [--limit N] [--json] [--full] [--bytes] [--auto-index]
-  dia kb review [--root DIR] [--db PATH] [--json]
-  dia kb path <doc:...|workflow:...|skill:...|tool:...#mode> [--root DIR] [--repo DIR] [--json]
-  dia kb lint [--root DIR] [--db PATH] [--stale-days N] [--json] [--strict]
-  dia kb get <path> [--root DIR] [--section HEADING]
-  dia --persona ID kb <cmd>   # persona 作用域：知识根/数据根/域命令委派
-  dia ingest sessions [--source dsh|opencode|all] [--domain dabo|yan] [--since ISO]
-                      [--full] [--limit N] [--dry-run] [--out DIR] [--project ID] [--json]
-  dia ingest git --repo DIR [--since DATE] [--limit N] [--json]
-  dia audit append --session S --tool T [--decision allow|deny|waive] [--params JSON]
-                    [--risk N] [--redline] [--note ...] [--json]
-  dia audit verify --session S --calls N [--chain] [--json]
-  dia audit score --session S [--json]
-  dia audit tail [--n 20] [--json]
-  dia freeze --reason R [--auto] [--last-episode ID] [--json]
-  dia freeze status
-  dia freeze thaw --reason R --i-am-human
-  dia guard [--once] [--json]
-  dia run --session S [--tool T] [--agent A] [--waive --risk N] [--redline] -- <cmd> [args...]
-  dia resume --session S [--json]
-  dia persona add <id|--from SRC> [--ref REF] [--host opencode|dsh|codex] [--home DIR] [--dry-run] [--force] [--json]
-  dia persona create <id> --dir DIR [--host opencode|dsh|codex] [--no-msg] [--dry-run] [--json]
-  dia persona render <id> [--host opencode|dsh|codex] [--home DIR] [--check] [--json]
-  dia persona list|verify|remove|show <id>|use <id>[@ver]
-  dia persona path [<id>[@<ver>]] [--json]   # 打印生效版本目录（服务/脚本取代码入口）
-  dia persona check <id>|update <id> [--ref REF]
-  dia doctor [--persona ID] [--paths] [--json]
-  dia deps list [--json] [--file PATH]        # 派生视图：登记 + 实测
-  dia deps record --id ID --kind K --version V [--resolved R] [--role required|optional] [--result pass|fail|unknown] [--evidence P]
-  dia cache list [--root NAME] [--json]        # 缓存条目：体积/引用/是否有本地独有内容
-  dia cache gc [--apply] [--force] [--referenced] [--root NAME] [--json]   # 默认 dry-run；cache 可删，要留就 backup
-  dia env list|check [KEY…] | env [--dry-run] [--redact] <cmd…>
-  dia env bw status|unlock [--passwordfile P]|lock
-  dia env bw run --map KEY=item [--map …] [--task T] -- <cmd…>   # 只注入映射键；BW_SESSION 不进子进程
-  dia env bw serve [--socket PATH] [--passwordfile P]   # 常驻 broker（可启动时解锁）
-  dia env bw get --item ITEM [--env KEY] [--task T] [--json]
-  dia persona default <id>|--unset|--show [--host opencode]
-  dia kit add --from SRC [--ref REF] [--dry-run] [--json]
-  dia kit list|verify <id>|remove <id>
-  dia service add (<--from SRC> | --dir DIR) [--ref REF] [--dry-run] [--json]
-  dia service list [--json] | show <id> [--json] | verify <id|--dir DIR> [--json]
-  dia service health <id> [--from-wrapper --exit N --gen G] [--json]   # 0 ok/30 degraded/1 fail/31 判据不可用/2 用法
-  dia service remove <id> [--json]
-  dia wt create|form|list|status|check|route|scope|clean|prune-merged …
-  dia cmd <name> [args…]              # 只查 persona 声明的命令（可绕开同名内置）
-  dia <persona-cmd> [args…]           # 一级委派（内置优先）
-  dia collab status|enable|disable [--persona ID]   # dia-msg 开关；enable 校正 300s 观察器定时并刷新 board，disable 一并卸载
-  dia collab stats [--since 7d] [--by session|pair|class] [--json]   # 只读聚合（送达/回复/积压）
-  dia collab board [--cached|--refresh] [--json] | observe [--interval 300] [--json]   # 一次性 tick/看板（无常驻；定时用 dia job）
-  dia whoami [--json] [--name NAME]   # 当前会话身份（session id）
-  dia in [--unread] [--all] [--class P0,P1] [--sort priority|arrival] [--expose] [--json]   # 会话收件箱（正文内联）
-  dia out --to <session_id> --subject S (--body B|--body-file F) [--kind K] [--touch p1,p2] [--reply-to ID]
-  dia ack <id> | dia reply <id> --body B | dia close <id> --reason R | dia show <id>
-  dia msg send <ses_id> --subject S (--body B|--body-file F) | inbox | show <id> | ack <id> | reply <id> --body B | close <id> --reason R
-  dia msg deliver <ses_id> <id> [--transport file|tmux|acp] [--wait]   # 显式重投（默认异步；日志在 collab/deliver/）
-  dia msg trace <id> | stats [--since 7d] | seen <id…> | upkeep | retry | escalate --due | dsh [install|check]
-  dia msg migrate [--dry-run|--apply]   # 旧 ~/.dia/msg 一次性导入 v2（默认只报告）
-  dia msg analyze-storage [--json]      # 只读体检（v1 残留/v2 现状/事件流健康度）
-  dia agents list|register|unregister|discover
-  dia task add|list|link|plan|split|status|done [--owner S] [--depends a,b] [--touches p1,p2] [--prio P1] [--start D] [--due D] [--progress 0-100]
-  dia task split <id> --into "切片A,切片B" [--slice 切片A] [--role R] [--judge J] [--touches p] [--force]
-  dia wb [--json] [--summary] [--now ISO] [--depth fast|full] | wb refresh | wb migrate [--dry-run] | wb gc [--apply] | wb explain <id>
-  dia wb track open|list|show|bind|unbind|stage|next|handoff|attach|close
-  dia wb metrics|due|brief [--json] [--track tr-x] [--since 7d]
-  dia beat [--session S] [--track tr-x] [--note N] [--json]   # 会话心跳；--help 只打印用法、不写盘
-  dia graph [--json] [--task t-...] [--tui [--watch] [--status S] [--owner S] [--width N] [--no-color]]
-  dia graph --serve [--port N] [--no-open]   # 本机只读 web（需 packages/graph-web）
-  dia graph --export-html [path] [--out path] [--now ISO] [--redact] [--all] [--limit N] [--force]
-  dia graph --next [n] [--seats N] | --explain <id> | --lint   # 只读编排建议（Kahn-v1 / seats-v1）
-  dia claim <path> [--reason R] [--ttl 4h] [--session S] | dia claims [--all] [--mine] [--gc [--days 7]] | dia unclaim <path|id> [--force]
-  dia team run <id> --mock | --acp|--dsh --workspace DIR
-  dia team gate|accept|reject|next
-  dia team accept <id> [--note ...] [--pr N [--repo R] [--merge]]   # --pr：先验 CI，绿才接受/合并
-  dia job <list|status|install|...>   # 调度适配器
-  dia job migrate --from <旧 job 根> [--to DIR] [--dry-run]   # 逐条重建到当前根，校验后清旧（处理双根）
-  dia price list|--json
-  dia postinstall [--quiet]             # 装配内置能力（npm 拦截脚本 / ignore-scripts 时的兜底；幂等）
-  dia migrate data [--from DIR] [--dry-run]   # 旧数据根 → 数据根（只搬数据子目录，合并同名目录）
-  dia version
-  dia update [--check]                  # 查/装 npm 最新版`);
+  // 正文在 packages/cli/src/help.ts 的 HELP_TEXTS.root（逐字搬迁，输出与改造前一致）
+  renderHelp("root");
 }
 
 async function kb(argv: string[]): Promise<number> {
@@ -516,7 +434,7 @@ async function freezeCli(argv: string[]): Promise<number> {
       return 3;
     }
   }
-  if (sub === "--help" || sub === "-h") { out("dia freeze [--reason R] [--session S] [--auto] [--last-episode ID] | dia freeze status | dia freeze thaw --reason R --i-am-human"); return 0; }
+  // `dia freeze --help` 由 main 的 helpGate 统一拦截（此处原分支因 bare 判定恒不可达，已删）
   const reason = flag(args, "--reason");
   if (!reason) { err("missing --reason"); return 2; }
   const st = freeze.freeze({ reason, by: has(args, "--auto") ? "auto" : "human", lastEpisode: flag(args, "--last-episode"), session: flag(args, "--session") });
@@ -2101,6 +2019,10 @@ export async function main(rawArgv: string[]): Promise<number> {
       if (personaCommandNames().includes(cmd)) err(`! note: 内置命令 ${cmd} 优先；persona 的同名命令请用 \`dia cmd ${cmd}\``);
     } catch { /* scope 不可用时忽略 */ }
   }
+  // ── 单一拦截点：任何子命令的 --help/-h 都在这里一次处理（issue #228；job/wt 走各自通路）──
+  // 值位（`--body --help`）由白名单放行；拿不准时按「要帮助」处理，绝不执行。
+  const gate = helpGate(cmd, argv.slice(1));
+  if (gate !== null) return gate;
   if (cmd === "version" || cmd === "--version") { out(`dia ${cliVersion()}`); return 0; }
   if (cmd === "update") {
     const check = has(argv, "--check");
@@ -2417,6 +2339,13 @@ export async function main(rawArgv: string[]): Promise<number> {
   if (cmd === "team") return teamCli(argv.slice(1));
   if (cmd === "job") {
     const rest = argv.slice(1);
+    // 事故根因（issue #228）：`dia job uninstall --help` 曾把 --help 原样透传给 yan-task ⇒ 真执行。
+    // 这里在 spawn 之前判定：值位（--desc --help）不算，其余一律只打印用法。
+    if (helpRequested(rest)) {
+      const sub = rest.find((a) => a && !a.startsWith("-"));
+      if (sub && renderHelp(`job ${sub}`)) return 0;
+      if (renderHelp("job")) return 0;
+    }
     if (rest[0] === "migrate") return jobMigrate(rest.slice(1));
     // `dia job status|list`：追一列 health（只读缓存，不执行检查；见 docs/service-noun.md §6）
     if (rest[0] === "status" || rest[0] === "list") {

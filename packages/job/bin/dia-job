@@ -64,11 +64,11 @@ _resolve_job_root() {
     # 纯 sed 解析，不依赖 node（根还没定时就要用）
     pin="$(sed -n 's/.*"root"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$next/.rootpin" | head -1)"
     if [ -n "$pin" ] && [ -d "$pin" ]; then printf '%s|pin' "$pin"; return 0; fi
-    [ -n "$pin" ] && echo "dia-job: warn: rootpin 指向的根不存在（$pin），已忽略" >&2
+    [ -n "$pin" ] && echo "dia-job: warn: rootpin 指向的根不存在（${pin}），已忽略" >&2
   fi
   local legacy="${XDG_DATA_HOME:-$HOME/.local/share}/dia-job"
   if [ ! -d "$next" ] && [ -d "$legacy" ]; then
-    echo "dia-job: warn: 裸跑落到旧根 $legacy（dia 委派用 $next）；修复：dia job migrate --from $legacy" >&2
+    echo "dia-job: warn: 裸跑落到旧根 ${legacy}（dia 委派用 ${next}）；修复：dia job migrate --from ${legacy}" >&2
     printf '%s|legacy' "$legacy"; return 0
   fi
   printf '%s|next' "$next"
@@ -274,7 +274,7 @@ _registry_name_of_label() {  # <label> → name（找不到则空输出）
 }
 
 cmd_list() {
-  echo "平台: $PLATFORM   数据根: $YAN_DATA_ROOT   来源=$DIA_JOB_ROOT_SOURCE"
+  echo "平台: $PLATFORM   数据根: $YAN_DATA_ROOT   来源=${DIA_JOB_ROOT_SOURCE}"
   local found=0 t name
   while read -r t; do
     [ -n "$t" ] || continue

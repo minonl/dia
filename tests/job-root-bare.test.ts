@@ -7,6 +7,8 @@ import { spawnSync } from "node:child_process";
 // #231：裸跑 `dia-job`（不经 dia 委派）必须与 dia CLI 用同一个根：
 // env > .rootpin > legacy > 新默认（<DIA_ROOT>/job）。
 const script = join(import.meta.dir, "..", "packages", "job", "bin", "dia-job");
+// macOS 自带 bash 3.2（CI 用的就是它）：用系统 bash 才能抓到「CJK 紧邻 $var 被吞进变量名」这类问题
+const BASH = process.platform === "darwin" ? "/bin/bash" : "bash";
 
 function sandbox() {
   const base = mkdtempSync(join(tmpdir(), "diajob-root-"));
@@ -26,7 +28,7 @@ function rootJson(home: string, extraEnv: Record<string, string | undefined> = {
     ...extraEnv,
   };
   for (const k of Object.keys(env)) if (env[k] === undefined) delete env[k];
-  const r = spawnSync("bash", [script, "root", "--json"], { encoding: "utf8", env: env as NodeJS.ProcessEnv });
+  const r = spawnSync(BASH, [script, "root", "--json"], { encoding: "utf8", env: env as NodeJS.ProcessEnv });
   let parsed: any = null;
   try {
     parsed = JSON.parse((r.stdout || "").trim().split("\n").pop() || "null");

@@ -762,8 +762,8 @@ expand_weekdays() {  # expand_weekdays <spec> → 输出空格分隔的星期数
 # ⚠️ 坑 1：plist 里不写 XML 注释（注释中含 `--` 会让 launchd 解析失败，高危）
 # ── 任务包装脚本（**唯一实现**：launchd/cron/systemd 三个后端共用）────────────
 # 每任务一个 wrapper：执行任务 → 记 state → 透传退出码。返回 wrapper 路径。
-write_wrapper() {  # write_wrapper <name> <cmd>
-  local name="$1" cmd="$2"
+write_wrapper() {  # write_wrapper <name> <cmd> [periodic|service]
+  local name="$1" cmd="$2" jtype="${3:-periodic}"
   local wrapper="$YAN_DATA_ROOT/tasks/$name.sh"
   mkdir -p "$(dirname "$wrapper")"
   cat > "$wrapper" <<WRAP
@@ -785,6 +785,7 @@ export YAN_DATA_ROOT="$YAN_DATA_ROOT"
 #   ① runner 主动写 \${YAN_VERDICT_FILE}（最准确：区分"真没数据"与"没拉到数据"）
 #   ② 本包装脚本按退出码兜底映射（见下）
 #   ③ 都没有 → 按 exit 判（0=ok，其余=failed）
+_JOB_TYPE='$jtype'
 YAN_VERDICT_FILE="$YAN_DATA_ROOT/tasks/$name.verdict"
 export YAN_VERDICT_FILE            # ⚠️ 必须 export：runner 是子进程，未 export 时读不到（2026-10-29 实测：verdict 恒为空）
 rm -f "\$YAN_VERDICT_FILE"          # 清上一轮残留，防陈旧结论被误用
@@ -803,23 +804,33 @@ if [ -s "\$YAN_VERDICT_FILE" ]; then
 fi
 [ -n "\$errors" ] || errors=0
 # ② 退出码兜底映射（D4 语义：2=可重试失败，3=不可重试失败）
+#    service 类型特殊：KeepAlive 重启/停机时进程被信号终止（130/137/143），
+#    属正常生命周期，不该记 failed（2026-11-23 #232）；崩溃（其它非 0）仍记 failed。
 if [ -z "\$verdict" ]; then
-  case "\$ec" in
-    0) verdict="ok" ;;
-    2) verdict="degraded" ;;   # 可重试类失败：本轮确实没干成活
-    3) verdict="failed" ;;
-    *) verdict="failed" ;;
-  esac
+  if [ "\$_JOB_TYPE" = "service" ]; then
+    case "\$ec" in
+      0) verdict="ok" ;;
+      130|137|143) verdict="stopped" ;;
+      *) verdict="failed" ;;
+    esac
+  else
+    case "\$ec" in
+      0) verdict="ok" ;;
+      2) verdict="degraded" ;;
+      3) verdict="failed" ;;
+      *) verdict="failed" ;;
+    esac
+  fi
 fi
-printf '{"ts":%s,"exit":%s,"verdict":"%s","errors":%s}\\n' "\$(date +%s)" "\$ec" "\$verdict" "\$errors" >> "$YAN_DATA_ROOT/tasks/$name.state.jsonl"
+printf '{"ts":%s,"exit":%s,"verdict":"%s","errors":%s,"type":"%s"}\\n' "\$(date +%s)" "\$ec" "\$verdict" "\$errors" "\$_JOB_TYPE" >> "$YAN_DATA_ROOT/tasks/$name.state.jsonl"
 exit \$ec
 WRAP
   chmod +x "$wrapper"
   printf '%s' "$wrapper"
 }
 
-write_plist() {  # write_plist <name> <cmd> <interval|-> <calendar|-> <log> [<weekdays|- >]
-  local name="$1" cmd="$2" interval="$3" calendar="$4" log="$5" weekdays="${6:--}"
+write_plist() {  # write_plist <name> <cmd> <interval|-> <calendar|-> <log> [<weekdays|- >] [periodic|service]
+  local name="$1" cmd="$2" interval="$3" calendar="$4" log="$5" weekdays="${6:--}" jtype="${7:-periodic}"
   local f; f="$(plist_path "$name")"
   local f_tmp="${f}.tmp.$$"
   mkdir -p "$(dirname "$f")" "$(dirname "$log")"
@@ -831,7 +842,7 @@ write_plist() {  # write_plist <name> <cmd> <interval|-> <calendar|-> <log> [<we
     # 每任务一个包装脚本：执行任务 → 记 state → 透传退出码
     #（⚠️ 不在 plist 里内联命令：XML 转义 + 引号嵌套极易写坏，实测踩过 ✗）
     local wrapper
-    wrapper="$(write_wrapper "$name" "$cmd")" || return 1
+    wrapper="$(write_wrapper "$name" "$cmd" "$jtype")" || return 1
     printf '  <key>ProgramArguments</key><array><string>/bin/bash</string><string>%s</string></array>\n' "$wrapper"
     if [ "$interval" != "-" ]; then printf '  <key>StartInterval</key><integer>%s</integer>\n' "$interval"; fi
     if [ "$calendar" != "-" ]; then
@@ -1253,7 +1264,7 @@ cmd_install() {
 
   local log="$YAN_DATA_ROOT/tasks/$name.log" f backend="launchd"
   if [ "$PLATFORM" = macos ]; then
-    f="$(write_plist "$name" "$cmd" "$interval" "$calendar" "$log" "${wd_expanded:--}")" || return 1
+    f="$(write_plist "$name" "$cmd" "$interval" "$calendar" "$log" "${wd_expanded:--}" "$type")" || return 1
     if _launchd_off; then
       echo "  · 已跳过 launchd 加载（YAN_TASK_NO_LAUNCHD=1；测试隔离）"
     else
@@ -1263,7 +1274,7 @@ cmd_install() {
   elif [ "$type" = service ]; then
     # ── Linux service：systemd --user（Restart=always ≈ launchd KeepAlive）──
     backend=systemd
-    local wrapper; wrapper="$(write_wrapper "$name" "$cmd")" || return 1
+    local wrapper; wrapper="$(write_wrapper "$name" "$cmd" "$type")" || return 1
     f="$(write_unit "$name" "$wrapper" "$log" "$desc")" || return 1
     if [ "$DIA_JOB_NO_LAUNCHD" = 1 ]; then
       echo "  · 已跳过 systemd 加载（DIA_JOB_NO_LAUNCHD=1；测试隔离）"
@@ -1284,7 +1295,7 @@ cmd_install() {
         # 既无 interval 也无 calendar：与 cron 的 @reboot / launchd RunAtLoad 对齐 —— 开机跑一次
         interval=300
       fi
-      wrapper="$(write_wrapper "$name" "$cmd")" || return 1
+      wrapper="$(write_wrapper "$name" "$cmd" "$type")" || return 1
       f="$(write_timer_units "$name" "$wrapper" "$log" "$interval" "$calendar" "${wd_expanded:--}" "$desc")" || return 1
       if [ "$DIA_JOB_NO_LAUNCHD" = 1 ]; then
         echo "  · 已跳过 systemd timer 加载（DIA_JOB_NO_LAUNCHD=1；测试隔离）"
@@ -1301,7 +1312,7 @@ cmd_install() {
         echo "      （本机可用 systemd timer 后端绕开该限制：DIA_JOB_PERIODIC_BACKEND=systemd-timer）" >&2
         return 2
       fi
-      wrapper="$(write_wrapper "$name" "$cmd")" || return 1
+      wrapper="$(write_wrapper "$name" "$cmd" "$type")" || return 1
       if [ "$DIA_JOB_NO_LAUNCHD" = 1 ]; then
         echo "  · 已跳过 crontab 写入（DIA_JOB_NO_LAUNCHD=1；测试隔离）"
         f="$wrapper"

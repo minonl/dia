@@ -47,7 +47,7 @@ import { loadPrices } from "../../../src/pricing.ts";
 import { propose } from "../../../src/proposal.ts";
 import { runJob, runJobCapture, jobRootResolved } from "../../../src/job.ts";
 import * as service from "../../../src/service.ts";
-import { helpGate, helpRequested, renderHelp } from "./help.ts";
+import { helpGate, helpRequested, renderHelp, warnUnknownFlags } from "./help.ts";
 
 function out(s: string) { process.stdout.write(s + "\n"); }
 function err(s: string) { process.stderr.write(s + "\n"); }
@@ -75,10 +75,15 @@ function flags(args: string[], name: string): string[] {
   for (let i = 0; i < args.length; i++) if (args[i] === name && i + 1 < args.length) out.push(args[i + 1]);
   return out;
 }
-function positional(args: string[]): string[] {
+function positional(args: string[], booleanFlags?: ReadonlySet<string>): string[] {
   const out: string[] = [];
   for (let i = 0; i < args.length; i++) {
-    if (args[i].startsWith("--")) { if (!args[i].includes("=") && args[i] !== "--auto-index") i++; continue; }
+    if (args[i].startsWith("--")) {
+      // 布尔开关不吃下一个 token；未登记的 `--x` 仍按「取值」处理（保持原行为）
+      const isBool = args[i] === "--auto-index" || booleanFlags?.has(args[i]);
+      if (!args[i].includes("=") && !isBool) i++;
+      continue;
+    }
     out.push(args[i]);
   }
   return out;
@@ -1679,12 +1684,23 @@ async function personaCli(argv: string[]): Promise<number> {
     } catch (e: any) { err(e?.message || String(e)); return 31; }
   }
   if (sub === "update") {
-    const id = positional(args)[0];
+    const allowed = ["--ref", "--force", "--dry-run", "--json"];
+    warnUnknownFlags(args, allowed);
+    const bools = new Set(["--force", "--dry-run", "--json"]);
+    const id = positional(args, bools)[0];
     if (!id) { err("missing id"); return 2; }
+    const dryRun = has(args, "--dry-run");
     try {
-      const r = persona.update(id, { ref: flag(args, "--ref"), force: has(args, "--force") });
-      out(asJson ? JSON.stringify(r) : `updated ${id} → ${r.installed.version}（${String(r.installed.commit || r.installed.hash || "?").slice(0, 8)}, 原 ${r.previous ?? "-"}）`);
-      await autoIndexPersona(id);
+      const r = persona.update(id, { ref: flag(args, "--ref"), force: has(args, "--force"), dryRun });
+      if (asJson) out(JSON.stringify(r));
+      else if (dryRun) {
+        out(`[dry-run] would update ${id} → ${r.installed.version}（原 ${r.previous ?? "-"}；未写盘、未切 active、未建索引）` +
+          (r.installed.overwrites?.length ? `\n  ⚠ 将覆盖 ${r.installed.overwrites.length} 个产物：${r.installed.overwrites.join(", ")}` : ""));
+      } else {
+        out(`updated ${id} → ${r.installed.version}（${String(r.installed.commit || r.installed.hash || "?").slice(0, 8)}, 原 ${r.previous ?? "-"}）`);
+      }
+      // dry-run 不得写知识索引（autoIndexPersona 会真建索引）
+      if (!dryRun) await autoIndexPersona(id);
       return 0;
     } catch (e: any) {
       const m = e?.message || String(e);

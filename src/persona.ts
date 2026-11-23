@@ -1114,15 +1114,22 @@ export function checkUpstream(id: string, version?: string): UpstreamState {
   return out;
 }
 
-/** 从记录源重新取回（update/heal）：装到新版本号后把 active 指针指过去。 */
-export function update(id: string, opts: { ref?: string; force?: boolean } = {}): { installed: Installed; previous: string | null } {
+/**
+ * 从记录源重新取回（update/heal）：装到新版本号后把 active 指针指过去。
+ * `dryRun`：只预演（走 install 的 dry-run 早退），不建版本目录、不切 active、不建索引。
+ */
+export function update(
+  id: string,
+  opts: { ref?: string; force?: boolean; dryRun?: boolean } = {},
+): { installed: Installed; previous: string | null; applied?: boolean } {
   const idDir = join(dataDir(), "personas", id);
   if (!existsSync(idDir)) throw new Error("E_NOT_INSTALLED");
   const cur = active.effective(id)?.version ?? readdirSync(idDir).sort().pop()!;
   const lock = JSON.parse(readFileSync(join(idDir, cur, "dia.lock"), "utf8"));
   if (!lock.source) throw new Error("E_SOURCE: 该 persona 由本地目录安装，无法 update（重新 persona add）");
   // 不传 host：按 manifest 的 hosts 全量重渲染（旧实现用 rendered[0] 推断 host → 多 host 的 dsh profile 永不刷新）
-  const r = install(lock.source, { ref: opts.ref ?? lock.ref ?? undefined, force: opts.force, ownedFrom: cur });
+  const r = install(lock.source, { ref: opts.ref ?? lock.ref ?? undefined, force: opts.force, ownedFrom: cur, dryRun: opts.dryRun });
+  if (opts.dryRun) return { installed: r, previous: cur, applied: false };
   const u = active.use(id, r.version, { reason: `update from ${lock.source}` });
-  return { installed: r, previous: u.previous };
+  return { installed: r, previous: u.previous, applied: true };
 }

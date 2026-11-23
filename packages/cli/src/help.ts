@@ -503,7 +503,7 @@ usage:
   "persona check":
     `用法: dia persona check <id> [--json]   # 检查远端是否有新版本（只读）（完整参数见 dia --help）`,
   "persona update":
-    `用法: dia persona update <id> [--ref REF] [--json]   # 拉取并安装新版本`,
+    `用法: dia persona update <id> [--ref REF] [--force] [--dry-run] [--json]   # 拉取并安装新版本（--dry-run 只报告）`,
   "persona default":
     `用法: dia persona default <id> | --unset | --show [--host opencode]   # 各 host 的默认 persona`,
   "service add":
@@ -657,4 +657,22 @@ export function helpGate(cmd: string, rest: string[]): number | null {
   const first = rest[0];
   if (first && !isHelpToken(first) && renderHelp(`${cmd} ${first}`)) return 0;
   return renderHelp(cmd) ? 0 : null;
+}
+
+/**
+ * 未知参数提示（**只 warn、不改退出码**）。
+ *
+ * 为什么只 warn：`VALUE_FLAGS` 是全局集合而非 per-command 白名单，把「未知」升级成硬失败
+ * 需要数十张表 + 会炸存量脚本；本批先在写操作子命令（persona update）试点，
+ * 至少让「--dry-ru 打错被静默忽略」这类问题可见。
+ */
+export function warnUnknownFlags(args: string[], allowed: readonly string[], cmd = "dia persona update"): void {
+  const allow = new Set(allowed);
+  for (const a of args) {
+    if (!a.startsWith("--")) continue;
+    const name = a.split("=")[0];
+    if (!allow.has(name)) {
+      console.error(`warn: 未知参数 ${name}（已忽略；${cmd} 支持 ${allowed.join(" / ")}）`);
+    }
+  }
 }

@@ -38,8 +38,11 @@ printf '%s' "$out" | grep -q 'failed-task-report' && bad "own-tasks 仍含 yan �
 
 # 默认根不指向旧工作域；显式 YAN_DATA_ROOT 仍兼容
 out="$(env -u DIA_JOB_ROOT -u YAN_DATA_ROOT HOME="$TD/home-default" bash "$YT" list 2>&1)"
-printf '%s' "$out" | grep -q "$TD/home-default/.local/share/dia-job" && ok "默认根为 dia-job" || bad "默认根错：$out"
-out="$(YAN_DATA_ROOT="$ROOT" bash "$YT" list 2>&1)"
+# 2026-11-23 #231：默认根与 dia CLI 对齐为 <DIA_ROOT>/job（~/.dia/job），不再是 XDG data 下的 dia-job
+printf '%s' "$out" | grep -q "$TD/home-default/.dia/job" && ok "默认根为 dia-home/job（与 dia CLI 一致）" || bad "默认根错：$out"
+printf '%s' "$out" | grep -q ".yan-agent" && bad "默认根又指向旧工作域：$out" || ok "默认根不指向旧工作域"
+# 测试隔离：本机 shell 可能已 export DIA_JOB_ROOT（优先级更高），这里显式 unset 才测得到 YAN_DATA_ROOT 兼容
+out="$(env -u DIA_JOB_ROOT YAN_DATA_ROOT="$ROOT" bash "$YT" list 2>&1)"
 printf '%s' "$out" | grep -q "$ROOT" && ok "YAN_DATA_ROOT 兼容" || bad "YAN_DATA_ROOT 未兼容"
 
 echo; echo "── PASS $PASS · FAIL $FAIL ──"

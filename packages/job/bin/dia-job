@@ -50,9 +50,35 @@ json() { [ -n "$NODE_BIN" ] || { echo "dia-job: 找不到 node/bun（JSON 适配
 # shellcheck source=lib/config.sh
 . "$SELF_DIR/../lib/config.sh"
 dia_job_load_config
-# 数据根：DIA_JOB_ROOT 优先；未显式设置时兼容旧 YAN_DATA_ROOT；最后才用新默认。
+# 数据根解析（2026-11-23，#231）：env > .rootpin > legacy > 新默认。
+# 为什么：`dia` CLI 委派时会传 DIA_JOB_ROOT，但**裸跑** `dia-job` 时原实现落到 legacy 根
+# （旧副本用 ~/.yan-agent、npm 副本用 ~/.local/share/dia-job），与 `dia job list` 读的根分叉
+# → 任务装进「看不见的根」，静默永远不跑。
+# 与 `src/paths.ts` 对齐：候选根认 DIA_ROOT / DIA_DATA_DIR（以前只认 DIA_JOB_ROOT/YAN_DATA_ROOT，
+# 这是沙箱与真机分叉的另一个来源）。
+_resolve_job_root() {
+  if [ -n "${DIA_JOB_ROOT:-}" ]; then printf '%s|env' "$DIA_JOB_ROOT"; return 0; fi
+  if [ -n "${YAN_DATA_ROOT:-}" ]; then printf '%s|env' "$YAN_DATA_ROOT"; return 0; fi
+  local next="${DIA_ROOT:-${DIA_DATA_DIR:-$HOME/.dia}}/job" pin=""
+  if [ -f "$next/.rootpin" ]; then
+    # 纯 sed 解析，不依赖 node（根还没定时就要用）
+    pin="$(sed -n 's/.*"root"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$next/.rootpin" | head -1)"
+    if [ -n "$pin" ] && [ -d "$pin" ]; then printf '%s|pin' "$pin"; return 0; fi
+    [ -n "$pin" ] && echo "dia-job: warn: rootpin 指向的根不存在（${pin}），已忽略" >&2
+  fi
+  local legacy="${XDG_DATA_HOME:-$HOME/.local/share}/dia-job"
+  if [ ! -d "$next" ] && [ -d "$legacy" ]; then
+    echo "dia-job: warn: 裸跑落到旧根 ${legacy}（dia 委派用 ${next}）；修复：dia job migrate --from ${legacy}" >&2
+    printf '%s|legacy' "$legacy"; return 0
+  fi
+  printf '%s|next' "$next"
+}
+
 DIA_JOB_ROOT_GIVEN="${DIA_JOB_ROOT:-}"
-DIA_JOB_ROOT="${DIA_JOB_ROOT:-${YAN_DATA_ROOT:-${XDG_DATA_HOME:-$HOME/.local/share}/dia-job}}"
+_DIA_ROOT_RES="$(_resolve_job_root)"
+DIA_JOB_ROOT="${_DIA_ROOT_RES%|*}"
+DIA_JOB_ROOT_SOURCE="${_DIA_ROOT_RES##*|}"
+export DIA_JOB_ROOT_SOURCE
 # ⚠️ 2026-11-09：此前「目录不存在 → 静默回退旧根」会让临时根/新机器的注册写进 ~/.local/share/dia-job，
 #    与 doctor/`dia job list` 读的根分叉（实测产生 split-brain）。改为建目录，失败即报错，绝不换根。
 mkdir -p "$DIA_JOB_ROOT/tasks" 2>/dev/null || { echo "dia-job: 无法创建 job 根 $DIA_JOB_ROOT（设 DIA_JOB_ROOT 或用可写目录）" >&2; exit 9; }
@@ -248,7 +274,7 @@ _registry_name_of_label() {  # <label> → name（找不到则空输出）
 }
 
 cmd_list() {
-  echo "平台: $PLATFORM   数据根: $YAN_DATA_ROOT"
+  echo "平台: $PLATFORM   数据根: $YAN_DATA_ROOT   来源=${DIA_JOB_ROOT_SOURCE}"
   local found=0 t name
   while read -r t; do
     [ -n "$t" ] || continue
@@ -1791,8 +1817,15 @@ EOF
   gc)        shift; cmd_gc "$@" ;;
   logs)      shift; cmd_logs "$@" ;;
   platform) echo "$PLATFORM" ;;
+  root)
+    if [ "${2:-}" = "--json" ]; then
+      printf '{"root":"%s","source":"%s"}\n' "$DIA_JOB_ROOT" "$DIA_JOB_ROOT_SOURCE"
+    else
+      echo "$DIA_JOB_ROOT"
+    fi ;;
+  status-root) echo "$DIA_JOB_ROOT_SOURCE" ;;
   *)
-    echo "用法: yan-task {list|status|doctor|platform|install|uninstall|adopt|selfcheck|backfill|bootstrap|registry|gc|logs}" >&2
+    echo "用法: yan-task {list|status|doctor|platform|root|install|uninstall|adopt|selfcheck|backfill|bootstrap|registry|gc|logs}" >&2
     echo "      yan-task registry                        # 打印登记表 registry.json" >&2
     echo "      yan-task registry gc [--dry-run|--apply] [--json]   # 列出/清理历史条目" >&2
     exit 2 ;;

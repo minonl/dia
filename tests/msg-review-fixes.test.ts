@@ -82,8 +82,11 @@ describe("评审修复 1：ACP 子进程 spawn 失败必须落 inject.failed（�
     expect(failed.error_code).toBe("E_ACP_SPAWN");
 
     // 关键：attempts 必须前进，否则 retryDue 里 (attempts||0) >= 3 永远不成立 → 每轮重投一个必崩的子进程
+    // ⚠️ 不能钉死 ==1：`out` 的自动 ACP 通道是**异步**的，若它先于本用例的显式 notify-acp 跑完，
+    //    attempts 会是 2（2026-11-23 publish 流水线稳定复现；test.yml 因调度差异时好时坏）。
+    //    这里只断言「确实前进了」，`next_retry_at` 等退避断言保持不变。
     const m = readMsg("ses_spawn", id);
-    expect(m.attempts).toBe(1);
+    expect(m.attempts).toBeGreaterThanOrEqual(1);
     expect(typeof m.next_retry_at).toBe("string");
     expect(Date.parse(m.next_retry_at)).toBeGreaterThan(Date.now() - 1000);
     expect(m.injected_at).toBeUndefined();

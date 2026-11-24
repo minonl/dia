@@ -17,6 +17,17 @@ export DIA_JOB_CONFIG=/dev/null
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 YT="$HERE/../bin/dia-job"
 TD="$(mktemp -d)"
+# 沙箱 HOME（2026-11-24 修）：install/selfcheck 会写 `$HOME/Library/LaunchAgents/*.plist`，
+# 不沙箱就会把 `local.dia-job-demo-business` 之类残留写进**开发者真实 HOME**，
+# 真机 doctor 随后永久报「已加载但未登记」。收尾再兜一次 bootout（防中途失败）。
+export HOME="$TD/home"; mkdir -p "$HOME"
+cleanup_demo_labels() {
+  for _l in demo-selfcheck demo-business demo-isolated demo-adopted demo-normal; do
+    launchctl bootout "gui/$(id -u)/local.dia-job-$_l" 2>/dev/null || true
+  done
+  rm -rf "$TD"
+}
+trap cleanup_demo_labels EXIT
 DR="$TD/yan agent data"          # ⚠️ 故意带空格（事故现场）
 # 2026-11-16：无 cron 的机器上 periodic 会落 systemd timer ⇒ unit 写 XDG_CONFIG_HOME。
 # 不沙箱的话测试会写进开发者真实 ~/.config/systemd/user（实测污染）。

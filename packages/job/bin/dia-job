@@ -905,7 +905,15 @@ write_plist() {  # write_plist <name> <cmd> <interval|-> <calendar|-> <log> [<we
     printf '  <key>RunAtLoad</key><true/>\n'
     printf '  <key>StandardOutPath</key><string>%s</string>\n' "$log"
     printf '  <key>StandardErrorPath</key><string>%s</string>\n' "$log"
-    printf '  <key>EnvironmentVariables</key><dict><key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:%s/.bun/bin</string></dict>\n' "$HOME"
+    # PATH 里必须能解析到 dia（否则定时任务里的自更新/巡检类任务全红）：
+    # launchd 的 PATH 极简，而 dia 可能只装在 fnm/nvm 下（2026-11-20 实测：只有 /opt/homebrew/bin 时找不到 dia）。
+    # 顺序：~/.local/bin（稳定 shim）→ dia 所在目录 → DIA_JOB_EXTRA_PATH → 系统默认 → ~/.bun/bin
+    _dia_dir=""
+    if command -v dia >/dev/null 2>&1; then _dia_dir="$(dirname "$(command -v dia)"):"; fi
+    _extra="${DIA_JOB_EXTRA_PATH:-}"
+    case "$_extra" in "") ;; */) ;; *) _extra="${_extra}:" ;; esac
+    _path="${HOME}/.local/bin:${_dia_dir}${_extra}/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${HOME}/.bun/bin"
+    printf '  <key>EnvironmentVariables</key><dict><key>PATH</key><string>%s</string></dict>\n' "$_path"
     printf '%s\n' '</dict></plist>'
   } > "$f_tmp"
   plutil -lint "$f_tmp" >/dev/null 2>&1 || { rm -f "$f_tmp"; echo "  ✗ 生成的 plist 语法错误：$f" >&2; return 1; }

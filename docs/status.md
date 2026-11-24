@@ -96,6 +96,7 @@
 | D0.83 | 托管产物变化免 --force | **完成** | `update` 收集上一版 lock 的 `renderedHashes`/`rendered` 作为「dia 托管」集合；托管文件内容变化自动覆盖（备份到 `backups/force-*`），非托管仍拒绝；测试：git 源改配方后 `update` 免 --force |
 | D0.82 | persona update 全 host 重渲染；冲突提示 --force | **完成** | `update()` 不再用 `rendered[0]` 推断单 host（多 host 的 dsh profile 以前永不刷新）；`E_CONFLICT` 文案补「--force 覆盖，先备份」；测试：opencode+dsh 双 host 更新 |
 | D0.81 | webhook 实测 + dsh 插件健壮性 | **完成** | webhook：修 `spawnSync` 缺失、channel 标注 `webhook`，本地 HTTP 服务端实测 2xx/不可达两态；dsh 安装器支持空 patch 层 `[]`（headless 默认），否则 YAML 双顶层节点解析失败；插件拆出纯函数 `board.js` 并加单测 |
+| D0.81 | plist PATH 能解析到 dia | **完成** | 生成调度条目时把 `~/.local/bin` + `dirname $(command -v dia)` + `DIA_JOB_EXTRA_PATH` 写进 PATH（此前 homebrew-first，dia 只装在 fnm/nvm 的机器上定时任务找不到 `dia`） |
 | D0.80 | msg 自动维护 + 回执口径 | **完成** | `msg-upkeep` 定时（`dia collab enable` 注册，300s：retry+escalate；disable 一并卸载）；`dia msg upkeep` 手动入口；SKILL 更新（`msg inbox --expose`/`seen`、`notified=` 语义、trace/stats、`--session`）；kit `dia-msg@0.2.1` |
 | D0.80 | job 根两侧对齐 + 副本随升级刷新 | **完成** | ① `jobRootResolved()` 读 `.rootpin` 指向的根（失效则静默回落），消除 `dia job` 委派时用错值反向覆盖 bash 的不一致；② `dia postinstall` / `dia update` 刷新 `$JOB_ROOT/{bin,lib}` 下的 `dia-job` 副本（install.sh 一次性拷贝，原来升级后裸跑仍是旧版）；③ doctor 新增 `job.copy`（只 warn） |
 | D0.79 | dsh 版 dia-inbox 插件 + 安装器 | **完成** | `kits/dia-msg/dsh/dia-inbox`（`systemPrompt.context` 注入未读行，只读 board、失败静默）；`dia msg dsh install --profile <p>`（默认 dry-run；复制 → `dsh plugin add` → 追加 cordis.patch.yml → `--dump-config` 校验，改前备份）；测试 3 例 |

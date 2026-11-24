@@ -32,6 +32,23 @@ dia_job_main_checkout_of() {
   printf '%s' "$abs"
 }
 
+# 复合命令兜底：按 token 找**已存在**的绝对路径（跳过 /dev、/proc 等伪路径）。
+# 只用于「判稳定性」，不执行命令、不展开变量；找不到就返回空（调用方按 unknown 保守处理）。
+_dia_job_extract_fallback() {
+  local cmd="${1:-}" tok
+  [ -n "$cmd" ] || return 0
+  for tok in $(printf '%s' "$cmd" | tr ' ' '\n'); do
+    tok="${tok#\'}"; tok="${tok%\'}"; tok="${tok#\"}"; tok="${tok%\"}"
+    case "$tok" in
+      /*) : ;;
+      *) continue ;;
+    esac
+    case "$tok" in /dev/*|/proc/*|/sys/*|/private/dev/*|/private/proc/*) continue ;; esac
+    [ -e "$tok" ] && { printf '%s' "$tok"; return 0; }
+  done
+  return 0
+}
+
 # 提取注册命令中的首个绝对路径；对命令替换只识别全局稳定入口目录。
 dia_job_extract_target() {
   local cmd="${1:-}" entry refhit
@@ -43,11 +60,17 @@ dia_job_extract_target() {
       refhit="$(printf '%s' "$cmd" | grep -oE "'[^']+'" | tr -d "'" | while IFS= read -r x; do
         case "$x" in "$entry"/*) printf '%s' "$x"; break ;; esac
       done)"
-      [ -n "$refhit" ] && printf '%s' "$refhit"
+      [ -n "$refhit" ] && { printf '%s' "$refhit"; return 0; }
+      _dia_job_extract_fallback "$cmd"
       return 0 ;;
   esac
   case "$cmd" in
-    *'$('*|*'`'*|*'>'*|*'<'*|*';'*|*'|'*|*'&'*) return 0 ;;
+    *'`'*|*'>'*|*'<'*|*';'*|*'|'*|*'&'*)
+      # 复合命令（&&、;、管道、重定向）此前一律判 unknown → doctor 每次报
+      # 「未提取到绝对路径」的 noise（2026-11-24 实测 nm-check / nx-cache-measure）。
+      # 改为**从 token 里找已存在的绝对路径**；找不到仍返回空（保守，不猜）。
+      _dia_job_extract_fallback "$cmd"
+      return 0 ;;
   esac
   bash -c '
     c="$1"

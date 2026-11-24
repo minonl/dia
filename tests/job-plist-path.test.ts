@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -27,8 +27,18 @@ function installWithPath(pathPrefix: string, extraEnv: Record<string, string> = 
     env,
   });
   const plist = join(home, "Library", "LaunchAgents", "local.dia-job-t-path.plist");
-  return { status: r.status, stdout: r.stdout, stderr: r.stderr, plist, home, root };
+  // 测试会真的 bootstrap 一个 LaunchAgent（macOS）→ 必须回收，否则会残留
+  // `local.dia-job-t-path` 指向临时目录，让真机 doctor 永久报「已加载但未登记」（2026-11-24 实测）。
+  installed.push({ env });
+  return { status: r.status, stdout: r.stdout, stderr: r.stderr, plist, home, root, env };
 }
+
+const installed: Array<{ env: Record<string, string> }> = [];
+afterAll(() => {
+  for (const { env } of installed) {
+    spawnSync(BASH, [script, "uninstall", "t-path"], { env, encoding: "utf8" });
+  }
+});
 
 describe("plist PATH 含 dia 目录（E）", () => {
   test("dia 只在自定义目录 → PATH 里带上该目录", () => {

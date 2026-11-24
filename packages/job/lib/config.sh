@@ -13,6 +13,11 @@ dia_job_load_config() {
       \"*\") v="${v#\"}"; v="${v%\"}" ;;
       \'*\') v="${v#\'}"; v="${v%\'}" ;;
     esac
+    # `~` 展开（文档/示例里写的是 ~/...；不展开会在 cwd 建出字面 `~` 目录）
+    case "$v" in
+      "~/"*) v="$HOME/${v#\~/}" ;;
+      "~")   v="$HOME" ;;
+    esac
     if [ -z "${!k:-}" ]; then export "$k=$v"; fi
   done < "$f"
 }

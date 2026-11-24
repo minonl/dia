@@ -25,11 +25,31 @@ dia-job gc [--days N] [--dry-run]
 
 Exit codes: `0/1/2/3/4/5` (same as yan-task).
 
+## 根解析优先级（2026-11-24）
+
+裸跑 `dia-job`（不经 `dia` 委派）时按以下顺序取根，`dia-job root --json` 会回显命中的 `source`：
+
+1. **真实 env** `DIA_JOB_ROOT`
+2. **真实 env** `YAN_DATA_ROOT`（旧变量兼容）
+3. **有效 `.rootpin`**（`<base>/job/.rootpin`，指向的目录必须存在）
+4. **真实 env** `DIA_ROOT` / `DIA_DATA_DIR` → `<base>/job`
+5. **config** `~/.config/dia-job/config` 里的 `DIA_JOB_ROOT`
+6. legacy `~/.local/share/dia-job`（仅当 `<base>/job` 不存在）
+7. 默认 `<base>/job`（`base` 默认 `~/.dia`）
+
+注意事项：
+
+- **config 里的根不会覆盖 pin**：有 `.rootpin` 时 config 的 `DIA_JOB_ROOT` 被忽略（会打一行 warn）。
+  迁移后请删掉 config 里那一行，或 `dia job migrate --from <旧根>`。
+- **config 里的值不算「显式指定」**：`E_JOB_ROOT_EPHEMERAL` 门控只认真实 env；
+  沙箱/容器请用 `DIA_JOB_ROOT=…` 或 `DIA_JOB_NO_LAUNCHD=1` / `DIA_JOB_ALLOW_EPHEMERAL=1`。
+- config 值支持 `~/` 展开。
+
 ## Configuration (P2)
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `DIA_JOB_ROOT` | `YAN_DATA_ROOT` if set, else `~/.local/share/dia-job` | 数据根（旧数据根用全局 config 显式指定） |
+| `DIA_JOB_ROOT` | 见下方「根解析优先级」 | 数据根；显式设置（env）优先级最高 |
 | `DIA_JOB_LABEL_PREFIX` | `local.dia-job-` | launchd/cron label 前缀；新部署可用 `local.dia-job-` |
 | `DIA_JOB_OWN_TASKS` | 空 | 本仓自有任务名（空格分隔）；不再硬编码 yan 业务任务 |
 | `DIA_JOB_NO_LAUNCHD` | 继承 `YAN_TASK_NO_LAUNCHD` / `DIA_JOB_NO_SCHED` | 测试隔离：**不写任何调度条目**（launchd / crontab / systemd） |

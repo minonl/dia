@@ -186,6 +186,47 @@ function installShadowCheck(): Check {
 }
 
 /**
+ * job.health：已登记任务的**最近一次运行结论**（只读 state，不执行任何东西）。
+ * 为什么需要：`dia doctor` 曾出现「persona 全绿 verdict=ok，但 selfcheck 连红 20h / 2 个 job 未加载」，
+ * 诊断面缺了 job 这一层。这里只做**只读聚合**，且只判 warn —— 不改变 verdict 分布。
+ */
+export function jobHealthCheck(): Check {
+  const name = "job.health";
+  const root = job.jobRootResolved();
+  const reg = join(root, "tasks", "registry.json");
+  if (!existsSync(reg)) return { name, status: "ok", detail: `无 registry（${root}）` };
+  let tasks: Record<string, any> = {};
+  try {
+    tasks = JSON.parse(readFileSync(reg, "utf8")).tasks || {};
+  } catch {
+    return { name, status: "warn", detail: `registry 解析失败：${reg}` };
+  }
+  const names = Object.keys(tasks);
+  if (!names.length) return { name, status: "ok", detail: "未登记任务" };
+  const bad: string[] = [];
+  for (const n of names) {
+    const f = join(root, "tasks", `${n}.state.jsonl`);
+    if (!existsSync(f)) { bad.push(`${n}: 无 state`); continue; }
+    const lines = readFileSync(f, "utf8").trim().split("\n").filter(Boolean);
+    if (!lines.length) { bad.push(`${n}: 空 state`); continue; }
+    try {
+      const j = JSON.parse(lines[lines.length - 1]);
+      const verdict = String(j?.verdict || "");
+      if (verdict && verdict !== "ok") bad.push(`${n}: ${verdict}${j?.type ? `（${j.type}）` : ""}`);
+    } catch {
+      bad.push(`${n}: state 损坏`);
+    }
+  }
+  if (!bad.length) return { name, status: "ok", detail: `${names.length} 个任务最近一次均 ok` };
+  const shown = bad.slice(0, 4).join("; ");
+  return {
+    name,
+    status: "warn",
+    detail: `${bad.length}/${names.length} 个任务最近一次非 ok：${shown}${bad.length > 4 ? " …" : ""}（看日志：dia job logs <name>）`,
+  };
+}
+
+/**
  * job.copy：`$JOB_ROOT/bin/dia-job` 副本是否跟随当前包版本。
  * 副本由 install.sh 一次性拷入，`dia update` 不会动它 → 升级后裸跑可能仍是旧逻辑。
  * 只 warn（不判 fail）：不影响 `dia job`（走包内副本），且自动修复在 postinstall/update。
@@ -470,6 +511,7 @@ export async function run(opts: { persona?: string } = {}): Promise<{
   checks.push(bootstrapCheck());
   checks.push(jobRootCheck());
   checks.push(jobCopyCheck());
+  checks.push(jobHealthCheck());
   checks.push(collabInboxCheck());
 
   const wt = join(install, "packages/wt/bin/dia-wt");

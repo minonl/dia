@@ -48,10 +48,32 @@ export function dataRootPath(): string {
   return process.env.DIA_ROOT || process.env.DIA_HOME || join(homedir(), ".dia");
 }
 
-export type JobRootSource = "env" | "pin" | "legacy" | "next";
+export type JobRootSource = "env" | "pin" | "config" | "legacy" | "next";
 
 /** 落钉文件：一旦存在，根就固定在新根，**永不回退 legacy**（迁移完成后由 `job install`/`migrate` 写入）。 */
 export const jobPinFile = () => join(paths.jobRoot(), ".rootpin");
+
+/**
+ * 读全局 config（`$DIA_JOB_CONFIG` 或 `~/.config/dia-job/config`）。
+ * 与 `packages/job/lib/config.sh` 同口径：只认 `DIA_JOB_*` 键、纯 KEY=value、支持 `~/` 展开。
+ * 为什么 TS 也要读：bash 侧早就读了，TS 不读就会出现「裸跑读 config、`dia job` 读 <diaHome>/job」的双来源。
+ */
+export function readJobConfig(): Record<string, string> {
+  const file = process.env.DIA_JOB_CONFIG
+    || join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "dia-job", "config");
+  const out: Record<string, string> = {};
+  try {
+    for (const raw of readFileSync(file, "utf8").split("\n")) {
+      const m = /^\s*(DIA_JOB_[A-Z0-9_]+)\s*=\s*(.*?)\s*$/.exec(raw.replace(/\r$/, ""));
+      if (!m) continue;
+      let v = m[2].replace(/^(["'])(.*)\1$/, "$2");
+      if (v === "~") v = homedir();
+      else if (v.startsWith("~/")) v = join(homedir(), v.slice(2));
+      out[m[1]] = v;
+    }
+  } catch { /* 无配置 */ }
+  return out;
+}
 
 export function readJobPin(): { root: string; at?: string } | null {
   try {
@@ -73,8 +95,12 @@ export function pinJobRoot(root = paths.jobRoot()): void {
 /** 根来源：env 显式 > legacy 兼容 > 新根。沙箱（临时数据根/HOME）**永不回退 legacy**。 */
 export function jobRootSource(): JobRootSource {
   if (process.env.DIA_JOB_ROOT) return "env";
+  const pin = readJobPin();
+  if (pin && existsSync(pin.root)) return "pin"; // 有效 pin：固定新根，永不回退 legacy
   const next = paths.jobRoot();
-  if (readJobPin()) return "pin"; // 已落钉：固定新根，永不回退 legacy
+  // 真实 env 的基目录（DIA_ROOT/DIA_DATA_DIR）压过 config（与 bash ③ 对齐）
+  if (process.env.DIA_ROOT || process.env.DIA_DATA_DIR) return "next";
+  if (readJobConfig().DIA_JOB_ROOT) return "config";
   if (isEphemeralPath(dataRootPath()) || isEphemeralPath(homedir())) return "next";
   return !existsSync(next) && legacyJobRoots().some((p) => existsSync(p)) ? "legacy" : "next";
 }
@@ -87,6 +113,9 @@ export function jobRootResolved(): string {
   // 不读 pin 就会用错值反向覆盖 bash 里正确的 pin（#239 残留 → 真 split-brain）。
   const pin = readJobPin();
   if (pin && existsSync(pin.root)) return pin.root;
+  if (process.env.DIA_ROOT || process.env.DIA_DATA_DIR) return paths.jobRoot();
+  const cfgRoot = readJobConfig().DIA_JOB_ROOT;
+  if (cfgRoot) return cfgRoot;
   if (jobRootSource() !== "legacy") return paths.jobRoot();
   return legacyJobRoots().find((p) => existsSync(p)) ?? legacyJobRoot();
 }

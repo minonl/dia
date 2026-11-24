@@ -582,18 +582,31 @@ cmd_doctor() {
   #    背景：`discover` 曾用正则扫目录「发现」任务，与 registry 形成两个事实源 →
   #    登记了却看不见 / 目录有却查不到。现已改 registry 优先，此处再加体检项兜底。
   if [ -f "$REG" ]; then
-    local reglabels loadlabels
+    # ⚠️ 判据必须用**平台载体 + 显式域**（2026-11-24 修，实测全量误报）：
+    #    旧实现 `launchctl list | grep -E '^com\.'` 有两个硬伤——
+    #      ① 前缀写死 `com.`，而本机 label 前缀是 `local.dia-job-` → 「已加载集合」恒空，
+    #         registry 里每条都被判成「已登记但未加载」（19/19 全量误报，doctor 永久 warn=1）；
+    #      ② `launchctl list` 只反映**调用者所在 bootstrap namespace**，后台/SSH 会话
+    #         看不见 gui 域的 LaunchAgent → 换会话跑就换一批误报。
+    #    ⇒ 改为逐条走 `_sched_state`（macOS = `launchctl print gui/$UID/<label>`；
+    #      linux = systemctl/cron），只有 `absent`（载体确实不在场）才算未加载。
+    local name label st onlyreg="" onlyload="" reglabels
     reglabels="$(json labels "$REG" "$DIA_JOB_LABEL_PREFIX" 2>/dev/null | sort)"
-    loadlabels="$(launchctl list 2>/dev/null | awk '{print $3}' | grep -E '^com\.' | sort)"
-    local onlyreg onlyload
-    onlyreg="$(comm -23 <(printf '%s\n' "$reglabels") <(printf '%s\n' "$loadlabels") 2>/dev/null | grep -v '^$')"
-    # 只报**我们前缀**的（local.dia-job.* / com.example.*）—— 第三方 App（ssh-agent/Oray/深信服…）
-    # 未登记属正常，不该告警（2026-10-12 实测：不加范围会刷一堆无关项）。
-    local pfx_re
-    pfx_re="$(printf '%s' "$DIA_JOB_LABEL_PREFIX" | sed 's/\./\\./g')"
-    onlyload="$(comm -13 <(printf '%s\n' "$reglabels") <(printf '%s\n' "$loadlabels") 2>/dev/null | grep -v '^$' | grep -E "^${pfx_re}" | head -10)"
+    while IFS=$'\t' read -r name label _adopted; do
+      [ -n "$label" ] || continue
+      st="$(_sched_state "$name" "$label")"
+      [ "$st" = absent ] && onlyreg="${onlyreg}${label}"$'\n'
+    done <<< "$(json selfcheck-rows "$REG" "$DIA_JOB_LABEL_PREFIX" 2>/dev/null)"
+    if [ "$PLATFORM" = macos ]; then
+      # 「已加载但未登记」= 前缀属于我们、但 registry 里没有（不纳管 → list 看不见）
+      local loadlabels pfx_re
+      loadlabels="$(launchctl list 2>/dev/null | awk '{print $3}' | sort)"
+      pfx_re="$(printf '%s' "$DIA_JOB_LABEL_PREFIX" | sed 's/\./\\./g')"
+      onlyload="$(comm -13 <(printf '%s\n' "$reglabels") <(printf '%s\n' "$loadlabels") 2>/dev/null | grep -v '^$' | grep -E "^${pfx_re}" | head -10)"
+    fi
+    onlyreg="$(printf '%s' "$onlyreg" | grep -v '^$' || true)"
     if [ -n "$onlyreg" ]; then
-      echo "  ⚠️ 已登记但未加载（selfcheck 会重建）："; printf '%s\n' "$onlyreg" | sed 's/^/      /'; warn=$((warn+1))
+      echo "  ⚠️ 已登记但未加载（载体不在场）："; printf '%s\n' "$onlyreg" | sed 's/^/      /'; warn=$((warn+1))
     fi
     if [ -n "$onlyload" ]; then
       echo "  ⚠️ 已加载但未登记（不纳管 → list 看不见）："; printf '%s\n' "$onlyload" | sed 's/^/      /'; warn=$((warn+1))

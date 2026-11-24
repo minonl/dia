@@ -9,10 +9,14 @@ import * as config from "./config.ts";
 import * as active from "./active.ts";
 import { parseJsonc, setTopLevelKey } from "./jsonc.ts";
 import * as paths from "./paths.ts";
+import * as access from "./persona-access.ts";
 
 // 目录惰性解析（测试与多 persona 场景 env 会变）
 const dataDir = () => paths.diaHome();
 const cacheDir = () => paths.srcCacheDir();
+// 「展开 ~ 用的家目录」：DIA_HOME 优先（测试隔离），只用于 persona 声明的路径（data_root / files.to）
+const homeDir = () => process.env.DIA_HOME || homedir();
+const shaStr = (s: string) => createHash("sha256").update(s).digest("hex");
 const opencodeAgents = () => process.env.DIA_OPENCODE_AGENTS_DIR || join(paths.xdgConfig(), "opencode", "agents");
 const dshProfiles = () => process.env.DIA_DSH_PROFILES_DIR || join(homedir(), ".dsh", "profiles");
 // codex 没有「profile」概念，隔离单位是 HOME：codex 读 $CODEX_HOME/AGENTS.md（默认 $HOME/.codex），
@@ -57,6 +61,8 @@ export interface Manifest {
   commands?: { name: string; entry: string; runtime?: "bun" | "node" | "bash"; env?: Record<string, string> }[];
   knowledge?: string[];
   data_root?: string;
+  /** 数据根授权：由 dia 合成为宿主的 permissions 规则（见 docs/persona-install.md §5.5） */
+  access?: { read?: boolean; write?: boolean; env?: boolean };
   env?: { files?: string[]; keys?: string[] };
   config?: { file: string; jsonc?: boolean; set: Record<string, unknown> }[];
   capabilities?: Record<string, unknown>;
@@ -75,6 +81,46 @@ export interface Installed {
   /** 来源 commit（git 源 = rev-parse HEAD；本地目录 = --short HEAD 或 "local"；dry-run = "dry-run"）。
    *  CLI 展示与 persona check 走同一条信息，避免「undefined」。 */
   commit: string;
+  /** 数据根授权合成结果（未声明 access 时不出现） */
+  access?: AccessReport;
+}
+
+export interface AccessReport {
+  declared: boolean;
+  added: number;
+  skipped: number;
+  root: string | null;
+  /** 需要人看的告警（host 不支持 / write 无 read / root 尚不存在），CLI 默认输出 */
+  warnings: string[];
+}
+
+/** access 声明的告警（不改行为，只说清楚「你以为生效了但其实没有」的情况）。 */
+function accessWarnings(m: Manifest, hosts: string[], root: string | null): string[] {
+  const w: string[] = [];
+  for (const h of hosts) {
+    if (h === "dsh" || h === "codex") w.push(`access 对 host=${h} 本期不生效`);
+  }
+  if (m.access?.write === true && m.access?.read !== true) {
+    w.push("access: write=true 但 read!=true（只加写规则，读仍按宿主默认）");
+  }
+  if (root && !existsSync(root)) w.push(`access.data_root 尚不存在：${root}`);
+  return w;
+}
+
+function planAccess(m: Manifest, hosts: string[]): { state: access.AccessState; warnings: string[] } {
+  const state = access.inspectAccess(m, homeDir());
+  return { state, warnings: state.declared ? accessWarnings(m, hosts, state.root) : [] };
+}
+
+/** 合成 opencode entry 的期望字节（未声明 access → null，保持零回归）。 */
+function composeEntry(m: Manifest, state: access.AccessState, entryAbs: string): access.ComposeResult | null {
+  if (!state.declared) return null;
+  return access.composeAgentText(readFileSync(entryAbs, "utf8"), {
+    id: m.id,
+    dataRoot: String(m.data_root),
+    access: m.access ?? {},
+    homedir: homeDir(),
+  });
 }
 
 function shaFile(p: string): string {
@@ -107,6 +153,8 @@ export function readManifest(dir: string): Manifest {
   if (m.kind !== "persona" && m.kind !== "kit") throw new Error("E_MANIFEST: kind must be persona|kit");
   if (!m.id || !/^[a-z0-9][a-z0-9-]*$/.test(m.id)) throw new Error("E_MANIFEST: bad id");
   if (!m.version || !/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(m.version)) throw new Error("E_MANIFEST: bad version");
+  // access 声明在这里就校验（类型 / data_root 路径 / 逃逸），保证所有入口 fail closed
+  access.inspectAccess(m, homeDir());
   return m;
 }
 
@@ -169,6 +217,8 @@ export function install(from: string, opts: { ref?: string; host?: string; home?
   if (!target.startsWith(resolve(dataDir(), "personas") + sep)) throw new Error("E_MANIFEST: version escapes install dir");
   const hosts = opts.host ? [opts.host] : (m.hosts ?? ["opencode"]);
   for (const h of hosts) assertHost(h);
+  const acc = planAccess(m, hosts);
+  let composed: access.ComposeResult | null = null;
   const rendered: string[] = [];
   const overwrites: string[] = [];
 
@@ -194,8 +244,11 @@ export function install(from: string, opts: { ref?: string; host?: string; home?
     const srcReal = realpathSync(src.dir);
     const entryReal = realpathSync(entryAbs);
     if (!entryReal.startsWith(srcReal + sep)) throw new Error("E_MANIFEST: entry escapes persona dir");
+    // 期望字节：声明了 access 时是「源 + 合成规则」，否则就是源字节（零回归）
+    composed = composeEntry(m, acc.state, entryAbs);
+    const expectedEntry = composed ? Buffer.from(composed.text) : readFileSync(entryAbs);
     const dest = join(opencodeAgents(), `${m.id}.md`);
-    if (existsSync(dest) && !readFileSync(dest).equals(readFileSync(entryAbs))) {
+    if (existsSync(dest) && !readFileSync(dest).equals(expectedEntry)) {
       // 手改/旧版本的产物：默认拒绝；--force 才覆盖，且覆盖前先备份（覆盖不丢东西）
       if (!opts.force && !ownedRendered.has(resolve(dest))) throw new Error("E_CONFLICT: agent file exists and differs; remove it first (或 --force 覆盖，覆盖前会备份)");
       overwrites.push(dest);
@@ -224,10 +277,14 @@ export function install(from: string, opts: { ref?: string; host?: string; home?
     }
   }
 
+  const report: AccessReport | undefined = acc.state.declared
+    ? { declared: true, added: composed?.added ?? 0, skipped: composed?.skipped ?? 0, root: acc.state.root, warnings: acc.warnings }
+    : undefined;
+
   if (opts.dryRun) {
     if (hosts.includes("opencode")) rendered.push(join(opencodeAgents(), `${m.id}.md`));
     if (hosts.includes("codex")) rendered.push(join(codexHome!, ".codex", "AGENTS.md"));
-    return { id: m.id, version: slot, dir: target, rendered, hash: "dry-run", commit: src.commit, overwrites };
+    return { id: m.id, version: slot, dir: target, rendered, hash: "dry-run", commit: src.commit, overwrites, ...(report ? { access: report } : {}) };
   }
 
   // 原子安装：staging → 写 lock → rename；同槽位不同内容判冲突，绝不原地覆盖
@@ -280,7 +337,9 @@ export function install(from: string, opts: { ref?: string; host?: string; home?
     }
     const entryAbs2 = resolve(target, entry!);
     if (!entryAbs2.startsWith(resolve(target) + sep)) throw new Error("E_MANIFEST: entry escapes persona dir");
-    cpSync(entryAbs2, dest);
+    // 声明了 access → 写合成后的字节；否则按原字节复制（零回归）
+    if (composed) writeFileSync(dest, composed.text);
+    else cpSync(entryAbs2, dest);
     rendered.push(dest);
   }
 
@@ -362,9 +421,10 @@ export function install(from: string, opts: { ref?: string; host?: string; home?
   const renderedHashes: Record<string, string> = {};
   for (const f of rendered) renderedHashes[f] = shaFile(f);
   writeFileSync(join(target, "dia.lock"), JSON.stringify({ id: m.id, version: m.version, slot, commit: src.commit, source: from, ref: opts.ref ?? null, installedAt: new Date().toISOString(), hash, rendered, renderedHashes, renderedDirs, kits: kitRefs,
+    access: { declared: acc.state.declared, added: composed?.added ?? 0, skipped: composed?.skipped ?? 0, root: acc.state.root },
     content: { knowledge: m.knowledge ?? [], commands: m.commands ?? [], dataRoot: m.data_root ?? null, env: m.env ?? null, rendered: inline, config: appliedConfig },
   }, null, 1));
-  return { id: m.id, version: slot, dir: target, rendered, hash, commit: src.commit, overwrites, msgKit };
+  return { id: m.id, version: slot, dir: target, rendered, hash, commit: src.commit, overwrites, msgKit, ...(report ? { access: report } : {}) };
 }
 
 export function list(): { id: string; versions: string[] }[] {
@@ -488,6 +548,24 @@ export function verify(id: string, version?: string): VerifyResult {
   for (const [f, expectedHash] of Object.entries(lock.renderedHashes || {})) {
     if (!existsSync(f)) issues.push(`产物缺失：${f}`);
     else if (shaFile(f) !== expectedHash) issues.push(`产物被改动：${f}`);
+  }
+
+  // access 合成与 lock 同步校验：源没变但期望字节变了（dia 升级改了合成规则）⇒ 需要重渲染
+  try {
+    const m = JSON.parse(readFileSync(join(dir, "dia.json"), "utf8")) as Manifest;
+    const st = access.inspectAccess(m, homeDir());
+    if (st.declared) {
+      const entry = m.entry?.opencode;
+      const dest = join(opencodeAgents(), `${id}.md`);
+      if (entry && lock.renderedHashes?.[dest]) {
+        const want = composeEntry(m, st, resolve(dir, entry));
+        if (want && shaStr(want.text) !== lock.renderedHashes[dest]) {
+          issues.push(`access 合成与 lock 记录不一致（重跑 dia persona render ${id}）`);
+        }
+      }
+    }
+  } catch (e: any) {
+    issues.push(`access 合成校验失败：${e?.message ?? e}`);
   }
 
   // 宿主自管的 profile 目录（dsh 会在启动时重写 cordis.yml、装插件时改 package.json）：
@@ -636,7 +714,7 @@ export function create(id: string, opts: { dir?: string; hosts?: string[]; dryRu
 }
 
 export interface RenderDrift { path: string; action: "missing" | "changed" }
-export interface RenderResult { id: string; version: string; check: boolean; drift: RenderDrift[]; backups: string[]; msgKit?: { ok: boolean; reason?: string; kit?: string } }
+export interface RenderResult { id: string; version: string; check: boolean; drift: RenderDrift[]; backups: string[]; msgKit?: { ok: boolean; reason?: string; kit?: string }; access?: AccessReport }
 
 // 宿主会在自己的 profile 目录里改写/生成这些文件（dsh 每次启动重写 cordis.yml，
 // `dsh plugin --profile <id> add <pkg>` 会改 package.json 与锁文件），它们不属于渲染产物：
@@ -692,6 +770,11 @@ export function render(id: string, opts: { host?: string; home?: string; check?:
   const m = readManifest(dir);
   const hosts = opts.host ? [opts.host] : (m.hosts ?? ["opencode"]);
   for (const h of hosts) assertHost(h);
+  const acc = planAccess(m, hosts);
+  let composed: access.ComposeResult | null = null;
+  const report: AccessReport | undefined = acc.state.declared
+    ? { declared: true, added: 0, skipped: 0, root: acc.state.root, warnings: acc.warnings }
+    : undefined;
 
   const drift: RenderDrift[] = [];
   let agentSrc: string | null = null, agentDest: string | null = null;
@@ -705,8 +788,11 @@ export function render(id: string, opts: { host?: string; home?: string; check?:
     if (!agentSrc.startsWith(dir + sep)) throw new Error("E_MANIFEST: entry escapes persona dir");
     if (!existsSync(agentSrc)) throw new Error("E_MANIFEST: entry.opencode file missing");
     agentDest = join(opencodeAgents(), `${id}.md`);
+    // drift 比对用「合成期望」：源永远是未合成的，dest 是合成后的（幂等，不会叠加）
+    composed = composeEntry(m, acc.state, agentSrc);
+    const wantHash = composed ? shaStr(composed.text) : shaFile(agentSrc);
     if (!existsSync(agentDest)) drift.push({ path: agentDest, action: "missing" });
-    else if (shaFile(agentDest) !== shaFile(agentSrc)) drift.push({ path: agentDest, action: "changed" });
+    else if (shaFile(agentDest) !== wantHash) drift.push({ path: agentDest, action: "changed" });
   }
   if (hosts.includes("codex")) {
     const entry = m.entry?.codex;
@@ -736,7 +822,7 @@ export function render(id: string, opts: { host?: string; home?: string; check?:
       }
     }
   }
-  if (opts.check) return { id, version, check: true, drift, backups: [] };
+  if (opts.check) return { id, version, check: true, drift, backups: [], ...(report ? { access: report } : {}) };
 
   // persona 自带内容（skills/bin 软链）也要重渲染：切版本后软链可能仍指旧槽位，而内容相同 → 曾漏判
   const hostHasInline = hosts.some((h) => h === "opencode" || h === "dsh");
@@ -766,7 +852,11 @@ export function render(id: string, opts: { host?: string; home?: string; check?:
       backups.push(dest);
     }
   }
-  if (agentDest && agentSrc) { mkdirSync(dirname(agentDest), { recursive: true }); cpSync(agentSrc, agentDest); }
+  if (agentDest && agentSrc) {
+    mkdirSync(dirname(agentDest), { recursive: true });
+    if (composed) writeFileSync(agentDest, composed.text);
+    else cpSync(agentSrc, agentDest);
+  }
   if (codexDest && codexSrc) { mkdirSync(dirname(codexDest), { recursive: true }); cpSync(codexSrc, codexDest); }
   if (dshDest && dshSrc) {
     // 只覆盖 persona 自己写入的文件，绝不整树重建：profile 目录是宿主领地，
@@ -810,8 +900,12 @@ export function render(id: string, opts: { host?: string; home?: string; check?:
   if (codexDest) renderedHashes[codexDest] = shaFile(codexDest);
   const renderedDirs = [...(lock.renderedDirs ?? []).filter((d: any) => d.path !== dshDest)];
   if (dshDest) renderedDirs.push({ path: dshDest, hash: hashTree(dshDest) });
-  writeFileSync(lockPath, JSON.stringify({ ...lock, rendered, renderedHashes, renderedDirs }, null, 1));
-  return { id, version, check: false, drift, backups, msgKit };
+  // lock 里的 access 段跟着重渲染刷新（合成条数以本次 render 为准）
+  const accessLock = acc.state.declared
+    ? { declared: true, added: composed?.added ?? 0, skipped: composed?.skipped ?? 0, root: acc.state.root }
+    : { declared: false, added: 0, skipped: 0, root: null };
+  writeFileSync(lockPath, JSON.stringify({ ...lock, rendered, renderedHashes, renderedDirs, access: accessLock }, null, 1));
+  return { id, version, check: false, drift, backups, msgKit, ...(report ? { access: { ...report, added: composed?.added ?? 0, skipped: composed?.skipped ?? 0 } } : {}) };
 }
 
 export interface RenderDriftReport {

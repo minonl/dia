@@ -1574,6 +1574,7 @@ async function personaCli(argv: string[]): Promise<number> {
       out(asJson ? JSON.stringify(r) : `installed ${r.id}@${r.version} -> ${r.rendered.join(", ") || "(dry-run)"}` +
         (r.overwrites?.length ? `\n  ⚠ 覆盖 ${r.overwrites.length} 个已存在产物（已备份）：${r.overwrites.join(", ")}` : "") +
         (r.msgKit && !r.msgKit.ok ? `\n  ⚠ dia-msg 未启用：${r.msgKit.reason}` : ""));
+      for (const w of r.access?.warnings ?? []) if (!asJson) out(`  ⚠ ${w}`);
       if (!has(args, "--dry-run")) await autoIndexPersona(r.id);
       return 0;
     } catch (e: any) {
@@ -1705,6 +1706,7 @@ async function personaCli(argv: string[]): Promise<number> {
     } catch (e: any) {
       const m = e?.message || String(e);
       err(m);
+      if (m.startsWith("E_CONFLICT") || m.startsWith("E_MANIFEST")) return 32;
       return m.startsWith("E_SOURCE") ? 34 : 31;
     }
   }
@@ -1753,6 +1755,7 @@ async function personaCli(argv: string[]): Promise<number> {
       else if (r.check) out(r.drift.length ? `drift ${r.drift.length}:\n  ${r.drift.map((d: any) => `${d.action}: ${d.path}`).join("\n  ")}` : "ok（无 drift）");
       else out(`rendered ${r.id}@${r.version}${r.drift.length ? `（修复 ${r.drift.length} 处，备份 ${r.backups.length}）` : "（无变化）"}` +
         (r.msgKit && !r.msgKit.ok ? `\n  ⚠ dia-msg 未启用：${r.msgKit.reason}` : ""));
+      if (!asJson) for (const w of r.access?.warnings ?? []) out(`  ⚠ ${w}`);
       return r.check && r.drift.length ? 1 : 0;
     } catch (e: any) {
       const m = e?.message || String(e);

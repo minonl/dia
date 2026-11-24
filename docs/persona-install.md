@@ -71,6 +71,8 @@ dia --persona dabo doctor
     "dsh": "platform/dsh/dabo-persona"
   },
   "kits": ["core"],
+  "data_root": "~/.dabo-agent",
+  "access": { "read": true, "write": true, "env": false },
   "capabilities": {
     "tools": ["bash", "git"],
     "network": false,
@@ -250,6 +252,70 @@ dia --persona dabo todo list          # 委派到 scripts/dabo-task；退出码�
 | `commands[].env` | 注入到子进程（值支持 `~` 展开） |
 | 命名冲突 | 内置命令优先（`dia task` 是内置，persona 里请用 `todo` 这类不冲突的名字） |
 | 隔离 | 命令入口必须在 persona 根内（绝对路径 / `../` 穿越 → `E_DELEGATE_SCOPE`）；若 `env` 写死数据根（如 dabo 的 `DABO_ROOT`），会绕过 `DIA_DATA_DIR` 的测试隔离 |
+
+## 5.5 数据根授权：`access`（dia 合成 permissions，2026-11-24）
+
+persona 需要在宿主里读写自己的数据根时，**不要手写 permissions**——在 `dia.json` 里声明，
+由 `dia persona add / render` 合成进 opencode agent 文件的 frontmatter。手写的规则会和 dia
+的合成结果打架（重装必报 `E_CONFLICT`），也不好审计。
+
+```json
+{
+  "data_root": "~/.dabo-agent",
+  "access": { "read": true, "write": true, "env": false }
+}
+```
+
+| 字段 | 类型 | 缺省 | 含义 |
+|---|---|---|---|
+| `data_root` | string | — | 数据根，**必须**形如 `~/.<id>-<后缀>`（直挂家目录一层） |
+| `access.read` | boolean | `false` | 允许读 `<root>/**` |
+| `access.write` | boolean | `false` | 允许写 `<root>/**`（**false 时显式写 deny**） |
+| `access.env` | boolean | `false` | 允许读 `.env` / `.env.*`（false 时两条 ask 兜住） |
+
+`read`/`write`/`env` **三者必须都是布尔**；写字符串（如 `"false"`）或数字 → `E_MANIFEST`（退出 32）。
+
+### 5.5.1 合成规则（顺序固定，追加到 `permissions` 序列**尾部**）
+
+| # | 条件 | 规则 |
+|---|---|---|
+| 1 | 总是 | `external_directory <root>/** allow` |
+| 2 | `read=true` | `read <root>/** allow` |
+| 3 | `write` | `edit <root>/** allow`（true）/ `edit <root>/** deny`（false） |
+| 4 | `read=true` 且 `env!=true` | `read <root>/*.env ask`、`read <root>/*.env.* ask` |
+
+第 4 组必须排在第 2 条**之后**（宿主规则后写生效），否则会被 read allow 吃掉。
+`root` 写展开后的**绝对路径**；`env=true` 时不加第 4 组。
+
+### 5.5.2 结构处理
+
+- 只认文件首行 `---` 起始的 frontmatter；没有 `permissions:` 就在收尾 `---` 前新增；
+- `permissions: []` / `null` / 空 → 视为空列表，补序列；
+- 插在序列最后一项之后，`permissions:` 后面的其它顶层键（如 `browser: deny`）原样保留；
+- **幂等**：合成只作用于 persona **源 entry**，不作用于已渲染的 dest；重复 render 字节恒等；
+- **去重**：已存在同一 `(action, 归一化 resource, effect)` 就跳过。归一化只做三件事：`~`/`~/`、`$HOME`/`$HOME/` 展开；尾部后缀保持原样（`/**` 与 `/*` 是**不同**资源，不做包含推断）。
+
+### 5.5.3 失败矩阵（全部 fail closed：退出 32、不写盘、不改 lock）
+
+| 情形 | 结果 |
+|---|---|
+| `access` 存在但 `data_root` 缺失 | `E_MANIFEST` |
+| `data_root` 是相对路径 / `~user/x` / `~`（家目录本身）/ `~/repos/x`（不直挂） | `E_MANIFEST` |
+| `data_root` 含 `..` 段 或 glob 元字符 `* ? [ ] { }` | `E_MANIFEST` |
+| `data_root` 已存在且是 symlink / realpath 逃出家目录 / 不是目录 | `E_MANIFEST` |
+| 已有更宽的 `deny`（`action` 为 `*` 或目标 action，resource 为 `*` 或 root 的祖先 glob）会覆盖合成 allow | `E_MANIFEST` |
+| 已有同 `(action, resource)` 但 `effect` 不同 | `E_MANIFEST` + **行号**提示 |
+| frontmatter 结构不支持：flow-style `permissions: [ … ]`、V1 map（`permissions:` 下 `key: effect`）、tab 缩进、无 frontmatter、`permissions` 下非列表项 | `E_MANIFEST` |
+| `access.read/write/env` 非 boolean | `E_MANIFEST` |
+
+### 5.5.4 边界与告警
+
+- **本期只对 opencode 生效**：host 为 `dsh` / `codex` 时声明 `access` 只输出一行
+  `access 对 host=<x> 本期不生效`（不阻断安装）。dsh 的权限由 profile 插件决定，codex 没有同款 permissions 结构。
+- `access.write=true` 但 `read!=true` → 告警（只加写规则，读仍按宿主默认）；
+- `data_root` 尚不存在 → 告警（不拒绝：数据根通常由 persona 自己首次运行时创建）；
+- 合成的字节写进 dest，`dia.lock` 的 `renderedHashes` 与 `access: {declared, added, skipped, root}` 都记**合成后**的结果；
+  「已存在且不同」的冲突判断也按合成期望比较（否则重装必 `E_CONFLICT`）。
 
 ## 6. 当前缺口
 

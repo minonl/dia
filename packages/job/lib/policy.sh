@@ -57,9 +57,11 @@ dia_job_extract_target() {
   case "$cmd" in
     *'$('*)
       # 只提取引号内、位于稳定入口目录下的路径；不执行命令替换
-      refhit="$(printf '%s' "$cmd" | grep -oE "'[^']+'" | tr -d "'" | while IFS= read -r x; do
-        case "$x" in "$entry"/*) printf '%s' "$x"; break ;; esac
-      done)"
+      # ⚠️ 不能写成 `$( … while read x; do case "$x" in "$entry"/*) … esac; done )`：
+      #    bash 3.2（macOS 自带 /bin/bash，CI 用的就是它）会把 case 分支的 `)` 当成命令替换的
+      #    结束符 → "syntax error near unexpected token `newline'"（2026-11-24 CI 实测）。
+      #    改用 awk 单行匹配，bash 3.2 / 5.x 都稳。
+      refhit="$(printf '%s' "$cmd" | grep -oE "'[^']+'" | tr -d "'" | awk -v e="$entry/" 'index($0, e) == 1 { print; exit }')"
       [ -n "$refhit" ] && { printf '%s' "$refhit"; return 0; }
       _dia_job_extract_fallback "$cmd"
       return 0 ;;

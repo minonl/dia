@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -140,4 +140,42 @@ export function runJob(argv: string[]): number {
     return 1;
   }
   return r.status ?? 1;
+}
+
+
+/**
+ * 升级后刷新 `$JOB_ROOT/{bin,lib}` 下的 dia-job 副本（install.sh 布局的后续维护）。
+ *
+ * 为什么需要：副本由 `packages/job/install.sh` 一次性拷进去，
+ * 而 `dia update` / `dia postinstall` 都不会动它 → 升级后**裸跑 `dia-job` 仍是旧逻辑**
+ * （#231/#239 的修复对裸跑用户不生效，且与 `dia job` 的包内副本行为不一致）。
+ *
+ * 约束：只在副本**已存在**时覆盖（不新建副本、不碰 `~/.local/bin` 软链、不碰 legacy 根）；
+ * 内容相同则跳过；失败静默（doctor 的 job.copy 会提示）。
+ */
+export function refreshJobCopy(): { path: string; updated: boolean; reason?: string } | null {
+  const root = jobRootResolved();
+  const target = join(root, "bin", "dia-job");
+  if (!existsSync(target)) return null;
+  const here = dirname(fileURLToPath(import.meta.url));
+  const pkg = [
+    join(here, "..", "packages", "job"),       // dist/cli.js
+    join(here, "..", "..", "packages", "job"), // src/job.ts（repo / 测试）
+  ].find((p) => existsSync(join(p, "bin", "dia-job")));
+  if (!pkg) return { path: target, updated: false, reason: "包内副本未找到" };
+  let updated = false;
+  for (const rel of ["bin/dia-job", "lib/config.sh", "lib/policy.sh", "lib/json.mjs"]) {
+    const src = join(pkg, rel);
+    const dst = join(root, rel);
+    try {
+      const a = readFileSync(src);
+      const b = existsSync(dst) ? readFileSync(dst) : null;
+      if (b && a.equals(b)) continue;
+      mkdirSync(dirname(dst), { recursive: true });
+      writeFileSync(dst, a);
+      updated = true;
+    } catch { /* 单个文件失败不影响其它 */ }
+  }
+  if (updated) { try { chmodSync(target, 0o755); } catch { /* ignore */ } }
+  return { path: target, updated };
 }

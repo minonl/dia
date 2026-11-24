@@ -45,7 +45,7 @@ import * as task from "../../../src/task.ts";
 import * as team from "../../../src/team.ts";
 import { loadPrices } from "../../../src/pricing.ts";
 import { propose } from "../../../src/proposal.ts";
-import { runJob, runJobCapture, jobRootResolved } from "../../../src/job.ts";
+import { runJob, runJobCapture, jobRootResolved, refreshJobCopy } from "../../../src/job.ts";
 import * as service from "../../../src/service.ts";
 import { helpGate, helpRequested, renderHelp, warnUnknownFlags } from "./help.ts";
 
@@ -2087,6 +2087,8 @@ export async function main(rawArgv: string[]): Promise<number> {
     try {
       const b = defaultMsg.ensure(undefined, { force: true });
       out(b.ok ? `内置能力已同步（${b.kit}）` : `! 内置能力未装配：${b.reason}（修复：dia postinstall）`);
+      const jr = refreshJobCopy();
+      if (jr?.updated) out(`dia-job 副本已刷新（${jr.path}）`);
     } catch { /* 自举失败不影响升级结果 */ }
     return 0;
   }
@@ -2342,7 +2344,11 @@ export async function main(rawArgv: string[]): Promise<number> {
     const quiet = has(argv.slice(1), "--quiet");
     try {
       const r = defaultMsg.ensure(undefined, { force: true });
-      if (!quiet) out(r.ok ? `postinstall: kit=${r.kit}` : `postinstall: skipped（${r.reason}）`);
+      const jr = refreshJobCopy();
+      if (!quiet) {
+        out(r.ok ? `postinstall: kit=${r.kit}` : `postinstall: skipped（${r.reason}）`);
+        if (jr?.updated) out(`postinstall: dia-job 副本已刷新（${jr.path}）`);
+      }
     } catch (e: any) {
       if (!quiet) err(`postinstall: 跳过（${e?.message || e}）`);
     }

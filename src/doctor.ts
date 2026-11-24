@@ -6,6 +6,7 @@
 import { closeSync, existsSync, openSync, readFileSync, readSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import * as persona from "./persona.ts";
 import * as defaultMsg from "./default-msg.ts";
 import * as kit from "./kit.ts";
@@ -182,6 +183,30 @@ function installShadowCheck(): Check {
     status: "warn", // 脚本安装已降级为「开发/离线通道」，遮蔽只提示不判红
     detail: `安装类型不一致：install=${install}（${kind(installNpm)}）但 PATH dia=${binReal}（${kind(binNpm)}）；修复：${fix}`,
   };
+}
+
+/**
+ * job.copy：`$JOB_ROOT/bin/dia-job` 副本是否跟随当前包版本。
+ * 副本由 install.sh 一次性拷入，`dia update` 不会动它 → 升级后裸跑可能仍是旧逻辑。
+ * 只 warn（不判 fail）：不影响 `dia job`（走包内副本），且自动修复在 postinstall/update。
+ */
+function jobCopyCheck(): Check {
+  const name = "job.copy";
+  const root = job.jobRootResolved();
+  const copy = join(root, "bin", "dia-job");
+  if (!existsSync(copy)) return { name, status: "ok", detail: `无副本（未走 install.sh 布局；${root}）` };
+  const here = dirname(fileURLToPath(import.meta.url));
+  const pkg = [join(here, "..", "packages", "job"), join(here, "..", "..", "packages", "job")]
+    .find((p) => existsSync(join(p, "bin", "dia-job")));
+  if (!pkg) return { name, status: "ok", detail: "包内副本未找到（跳过）" };
+  try {
+    const a = readFileSync(join(pkg, "bin", "dia-job"));
+    const b = readFileSync(copy);
+    if (a.equals(b)) return { name, status: "ok", detail: `一致（${copy}）` };
+    return { name, status: "warn", detail: `副本落后于当前包：${copy}（修复：dia postinstall）` };
+  } catch (e: any) {
+    return { name, status: "warn", detail: `比对失败：${e?.message || e}` };
+  }
 }
 
 /** bootstrap：内置能力是否跟随当前包版本（升级 dia 后提示刷新，不需要用户手装）。 */
@@ -444,6 +469,7 @@ export async function run(opts: { persona?: string } = {}): Promise<{
   checks.push(installShadowCheck());
   checks.push(bootstrapCheck());
   checks.push(jobRootCheck());
+  checks.push(jobCopyCheck());
   checks.push(collabInboxCheck());
 
   const wt = join(install, "packages/wt/bin/dia-wt");

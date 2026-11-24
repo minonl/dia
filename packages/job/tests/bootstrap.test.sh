@@ -23,6 +23,9 @@ DR="$TD/yan agent data"          # ⚠️ 故意带空格（事故现场）
 export XDG_CONFIG_HOME="$TD/xdg"
 mkdir -p "$DR/tasks"
 export YAN_DATA_ROOT="$DR"
+# 显式钉住 job 根：开发者按 README 会 export DIA_JOB_ROOT（env 优先级最高），
+# 不隔离的话测试会把夹具装进**真实** job 根（2026-11-24 实测污染 registry）
+export DIA_JOB_ROOT="$DR"
 
 PASS=0; FAIL=0
 ok(){ echo "  ✓ $1"; PASS=$((PASS+1)); }

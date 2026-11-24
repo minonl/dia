@@ -206,9 +206,11 @@ export function jobHealthCheck(): Check {
   const bad: string[] = [];
   for (const n of names) {
     const f = join(root, "tasks", `${n}.state.jsonl`);
-    if (!existsSync(f)) { bad.push(`${n}: 无 state`); continue; }
+    const isService = String(tasks[n]?.type || "") === "service";
+    // service 是长驻进程：state 只在退出时写 → 刚装好/正在跑时天然没有 state，不该报「无 state」
+    if (!existsSync(f)) { if (!isService) bad.push(`${n}: 无 state`); continue; }
     const lines = readFileSync(f, "utf8").trim().split("\n").filter(Boolean);
-    if (!lines.length) { bad.push(`${n}: 空 state`); continue; }
+    if (!lines.length) { if (!isService) bad.push(`${n}: 空 state`); continue; }
     try {
       const j = JSON.parse(lines[lines.length - 1]);
       const verdict = String(j?.verdict || "");

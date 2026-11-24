@@ -50,6 +50,7 @@ Exit codes: `0/1/2/3/4/5` (same as yan-task).
 | Variable | Default | Meaning |
 |---|---|---|
 | `DIA_JOB_ROOT` | 见下方「根解析优先级」 | 数据根；显式设置（env）优先级最高 |
+| `DIA_JOB_EXTRA_PATH` | 空 | 追加进生成的 plist/systemd/cron 的 PATH（dia 装在非标准目录时用；`dia` 自身所在目录会自动带上） |
 | `DIA_JOB_LABEL_PREFIX` | `local.dia-job-` | launchd/cron label 前缀；新部署可用 `local.dia-job-` |
 | `DIA_JOB_OWN_TASKS` | 空 | 本仓自有任务名（空格分隔）；不再硬编码 yan 业务任务 |
 | `DIA_JOB_NO_LAUNCHD` | 继承 `YAN_TASK_NO_LAUNCHD` / `DIA_JOB_NO_SCHED` | 测试隔离：**不写任何调度条目**（launchd / crontab / systemd） |

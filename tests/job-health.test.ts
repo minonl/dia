@@ -61,6 +61,13 @@ describe("doctor job.health（只读、只 warn）", () => {
     expect(c.detail).toContain("无 state");
   });
 
+  test("service 没有 state → 不报（长驻进程只在退出时写 state）", async () => {
+    const { home, root, tasks } = setup();
+    reg("", join(tasks, "registry.json"), { tasks: { s: { type: "service" } } });
+    const c = await runWith(home, root);
+    expect(c.status).toBe("ok");
+  });
+
   test("service 的 stopped 也算非 ok（提示但不判 fail）", async () => {
     const { home, root, tasks } = setup();
     reg("", join(tasks, "registry.json"), { tasks: { s: { type: "service" } } });

@@ -164,7 +164,15 @@ describe("评审修复 3：ACP 指针 prompt 带真实 subject，并自动落 re
     expect(r.status).toBe(0);
     const id = firstId(r.stdout);
 
-    const ok = waitFor(() => existsSync(transcript));
+    // ⚠️ 不能只等文件存在：mock 会先创建文件、再写 prompt 行 → 存在但为空时读到 prompt=undefined
+    //   （2026-11-24 publish/test 反复 flaky：Received: undefined）
+    const ok = waitFor(() => {
+      try {
+        return readFileSync(transcript, "utf8").includes('"session/prompt"');
+      } catch {
+        return false;
+      }
+    });
     if (!ok) console.error("EVENTS:", JSON.stringify(events(), null, 1));
     expect(ok).toBe(true);
     const rows = readFileSync(transcript, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));

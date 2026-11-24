@@ -94,6 +94,7 @@
 | D0.85 | deps 版本通配（2.2.x） | **完成** | `parseSpec/matchesSpec`：登记 `2.2.x`/`2.2` 容忍补丁漂移，主.次不匹配仍 warn；`opencode` 登记改为 `host_cli:opencode@2.2.x`（实测 2.2.5 → ok） |
 | D0.84 | dsh 插件运行时验证 | **完成** | 用 `dia-test` profile（headless 模板 + `dsh-llm-pi-ai` 接乐言网关 `ai-models.infra.leyantech.com/v1`，key 走 `LEYAN_AI_MODELS_AUTH_TOKEN`）+ `dia msg dsh install`；`dsh headless` 实跑输出 `[dia-inbox] 有 7 条未读…`，证明 `systemPrompt.context` 注入生效 |
 | D0.83 | 托管产物变化免 --force | **完成** | `update` 收集上一版 lock 的 `renderedHashes`/`rendered` 作为「dia 托管」集合；托管文件内容变化自动覆盖（备份到 `backups/force-*`），非托管仍拒绝；测试：git 源改配方后 `update` 免 --force |
+| D0.83 | doctor 增加 job.health | **完成** | 只读聚合 `<jobRoot>/tasks/*.state.jsonl`：最近一次 `verdict != ok` / 无 state / state 损坏 → 一条 warn（点名最多 4 个 + `dia job logs` 提示）；不执行任何命令、不改 verdict |
 | D0.82 | persona update 全 host 重渲染；冲突提示 --force | **完成** | `update()` 不再用 `rendered[0]` 推断单 host（多 host 的 dsh profile 以前永不刷新）；`E_CONFLICT` 文案补「--force 覆盖，先备份」；测试：opencode+dsh 双 host 更新 |
 | D0.82 | TS 侧读 job config | **完成** | `readJobConfig()` 读 `$DIA_JOB_CONFIG` / `~/.config/dia-job/config`（只认 `DIA_JOB_*`、支持 `~` 展开）；`jobRootSource` 增加 `config`；解析顺序与 bash 对齐（env > 有效 pin > DIA_ROOT/DIA_DATA_DIR > config > legacy > next） |
 | D0.81 | webhook 实测 + dsh 插件健壮性 | **完成** | webhook：修 `spawnSync` 缺失、channel 标注 `webhook`，本地 HTTP 服务端实测 2xx/不可达两态；dsh 安装器支持空 patch 层 `[]`（headless 默认），否则 YAML 双顶层节点解析失败；插件拆出纯函数 `board.js` 并加单测 |

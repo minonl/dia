@@ -81,6 +81,12 @@ export function jobRootSource(): JobRootSource {
 
 export function jobRootResolved(): string {
   if (process.env.DIA_JOB_ROOT) return process.env.DIA_JOB_ROOT;
+  // 落钉优先（与 bash `_resolve_job_root` 的 ② 对齐）：pin 指向的根**存在**才采用；
+  // 指向已删除目录时静默回落（不抛），否则老机器会整体失效。
+  // 为什么必须读 pin.root：`dia job` 委派时把 `jobRootResolved()` 当 DIA_JOB_ROOT 传给 bash，
+  // 不读 pin 就会用错值反向覆盖 bash 里正确的 pin（#239 残留 → 真 split-brain）。
+  const pin = readJobPin();
+  if (pin && existsSync(pin.root)) return pin.root;
   if (jobRootSource() !== "legacy") return paths.jobRoot();
   return legacyJobRoots().find((p) => existsSync(p)) ?? legacyJobRoot();
 }

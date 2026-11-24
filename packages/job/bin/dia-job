@@ -47,34 +47,69 @@ ROOT_DIR="$(cd "$SELF_DIR/.." >/dev/null 2>&1 && pwd)"
 NODE_BIN="${DIA_JOB_NODE:-$(command -v node 2>/dev/null || command -v bun 2>/dev/null || true)}"
 JSON_HELPER="$SELF_DIR/../lib/json.mjs"
 json() { [ -n "$NODE_BIN" ] || { echo "dia-job: 找不到 node/bun（JSON 适配层需要）" >&2; return 3; }; "$NODE_BIN" "$JSON_HELPER" "$@"; }
+# 真实 env（必须在 config 之前抓）：config 注入的 DIA_JOB_* 不算「用户显式指定」。
+# 否则 config 里的 DIA_JOB_ROOT 会压掉 .rootpin / DIA_ROOT（沙箱逃逸 + 静默 split-brain，#231 延伸）。
+_ENV_JOB_ROOT="${DIA_JOB_ROOT:-}"
+_ENV_YAN_ROOT="${YAN_DATA_ROOT:-}"
+_ENV_DIA_ROOT="${DIA_ROOT:-}"
+_ENV_DIA_DATA_DIR="${DIA_DATA_DIR:-}"
 # shellcheck source=lib/config.sh
 . "$SELF_DIR/../lib/config.sh"
 dia_job_load_config
-# 数据根解析（2026-11-23，#231）：env > .rootpin > legacy > 新默认。
-# 为什么：`dia` CLI 委派时会传 DIA_JOB_ROOT，但**裸跑** `dia-job` 时原实现落到 legacy 根
-# （旧副本用 ~/.yan-agent、npm 副本用 ~/.local/share/dia-job），与 `dia job list` 读的根分叉
-# → 任务装进「看不见的根」，静默永远不跑。
-# 与 `src/paths.ts` 对齐：候选根认 DIA_ROOT / DIA_DATA_DIR（以前只认 DIA_JOB_ROOT/YAN_DATA_ROOT，
-# 这是沙箱与真机分叉的另一个来源）。
+# 数据根解析（2026-11-23 #231；2026-11-24 补 config 来源）：
+#   真实 env(DIA_JOB_ROOT|YAN_DATA_ROOT)
+#   > 有效 .rootpin（目录存在）
+#   > 真实 env(DIA_ROOT|DIA_DATA_DIR) → <base>/job
+#   > config 注入的 DIA_JOB_ROOT（~/.config/dia-job/config）
+#   > legacy（~/.local/share/dia-job，仅当 next 不存在）
+#   > <base>/job
+# 为什么要区分「真实 env」与「config 注入」：config 是文档化机制（不能删），但它压过 pin/DIA_ROOT
+# 会让 bash 侧与 `dia job list`（TS 侧不读 config）成为两个真值源 → 静默 split-brain。
 _resolve_job_root() {
-  if [ -n "${DIA_JOB_ROOT:-}" ]; then printf '%s|env' "$DIA_JOB_ROOT"; return 0; fi
-  if [ -n "${YAN_DATA_ROOT:-}" ]; then printf '%s|env' "$YAN_DATA_ROOT"; return 0; fi
-  local next="${DIA_ROOT:-${DIA_DATA_DIR:-$HOME/.dia}}/job" pin=""
+  local pin="" next legacy
+  # ① 真实 env：最高优先
+  if [ -n "$_ENV_JOB_ROOT" ]; then printf '%s|env' "$_ENV_JOB_ROOT"; return 0; fi
+  if [ -n "$_ENV_YAN_ROOT" ]; then printf '%s|env' "$_ENV_YAN_ROOT"; return 0; fi
+  # next 的基目录：真实 env 的 DIA_ROOT/DIA_DATA_DIR 优先，其次 config 注入的同名值，最后 ~/.dia
+  next="${_ENV_DIA_ROOT:-${DIA_ROOT:-${_ENV_DIA_DATA_DIR:-${DIA_DATA_DIR:-$HOME/.dia}}}}/job"
+  # ② 有效 pin（目录必须存在）
   if [ -f "$next/.rootpin" ]; then
     # 纯 sed 解析，不依赖 node（根还没定时就要用）
     pin="$(sed -n 's/.*"root"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$next/.rootpin" | head -1)"
-    if [ -n "$pin" ] && [ -d "$pin" ]; then printf '%s|pin' "$pin"; return 0; fi
+    if [ -n "$pin" ] && [ -d "$pin" ]; then
+      if [ -n "${DIA_JOB_ROOT:-}" ] && [ "$DIA_JOB_ROOT" != "$pin" ]; then
+        echo "dia-job: warn: config 的 DIA_JOB_ROOT（${DIA_JOB_ROOT}）与 .rootpin 不一致，已按 pin 走（请删掉 config 里那一行）" >&2
+      fi
+      printf '%s|pin' "$pin"; return 0
+    fi
     [ -n "$pin" ] && echo "dia-job: warn: rootpin 指向的根不存在（${pin}），已忽略" >&2
   fi
-  local legacy="${XDG_DATA_HOME:-$HOME/.local/share}/dia-job"
+  # ③ 真实 env 的基目录：压过 config（否则沙箱里 install 会写真根）
+  if [ -n "$_ENV_DIA_ROOT" ] || [ -n "$_ENV_DIA_DATA_DIR" ]; then
+    if [ -n "${DIA_JOB_ROOT:-}" ] && [ "$DIA_JOB_ROOT" != "$next" ]; then
+      echo "dia-job: warn: config 的 DIA_JOB_ROOT（${DIA_JOB_ROOT}）被 DIA_ROOT/DIA_DATA_DIR 覆盖 → 用 ${next}" >&2
+    fi
+    printf '%s|next' "$next"; return 0
+  fi
+  # ④ config 注入的根
+  if [ -n "${DIA_JOB_ROOT:-}" ]; then
+    if [ "$DIA_JOB_ROOT" != "$next" ] && [ -f "$next/tasks/registry.json" ]; then
+      echo "dia-job: warn: config 的 DIA_JOB_ROOT（${DIA_JOB_ROOT}）与默认根（${next}）不同，且默认根已有任务；迁移请 `dia job migrate --from ${DIA_JOB_ROOT}`" >&2
+    fi
+    printf '%s|config' "$DIA_JOB_ROOT"; return 0
+  fi
+  # ⑤ legacy：仅当 next 不存在
+  legacy="${XDG_DATA_HOME:-$HOME/.local/share}/dia-job"
   if [ ! -d "$next" ] && [ -d "$legacy" ]; then
     echo "dia-job: warn: 裸跑落到旧根 ${legacy}（dia 委派用 ${next}）；修复：dia job migrate --from ${legacy}" >&2
     printf '%s|legacy' "$legacy"; return 0
   fi
+  # ⑥ 默认
   printf '%s|next' "$next"
 }
 
-DIA_JOB_ROOT_GIVEN="${DIA_JOB_ROOT:-}"
+# 只有真实 env 才算「用户显式指定」（E_JOB_ROOT_EPHEMERAL 门控依赖它）
+DIA_JOB_ROOT_GIVEN="$_ENV_JOB_ROOT"
 _DIA_ROOT_RES="$(_resolve_job_root)"
 DIA_JOB_ROOT="${_DIA_ROOT_RES%|*}"
 DIA_JOB_ROOT_SOURCE="${_DIA_ROOT_RES##*|}"
@@ -350,6 +385,14 @@ cmd_logs() {  # logs <name> [-n N]：看某个任务最近在干什么（最直�
 cmd_doctor() {
   local bad=0 warn=0
   echo "══ dia-job doctor（${PLATFORM}）══"
+  # 根/来源/落钉：config 与 pin 是两个真值源，doctor 必须能一眼看见用的是哪个
+  local _pin=""
+  [ -f "$DIA_JOB_ROOT/.rootpin" ] && _pin="$(sed -n 's/.*"root"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$DIA_JOB_ROOT/.rootpin" | head -1)"
+  echo "  根: ${DIA_JOB_ROOT}（来源=${DIA_JOB_ROOT_SOURCE}${_pin:+；pin=${_pin}}）"
+  if [ -n "${DIA_JOB_ROOT:-}" ] && [ -n "$_pin" ] && [ "$_pin" != "$DIA_JOB_ROOT" ]; then
+    echo "  ⚠️ pin 与当前根不一致（pin=${_pin}）—— 可能存在 split-brain"
+    warn=$((warn+1))
+  fi
 
   # Linux/WSL：后端 = cron(periodic) + systemd(service) —— 检查项换成这一类（macOS 的
   # GUI App / launchd pid 判定在 Linux 上无意义，硬跑只会制造假阳性）。
@@ -1151,7 +1194,8 @@ cmd_install() {
   case "$DIA_JOB_ROOT" in
     /tmp/*|/var/folders/*|/private/var/folders/*|/run/user/*|/dev/shm/*)
       if [ -z "${DIA_JOB_ROOT_GIVEN:-}" ] && [ "${DIA_JOB_NO_LAUNCHD:-0}" != "1" ] && [ "${DIA_JOB_ALLOW_EPHEMERAL:-0}" != "1" ]; then
-        echo "  ✗ E_JOB_ROOT_EPHEMERAL: job 根在临时目录（$DIA_JOB_ROOT），拒绝注册真定时" >&2
+        echo "  ✗ E_JOB_ROOT_EPHEMERAL: job 根在临时目录（${DIA_JOB_ROOT}），拒绝注册真定时" >&2
+        echo "     （config 里的值不算显式指定；沙箱/测试请显式 DIA_JOB_ROOT=… 或 DIA_JOB_NO_LAUNCHD=1 / DIA_JOB_ALLOW_EPHEMERAL=1）" >&2
         return 9
       fi ;;
   esac

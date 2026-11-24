@@ -1,5 +1,6 @@
 # ~/.config/dia-job/config（纯 KEY=value；不 source、不执行）
-DIA_JOB_ROOT=~/.local/share/dia-job
+# 数据根：仅在「没有 .rootpin 且没有真实 env」时生效；有 pin 时不覆盖（见 README「根解析优先级」）
+# DIA_JOB_ROOT=~/.dia/job
 DIA_JOB_LABEL_PREFIX=local.dia-job-
 DIA_JOB_ENTRY_DIR=~/.local/share/dia-job/bin
 # DIA_JOB_OWN_TASKS=selfcheck update

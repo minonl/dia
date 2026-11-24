@@ -23,6 +23,17 @@ dia_job_cmd_path_class "bash '$DIA_JOB_ROOT/bin/entry'"; [ "$YP_CLASS" = ref-ent
 dia_job_cmd_path_class "bash '/opt/not-a-repo/x.sh'"; [ "$YP_CLASS" = non-repo-abs ] && ok "非仓绝对路径 → non-repo-abs" || bad "非仓分类=$YP_CLASS"
 dia_job_cmd_path_class "bash scripts/x.sh"; [ "$YP_CLASS" = unknown ] && ok "相对路径 → unknown" || bad "相对分类=$YP_CLASS"
 
+# 复合命令兜底（2026-11-24 修）：含 && / >> / 命令替换时，仍要提取**已存在的绝对路径**
+dia_job_cmd_path_class "cd $REPO && python3 tools/x.py --days 30 >> $TD/log 2>&1"
+[ "$YP_CLASS" = main-checkout ] && ok "复合命令（cd … && … >> …）→ 提取到主 checkout" || bad "复合命令分类=$YP_CLASS target=$YP_CMD_TARGET"
+
+ENTRY_REF="$TD/otherbin/ref"; mkdir -p "$TD/otherbin"; printf '#!/bin/bash\n' > "$ENTRY_REF"; chmod +x "$ENTRY_REF"
+dia_job_cmd_path_class "CODE=\"\$(bash '$ENTRY_REF' resolve)\" || CODE='$TD/nope'; bash \"\$CODE/x\""
+[ "$YP_CLASS" = non-repo-abs ] && ok "命令替换里的非入口绝对路径 → non-repo-abs" || bad "命令替换分类=$YP_CLASS target=$YP_CMD_TARGET"
+
+dia_job_cmd_path_class "cd /nonexistent-dir-xyz && echo hi >> /dev/null"
+[ "$YP_CLASS" = unknown ] && ok "无可提取的已存在路径 → unknown（不瞎猜）" || bad "兜底误判=$YP_CLASS target=$YP_CMD_TARGET"
+
 # 含空格路径
 mkdir -p "$TD/with space"; printf '#!/bin/bash\n' > "$TD/with space/x.sh"
 dia_job_extract_target "bash '$TD/with space/x.sh' --x" > "$TD/t"

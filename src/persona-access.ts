@@ -137,7 +137,7 @@ export function normalizeResource(resource: string, homedirPath: string): string
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-/** glob 里通配 token 的边界：`[` 未闭合时按字面量处理（与 globToRegExp 一致）。 */
+/** glob 里通配 token 的边界。opencode 只把 `*` / `?` 当通配：`[ ] ( ) { } |` 全是字面量。 */
 function globTokenBounds(q: string): { first: number; lastEnd: number; has: boolean } {
   let first = -1, lastEnd = -1;
   for (let i = 0; i < q.length; i++) {
@@ -145,18 +145,16 @@ function globTokenBounds(q: string): { first: number; lastEnd: number; has: bool
     if (c === "*" || c === "?") {
       if (first < 0) first = i;
       lastEnd = i + 1;
-    } else if (c === "[") {
-      const end = q.indexOf("]", i + 1);
-      if (end < 0) continue;
-      if (first < 0) first = i;
-      lastEnd = end + 1;
-      i = end;
     }
   }
   return { first, lastEnd, has: first >= 0 };
 }
 
-/** 权限 resource 的 glob → 正则（opencode 的 `*` 匹配 `/`，`?` 匹配单个字符）。 */
+/**
+ * 权限 resource 的 glob → 正则（opencode 的 `*` 匹配 `/`，`?` 匹配单个字符）。
+ * 注意：**`[ ]` 不是字符类**——opencode 只认 `*` / `?`，其余（含 `[ ] ( ) { } |`）按字面量转义。
+ * 曾把 `[-]` 当字符类，导致 `.rc[-]agent/**` 被误判为覆盖 `.rc-agent`（假阳性 deny 拒绝）。
+ */
 function globToRegExp(glob: string): RegExp {
   let re = "";
   for (let i = 0; i < glob.length; i++) {
@@ -166,15 +164,6 @@ function globToRegExp(glob: string): RegExp {
       while (glob[i + 1] === "*") i++;
     } else if (c === "?") {
       re += ".";
-    } else if (c === "[") {
-      const end = glob.indexOf("]", i + 1);
-      if (end < 0) re += "\\[";
-      else {
-        let cls = glob.slice(i + 1, end);
-        if (cls.startsWith("!")) cls = "^" + cls.slice(1);
-        re += "[" + cls.replace(/\\/g, "\\\\") + "]";
-        i = end;
-      }
     } else {
       re += escapeRe(c);
     }
@@ -187,8 +176,8 @@ function globToRegExp(glob: string): RegExp {
  * 先剥掉尾部 `/**` / `/*`（含连续），再用「字面前缀是祖先」+「glob 精确匹配 root/祖先」判定——
  * 不用字符串 startsWith 猜，`?` / `*` / 字符类这类都走得通。
  *
- * 注意：**花括号不是 glob**。opencode 把 `{ } [ ] ( ) |` 当字面量转义，只有 `*` / `?` 通配
- * （`[abc]` 字符类由 globToRegExp 处理）；因此 `{root,/tmp}/**` 是字面路径，**不**覆盖 root。
+ * 注意：**花括号不是 glob、方括号也不是字符类**。opencode 把 `{ } [ ] ( ) |` 当字面量转义，
+ * 只有 `*` / `?` 通配；因此 `{root,/tmp}/**` 与 `root[-]agent/**` 都是字面路径，**不**覆盖 root。
  */
 export function singleCovers(pattern: string, root: string): boolean {
   let q = pattern.trim();
@@ -200,7 +189,7 @@ export function singleCovers(pattern: string, root: string): boolean {
     else break;
     if (!q || q === "/") return true;
   }
-  const firstGlob = q.search(/[*?\[]/);
+  const firstGlob = q.search(/[*?]/);
   if (firstGlob === 0) return true; // 以通配开头 ⇒ 保守视为覆盖整棵树
   const prefix = firstGlob < 0 ? q : q.slice(0, firstGlob);
   const base = prefix.endsWith("/") ? prefix.slice(0, -1) : prefix;
@@ -208,7 +197,7 @@ export function singleCovers(pattern: string, root: string): boolean {
   if (root === base || root.startsWith(base + "/")) return true;
   const re = globToRegExp(q);
   if (re.test(root)) return true;
-  // 祖先目录也可能被 glob 命中（如 `~/*` 剥掉 `/*` 后是家目录本身，已由前缀覆盖；这里兜底 `?` / 字符类）
+  // 祖先目录也可能被 glob 命中（如 `~/*` 剥掉 `/*` 后是家目录本身，已由前缀覆盖；这里兜底 `?`）
   for (let anc = dirname(root); anc && anc !== "/" && anc.length >= base.length; anc = dirname(anc)) {
     if (re.test(anc)) return true;
   }

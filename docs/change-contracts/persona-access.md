@@ -35,7 +35,7 @@
 
 ```bash
 cd /home/min/repos/github/dia/.worktrees/feat-persona-access
-bun test tests            # 1274 pass / 0 fail
+bun test tests            # 1299 pass / 0 fail
 bun run build             # cli.js 1.0 MB
 ```
 

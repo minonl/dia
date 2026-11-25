@@ -76,6 +76,8 @@ export interface Installed {
   hash: string;
   /** 被 --force 覆盖的已存在产物（覆盖前已备份），供 CLI 提示 */
   overwrites?: string[];
+  /** --rehome 时清理掉的旧 HOME 产物（已删除；lock 里记为 renderedRetired） */
+  retired?: string[];
   /** 默认 msg kit 的装配结果（不阻断 persona 安装；失败原因供 doctor/CLI 显示） */
   msgKit?: { ok: boolean; reason?: string; kit?: string };
   /** 来源 commit（git 源 = rev-parse HEAD；本地目录 = --short HEAD 或 "local"；dry-run = "dry-run"）。
@@ -219,26 +221,50 @@ export function install(from: string, opts: { ref?: string; host?: string; home?
   const m = readManifest(src.dir);
   if (m.kind !== "persona") throw new Error("E_MANIFEST: not a persona");
   const slot = slotOf(m.version, src.commit);
-  const target = resolve(dataDir(), "personas", m.id, slot);
+  const idDir = resolve(dataDir(), "personas", m.id);
+  // 布局与 versionDirs/dirOf/slotDir 同源：已存在 `versions/`（新布局）时新槽位也写进去，
+  // 否则 update 产出的平铺槽位会被 versionDirs 忽略（active.use 直接 E_VERSION）。
+  const nestedLayout = existsSync(join(idDir, "versions"));
+  const target = resolve(nestedLayout ? join(idDir, "versions", slot) : join(idDir, slot));
   if (!target.startsWith(resolve(dataDir(), "personas") + sep)) throw new Error("E_MANIFEST: version escapes install dir");
   const hosts = opts.host ? [opts.host] : (m.hosts ?? ["opencode"]);
   for (const h of hosts) assertHost(h);
   const acc = planAccess(m, hosts);
+  // --rehome 只在「这次就合成 opencode 授权」时有语义：它会改写 access.homedir 与 agent md。
+  // 非 opencode 宿主单独跑 --rehome 只会让 lock 出现 homedir=B / root=A 的矛盾状态，直接拒绝。
+  if (opts.rehome === true && !hosts.includes("opencode")) {
+    throw new Error("E_USAGE: --rehome 只在与 opencode 合成的同一次操作里生效（本次不含 opencode 宿主，access.homedir 不会迁移）；请先对 opencode 运行 dia persona render <id> --rehome");
+  }
   let composed: access.ComposeResult | null = null;
   const rendered: string[] = [];
   const overwrites: string[] = [];
+  // --rehome 隐含「允许覆盖同 id 的既有产物」（迁移家目录必须能改写旧 HOME 写下的 agent md），
+  // 不需要再额外叠加 --force。
+  const allowOverwrite = opts.force === true || opts.rehome === true;
+  let opencodeDest: string | null = null;
+  let codexDestPath: string | null = null;
 
   // 跨 HOME 闸门（与 verify/render 同口径）：已有槽位 / 上一版 lock 记录的家目录必须与当前一致，
   // 否则 add --force / update 会绕过 render/verify 的保护，把指向旧 HOME 的授权写进当前 HOME。
-  const gateLock = (lockPath: string): any => {
+  // --force 的语义是覆盖重装：坏 lock 先备份再继续（跨 HOME 是 E_MANIFEST，仍拒绝）。
+  const gateLock = (lockPath: string, label: string): any => {
     if (!existsSync(lockPath)) return null;
-    const lock = readLockStrict(lockPath);
-    assertHomeMatches(lock, m.id, "install", opts.rehome === true);
-    return lock;
+    try {
+      const lock = readLockStrict(lockPath);
+      assertHomeMatches(lock, m.id, "install", opts.rehome === true);
+      return lock;
+    } catch (e: any) {
+      const msg = String(e?.message ?? e);
+      if (!opts.force || !msg.startsWith("E_LOCKED")) throw e;
+      backupBadLock(idDir, lockPath, label);
+      return null;
+    }
   };
-  const prevLock = opts.ownedFrom ? gateLock(join(dataDir(), "personas", m.id, opts.ownedFrom, "dia.lock")) : null;
+  const prevLock = opts.ownedFrom
+    ? gateLock(join(slotDir(idDir, opts.ownedFrom), "dia.lock"), opts.ownedFrom)
+    : null;
   // 目标槽位的 lock 也要先过闸（放在 staging 之前，失败不留临时目录）
-  const existingTargetLock = gateLock(join(target, "dia.lock"));
+  const existingTargetLock = gateLock(join(target, "dia.lock"), slot);
 
   // 升级（update 传入 ownedFrom）时：上一版 lock 记录过的渲染产物 = dia 托管，
   // 内容变化属于正常升级 → 可覆盖（先备份）。普通 add/重装不带 ownedFrom，仍按冲突拒绝（保护手改）。
@@ -262,9 +288,10 @@ export function install(from: string, opts: { ref?: string; host?: string; home?
     composed = composeEntry(m, acc.state, entryAbs);
     const expectedEntry = composed ? Buffer.from(composed.text) : readFileSync(entryAbs);
     const dest = join(opencodeAgents(), `${m.id}.md`);
+    opencodeDest = dest;
     if (existsSync(dest) && !readFileSync(dest).equals(expectedEntry)) {
-      // 手改/旧版本的产物：默认拒绝；--force 才覆盖，且覆盖前先备份（覆盖不丢东西）
-      if (!opts.force && !ownedRendered.has(resolve(dest))) throw new Error("E_CONFLICT: agent file exists and differs; remove it first (或 --force 覆盖，覆盖前会备份)");
+      // 手改/旧版本的产物：默认拒绝；--force / --rehome 才覆盖，且覆盖前先备份（覆盖不丢东西）
+      if (!allowOverwrite && !ownedRendered.has(resolve(dest))) throw new Error("E_CONFLICT: agent file exists and differs; remove it first (或 --force 覆盖，覆盖前会备份)");
       overwrites.push(dest);
     }
   }
@@ -285,8 +312,9 @@ export function install(from: string, opts: { ref?: string; host?: string; home?
     if (!existsSync(abs) || !statSync(abs).isFile()) throw new Error("E_MANIFEST: entry.codex file missing");
     if (!realpathSync(abs).startsWith(realpathSync(src.dir) + sep)) throw new Error("E_MANIFEST: entry escapes persona dir");
     const dest = join(codexHome!, ".codex", "AGENTS.md");
+    codexDestPath = dest;
     if (existsSync(dest) && !readFileSync(dest).equals(readFileSync(abs))) {
-      if (!opts.force) throw new Error("E_CONFLICT: codex AGENTS.md exists and differs; use --force (备份后再覆盖)");
+      if (!allowOverwrite) throw new Error("E_CONFLICT: codex AGENTS.md exists and differs; use --force (备份后再覆盖)");
       overwrites.push(dest);
     }
   }
@@ -295,17 +323,27 @@ export function install(from: string, opts: { ref?: string; host?: string; home?
     ? { declared: true, added: composed?.added ?? 0, skipped: composed?.skipped ?? 0, root: acc.state.root, warnings: acc.warnings }
     : undefined;
 
+  // 旧 HOME 残留的渲染产物（--rehome 后不再产出的 agent md / codex AGENTS.md）：
+  // 记入 renderedRetired 并从 rendered/renderedHashes 移除，删前打印路径（CLI 输出）。
+  const keepDests = [opencodeDest, codexDestPath].filter((p): p is string => !!p);
+  const retired = opts.rehome === true
+    ? staleRenderDests([existingTargetLock, prevLock], m.id, keepDests)
+    : [];
+
   if (opts.dryRun) {
-    if (hosts.includes("opencode")) rendered.push(join(opencodeAgents(), `${m.id}.md`));
-    if (hosts.includes("codex")) rendered.push(join(codexHome!, ".codex", "AGENTS.md"));
-    return { id: m.id, version: slot, dir: target, rendered, hash: "dry-run", commit: src.commit, overwrites, ...(report ? { access: report } : {}) };
+    if (hosts.includes("opencode")) rendered.push(opencodeDest!);
+    if (hosts.includes("codex")) rendered.push(codexDestPath!);
+    return { id: m.id, version: slot, dir: target, rendered, hash: "dry-run", commit: src.commit, overwrites, retired, ...(report ? { access: report } : {}) };
   }
 
   // 原子安装：staging → 写 lock → rename；同槽位不同内容判冲突，绝不原地覆盖
-  const idDir = resolve(dataDir(), "personas", m.id);
   mkdirSync(idDir, { recursive: true });
   const lockPath = join(idDir, ".lock");
   let lockFd: number | null = null;
+  // 幂等复用槽位时不能对 target 重新 hashTree：target 里已经有上次写的 dia.lock，
+  // 会把 lock 自身算进内容哈希 ⇒ verify 恒 mismatch。复用就用旧 lock 的 hash（= stagingHash）。
+  let reuseTarget = false;
+  let stagingHashState: string | null = null;
   try {
     try { lockFd = openSync(lockPath, "wx"); }
     catch {
@@ -319,9 +357,14 @@ export function install(from: string, opts: { ref?: string; host?: string; home?
     mkdirSync(staging, { recursive: true });
     cpSync(src.dir, staging, { recursive: true, dereference: true, filter: kit.copyFilter(src.dir) });
     const stagingHash = hashTree(staging);
-    let reuseTarget = false;
+    stagingHashState = stagingHash;
     if (existsSync(target)) {
-      if (existingTargetLock && existingTargetLock.hash === stagingHash) {
+      // 坏 lock 被 --force 备份后 existingTargetLock 为 null：回退到实际内容哈希比较，
+      // 避免同内容重装被误判成 E_VERSION_COLLISION（仅在有 dia.json 的完整槽位上比较）。
+      const targetHash = existingTargetLock
+        ? existingTargetLock.hash
+        : existsSync(join(target, "dia.json")) ? hashTree(target) : null;
+      if (targetHash !== null && targetHash === stagingHash) {
         // 幂等：同槽位同内容 → 不重装版本，但仍要跑一遍宿主渲染（--force 时恢复被手改的产物）
         rmSync(staging, { recursive: true, force: true });
         reuseTarget = true;
@@ -430,14 +473,40 @@ export function install(from: string, opts: { ref?: string; host?: string; home?
   // 默认能力包（dia-msg）：不阻断 persona 安装；显式 capabilities.msg=false 或用户 disable 时跳过。
   const msgKit = defaultMsg.ensureForPersona(m.id, m.capabilities);
 
-  const hash = hashTree(target);
+  const hash = reuseTarget && existingTargetLock?.hash ? existingTargetLock.hash : (stagingHashState ?? hashTree(target));
   const renderedHashes: Record<string, string> = {};
   for (const f of rendered) renderedHashes[f] = shaFile(f);
-  writeFileSync(join(target, "dia.lock"), JSON.stringify({ id: m.id, version: m.version, slot, commit: src.commit, source: from, ref: opts.ref ?? null, installedAt: new Date().toISOString(), hash, rendered, renderedHashes, renderedDirs, kits: kitRefs,
+
+  // --rehome：旧 HOME 的 agent md / codex AGENTS.md 不再被本次安装产出 → 删掉（已先备份旧 lock）。
+  for (const p of retired) {
+    if (!existsSync(p) && !isSymlink(p)) continue;
+    rmSync(p, { force: true });
+  }
+  // 上一版槽位的 lock 也要把这些旧产物记为 retired，否则删旧版本时 verify 恒 missing / remove 报 30。
+  if (opts.rehome === true && prevLock && opts.ownedFrom) {
+    const prevDir = slotDir(idDir, opts.ownedFrom);
+    if (resolve(prevDir) !== resolve(target)) {
+      const stale = new Set(retired.map((p) => resolve(p)));
+      const keptRendered = (prevLock.rendered ?? []).filter((p: string) => !stale.has(resolve(p)));
+      const keptHashes: Record<string, string> = {};
+      for (const [p, h] of Object.entries(prevLock.renderedHashes ?? {})) {
+        if (!stale.has(resolve(p))) keptHashes[p] = h as string;
+      }
+      writeFileSync(join(prevDir, "dia.lock"), JSON.stringify({
+        ...prevLock,
+        rendered: keptRendered,
+        renderedHashes: keptHashes,
+        renderedRetired: [...new Set([...(prevLock.renderedRetired ?? []), ...retired])],
+      }, null, 1));
+    }
+  }
+
+  writeFileSync(join(target, "dia.lock"), JSON.stringify({ id: m.id, version: m.version, slot, commit: src.commit, source: from, ref: opts.ref ?? null, installedAt: new Date().toISOString(), hash, rendered, renderedHashes, renderedDirs, renderedRetired: retired, kits: kitRefs,
     access: { declared: acc.state.declared, added: composed?.added ?? 0, skipped: composed?.skipped ?? 0, root: acc.state.root, homedir: homeDir() },
     content: { knowledge: m.knowledge ?? [], commands: m.commands ?? [], dataRoot: m.data_root ?? null, env: m.env ?? null, rendered: inline, config: appliedConfig },
   }, null, 1));
-  return { id: m.id, version: slot, dir: target, rendered, hash, commit: src.commit, overwrites, msgKit, ...(report ? { access: report } : {}) };
+  recordSource(m.id, slot, from, opts.ref);
+  return { id: m.id, version: slot, dir: target, rendered, hash, commit: src.commit, overwrites, retired, msgKit, ...(report ? { access: report } : {}) };
 }
 
 export function list(): { id: string; versions: string[] }[] {
@@ -558,6 +627,69 @@ function readLockStrict(lockPath: string): any {
     throw fail(`顶层必须是对象（收到 ${JSON.stringify(lock)}）`);
   }
   return lock;
+}
+
+/**
+ * 坏 lock 的备份：移到 `<idDir>/backups/dia.lock.bak-<label>-<ts>`（与槽位同级）。
+ * 放在 idDir/backups 而不是 slot 内，是因为 `add --force` 会整个替换 slot，放里面会被一起删掉。
+ */
+function backupBadLock(idDir: string, lockPath: string, label: string): string {
+  const dir = join(idDir, "backups");
+  mkdirSync(dir, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const safe = String(label).replace(/[^A-Za-z0-9._+-]/g, "_");
+  const dest = join(dir, `dia.lock.bak-${safe}-${stamp}`);
+  renameSync(lockPath, dest);
+  return dest;
+}
+
+/** 安装来源旁路记录（`<data>/state/persona-sources.json`，按 id/slot）：lock 损坏时 update --force 仍能找回 source。
+ *  不放 `<idDir>` 里，避免污染 `personas/<id>` 的目录列举（版本扫描/测试都假定那里只有槽位目录）。 */
+function sourceRecordPath(): string {
+  return join(dataDir(), "state", "persona-sources.json");
+}
+
+function readSourceRecord(id: string): Record<string, { source: string; ref?: string | null }> {
+  try {
+    const all = JSON.parse(readFileSync(sourceRecordPath(), "utf8"));
+    const v = all && typeof all === "object" ? all[id] : null;
+    return v && typeof v === "object" && !Array.isArray(v) ? v : {};
+  } catch { return {}; }
+}
+
+function recordSource(id: string, slot: string, source: string, ref?: string | null): void {
+  try {
+    let all: any = {};
+    try { all = JSON.parse(readFileSync(sourceRecordPath(), "utf8")) ?? {}; } catch { all = {}; }
+    if (!all || typeof all !== "object" || Array.isArray(all)) all = {};
+    const mine = all[id] && typeof all[id] === "object" ? all[id] : {};
+    mine[slot] = { source, ref: ref ?? null };
+    all[id] = mine;
+    mkdirSync(join(dataDir(), "state"), { recursive: true });
+    writeFileSync(sourceRecordPath(), JSON.stringify(all, null, 1));
+  } catch { /* 旁路记录失败不阻断安装（lock 才是权威） */ }
+}
+
+/**
+ * 旧 HOME 残留的「同一角色的渲染产物」：不再由本次渲染产出、但 lock 曾记录为 dia 写的
+ * agent md（`<id>.md`）/ codex `AGENTS.md`。只对**本次确实会产出的角色**判定，
+ * 避免 `render --host opencode` 顺手删掉 codex 的产物。
+ */
+function staleRenderDests(locks: any[], id: string, keepDests: string[]): string[] {
+  const keep = new Set(keepDests.map((p) => resolve(p)));
+  const wantAgent = keepDests.some((p) => basename(p) === `${id}.md`);
+  const wantCodex = keepDests.some((p) => basename(p) === "AGENTS.md" && basename(dirname(p)) === ".codex");
+  const out = new Set<string>();
+  for (const lock of locks) {
+    for (const p of lock?.rendered ?? []) {
+      const abs = resolve(p);
+      if (keep.has(abs)) continue;
+      const isAgent = wantAgent && basename(abs) === `${id}.md`;
+      const isCodex = wantCodex && basename(abs) === "AGENTS.md" && basename(dirname(abs)) === ".codex";
+      if (isAgent || isCodex) out.add(abs);
+    }
+  }
+  return [...out];
 }
 
 /**
@@ -784,7 +916,7 @@ export function create(id: string, opts: { dir?: string; hosts?: string[]; dryRu
 }
 
 export interface RenderDrift { path: string; action: "missing" | "changed" }
-export interface RenderResult { id: string; version: string; check: boolean; drift: RenderDrift[]; backups: string[]; msgKit?: { ok: boolean; reason?: string; kit?: string }; access?: AccessReport }
+export interface RenderResult { id: string; version: string; check: boolean; drift: RenderDrift[]; backups: string[]; retired: string[]; msgKit?: { ok: boolean; reason?: string; kit?: string }; access?: AccessReport }
 
 // 宿主会在自己的 profile 目录里改写/生成这些文件（dsh 每次启动重写 cordis.yml，
 // `dsh plugin --profile <id> add <pkg>` 会改 package.json 与锁文件），它们不属于渲染产物：
@@ -846,11 +978,17 @@ export function render(id: string, opts: { host?: string; home?: string; check?:
   if (opts.check && opts.rehome) {
     throw new Error("E_USAGE: --check 与 --rehome 互斥（先单独运行 dia persona render <id> --rehome 迁移到当前 HOME，再跑 --check）");
   }
+  // --rehome 只在「这次就合成 opencode 授权」时有语义：它要改 access.homedir 与 agent md。
+  // 对 dsh|codex 单独 --rehome 只会让 lock 出现 homedir=B / root=A 的矛盾状态 → 明确拒绝。
+  if (opts.rehome === true && !hosts.includes("opencode")) {
+    throw new Error("E_USAGE: --rehome 只在与 opencode 合成的同一次操作里生效（本次 --host 不含 opencode，access.homedir 不会迁移）；请先运行 dia persona render <id> --rehome");
+  }
   // homedir 口径统一：lock 里记了安装时的家目录就以它为准（render/verify/renderDrift 同源）。
   // 换 HOME 重跑不再 warn 了事——直接拒绝，避免把指向旧家目录的授权写到当前 HOME。
   const lockPath = join(dir, "dia.lock");
   const lock: any = existsSync(lockPath) ? readLockStrict(lockPath) : {};
   if (opts.rehome !== true) assertHomeMatches(lock, id, "render");
+  const prevAccess = lock.access && typeof lock.access === "object" ? lock.access : null;
   const recordedHome = typeof lock.access?.homedir === "string" ? lock.access.homedir : null;
   const effHome = opts.rehome === true || !recordedHome ? homeDir() : recordedHome;
 
@@ -859,6 +997,13 @@ export function render(id: string, opts: { host?: string; home?: string; check?:
   const report: AccessReport | undefined = acc.state.declared
     ? { declared: true, added: 0, missing: 0, skipped: 0, root: acc.state.root, warnings: acc.warnings }
     : undefined;
+  // 非 opencode 宿主不合成 permissions：汇总行必须显示 lock 里保留的 added/skipped（而不是「追加 0 条」），
+  // 否则一次 dsh 渲染就会让人误以为授权被重置。
+  if (report && !hosts.includes("opencode")) {
+    report.added = prevAccess?.added ?? 0;
+    report.skipped = prevAccess?.skipped ?? 0;
+    report.root = prevAccess?.root ?? acc.state.root;
+  }
 
   const drift: RenderDrift[] = [];
 
@@ -927,7 +1072,12 @@ export function render(id: string, opts: { host?: string; home?: string; check?:
       }
     }
   }
-  if (opts.check) return { id, version, check: true, drift, backups: [], ...(report ? { access: report } : {}) };
+  // 旧 HOME 残留：同一角色、但本次不再产出的 agent md / codex AGENTS.md（rehome 或换目录后）。
+  // 这些路径不能再留在 rendered/renderedHashes（否则 verify 恒 missing、remove 报 30）；
+  // 只有显式 --rehome 才删文件（非 rehome 的 --home 切换保留旧文件，避免误删共享产物）。
+  const staleDests = staleRenderDests([lock], id, [agentDest, codexDest].filter((p): p is string => !!p));
+  const retired = opts.rehome === true ? staleDests : [];
+  if (opts.check) return { id, version, check: true, drift, backups: [], retired, ...(report ? { access: report } : {}) };
 
   // persona 自带内容（skills/bin 软链）也要重渲染：切版本后软链可能仍指旧槽位，而内容相同 → 曾漏判
   const msgKit = defaultMsg.ensureForPersona(id, m.capabilities);
@@ -950,6 +1100,11 @@ export function render(id: string, opts: { host?: string; home?: string; check?:
     else cpSync(agentSrc, agentDest);
   }
   if (codexDest && codexSrc) { mkdirSync(dirname(codexDest), { recursive: true }); cpSync(codexSrc, codexDest); }
+  // 旧 HOME 的 agent md / codex AGENTS.md：本次已不再产出 → 删掉（lock 里记为 renderedRetired）
+  for (const p of retired) {
+    if (!existsSync(p) && !isSymlink(p)) continue;
+    rmSync(p, { force: true });
+  }
   if (dshDest && dshSrc) {
     // 只覆盖 persona 自己写入的文件，绝不整树重建：profile 目录是宿主领地，
     // 宿主装的插件目录/改动过的 package.json 不在 drift 名单里，删掉就再也回不来。
@@ -974,18 +1129,16 @@ export function render(id: string, opts: { host?: string; home?: string; check?:
   const inlineRendered = kit.renderContent(dir, dir, inlineManifest, { force: true }) ?? [];
 
   // 只更新渲染产物记录；persona 内容哈希（lock.hash）不变。
-  // 换 codex home 后，旧渲染路径要**剪掉**（否则 lock 里留着已不存在的路径 ⇒ verify 恒 missing）
-  const staleCodex = codexDest
-    ? (lock.rendered ?? []).filter((p: string) => p.endsWith("/.codex/AGENTS.md") && p !== codexDest)
-    : [];
+  // 旧 HOME / 旧 codex home 的渲染路径一律剪掉（记入 renderedRetired），否则 verify 恒 missing。
+  const retiredSet = new Set(staleDests.map((p) => resolve(p)));
   const rendered: string[] = [...new Set([
-    ...(lock.rendered ?? []).filter((p: string) => !staleCodex.includes(p)),
+    ...(lock.rendered ?? []).filter((p: string) => !retiredSet.has(resolve(p))),
     ...inlineRendered.filter((e) => e.type !== "dir").map((e) => e.path),
     ...(agentDest ? [agentDest] : []),
     ...(codexDest ? [codexDest] : []),
   ])];
   const renderedHashes: Record<string, string> = { ...(lock.renderedHashes ?? {}) };
-  for (const p of staleCodex) delete renderedHashes[p];
+  for (const p of Object.keys(renderedHashes)) if (retiredSet.has(resolve(p))) delete renderedHashes[p];
   if (agentDest) renderedHashes[agentDest] = shaFile(agentDest);
   if (codexDest) renderedHashes[codexDest] = shaFile(codexDest);
   const renderedDirs = [...(lock.renderedDirs ?? []).filter((d: any) => d.path !== dshDest)];
@@ -993,7 +1146,6 @@ export function render(id: string, opts: { host?: string; home?: string; check?:
   // lock 里的 access 段跟着重渲染刷新，但 **added/skipped/root 只由 opencode 合成决定**：
   // `render --host dsh|codex` 不会合成 permissions，必须保留上一次（opencode）的值，
   // 否则跑一次 dsh 渲染就能把「追加 0 条」永久写进 lock。host 不生效由告警行说明。
-  const prevAccess = lock.access && typeof lock.access === "object" ? lock.access : null;
   const accessLock = composed
     ? { declared: true, added: composed.added, skipped: composed.skipped, root: acc.state.root, homedir: effHome }
     : acc.state.declared
@@ -1003,11 +1155,13 @@ export function render(id: string, opts: { host?: string; home?: string; check?:
           added: prevAccess?.added ?? 0,
           skipped: prevAccess?.skipped ?? 0,
           root: prevAccess?.root ?? acc.state.root,
-          homedir: effHome,
+          // 只有 opencode 合成才能改 access.homedir；非 opencode 渲染沿用 lock 里的值
+          homedir: prevAccess?.homedir ?? effHome,
         }
       : { declared: false, added: 0, skipped: 0, root: null };
-  writeFileSync(lockPath, JSON.stringify({ ...lock, rendered, renderedHashes, renderedDirs, access: accessLock }, null, 1));
-  return { id, version, check: false, drift, backups, msgKit, ...(report ? { access: report } : {}) };
+  const renderedRetired = [...new Set([...(lock.renderedRetired ?? []), ...staleDests])];
+  writeFileSync(lockPath, JSON.stringify({ ...lock, rendered, renderedHashes, renderedDirs, renderedRetired, access: accessLock }, null, 1));
+  return { id, version, check: false, drift, backups, retired, msgKit, ...(report ? { access: report } : {}) };
 }
 
 export interface RenderDriftReport {
@@ -1084,37 +1238,39 @@ function slotDir(idDir: string, version: string): string {
   return existsSync(nested) ? nested : join(idDir, version);
 }
 
+/** 严格读取槽位 lock（不存在返回 null；坏 lock 抛 E_LOCKED）。 */
+function readSlotLock(idDir: string, version: string): any | null {
+  const lockPath = join(slotDir(idDir, version), "dia.lock");
+  if (!existsSync(lockPath)) return null;
+  return readLockStrict(lockPath);
+}
+
 /** 其它槽位仍声明持有的产物：按槽位删除时不能回收它们（宿主产物路径通常跨版本共享）。 */
-function slotClaims(idDir: string, version: string): { paths: Set<string>; kits: Set<string> } {
+function slotClaims(lock: any): { paths: Set<string>; kits: Set<string> } {
   const paths = new Set<string>();
   const kits = new Set<string>();
-  const lockPath = join(slotDir(idDir, version), "dia.lock");
-  if (!existsSync(lockPath)) return { paths, kits };
-  try {
-    const lock = JSON.parse(readFileSync(lockPath, "utf8"));
-    for (const d of lock.renderedDirs ?? []) if (d?.path) paths.add(resolve(d.path));
-    for (const r of lock.content?.rendered ?? []) if (r?.path) paths.add(resolve(r.path));
-    for (const f of lock.rendered ?? []) paths.add(resolve(f));
-    for (const r of lock.content?.config ?? []) if (r?.path) paths.add(resolve(r.path));
-    for (const k of lock.kits ?? []) if (k?.id) kits.add(k.id);
-  } catch { /* 坏 lock：调用方按无声明处理 */ }
+  if (!lock) return { paths, kits };
+  for (const d of lock.renderedDirs ?? []) if (d?.path) paths.add(resolve(d.path));
+  for (const r of lock.content?.rendered ?? []) if (r?.path) paths.add(resolve(r.path));
+  for (const f of lock.rendered ?? []) paths.add(resolve(f));
+  for (const r of lock.content?.config ?? []) if (r?.path) paths.add(resolve(r.path));
+  for (const k of lock.kits ?? []) if (k?.id) kits.add(k.id);
   return { paths, kits };
 }
 
-/** 回收单个版本槽位 lock 里登记的产物（不删槽位目录本身）。 */
+/** 回收单个版本槽位 lock 里登记的产物（不删槽位目录本身）。lock 由调用方预读（坏 lock 先于动盘拒绝）。 */
 function removeSlotArtifacts(
   id: string,
   idDir: string,
   version: string,
+  lock: any,
   keep: { paths: Set<string>; kits: Set<string> } = { paths: new Set(), kits: new Set() },
 ): { removed: string[]; skipped: string[] } {
   const removed: string[] = [];
   const skipped: string[] = [];
   const dir = slotDir(idDir, version);
-  const lockFile = join(dir, "dia.lock");
-  if (!existsSync(lockFile)) return { removed, skipped };
+  if (!lock) return { removed, skipped };
   const allowed = resolve(opencodeAgents(), `${id}.md`);
-  const lock = JSON.parse(readFileSync(lockFile, "utf8"));
   for (const d of lock.renderedDirs || []) {
     const abs = resolve(d.path);
     if (keep.paths.has(abs)) continue;
@@ -1176,10 +1332,14 @@ export function remove(id: string, opts: { version?: string } = {}): { removed: 
   const selected = opts.version !== undefined ? resolveVersion(id, opts.version) : undefined;
   const all = versionDirs(idDir);
   const targets = selected ? [selected] : all;
+  // 删除任何东西之前先把所有槽位 lock 解析完：任一坏 lock 都直接 32，且**一个文件都不动**
+  // （旧实现边删边解析 → 第二个版本坏 lock 时留下半卸载）。
+  const locks = new Map<string, any>();
+  for (const v of all) locks.set(v, readSlotLock(idDir, v));
   // 按槽位删除时，其它槽位仍声明的宿主产物/kit 不能回收（agent md、dsh profile 等路径跨版本共享）
   const keep = selected
     ? all.filter((v) => v !== selected).reduce((acc, v) => {
-        const c = slotClaims(idDir, v);
+        const c = slotClaims(locks.get(v));
         for (const p of c.paths) acc.paths.add(p);
         for (const k of c.kits) acc.kits.add(k);
         return acc;
@@ -1190,7 +1350,7 @@ export function remove(id: string, opts: { version?: string } = {}): { removed: 
   for (const v of targets) {
     const dir = slotDir(idDir, v);
     if (!existsSync(dir)) continue;
-    const r = removeSlotArtifacts(id, idDir, v, keep);
+    const r = removeSlotArtifacts(id, idDir, v, locks.get(v) ?? null, keep);
     removed.push(...r.removed);
     skipped.push(...r.skipped);
     rmSync(dir, { recursive: true, force: true });
@@ -1327,7 +1487,21 @@ export function update(
   const idDir = join(dataDir(), "personas", id);
   if (!existsSync(idDir)) throw new Error("E_NOT_INSTALLED");
   const cur = active.effective(id)?.version ?? readdirSync(idDir).sort().pop()!;
-  const lock = readLockStrict(join(slotDir(idDir, cur), "dia.lock"));
+  const lockPath = join(slotDir(idDir, cur), "dia.lock");
+  let lock: any;
+  try {
+    lock = readLockStrict(lockPath);
+  } catch (e: any) {
+    const msg = String(e?.message ?? e);
+    // --force = 覆盖重装：坏 lock 先备份，再从旁路来源记录恢复 source 继续（没有记录就明确报 E_SOURCE）。
+    if (!(opts.force && msg.startsWith("E_LOCKED"))) throw e;
+    const bak = backupBadLock(idDir, lockPath, cur);
+    const rec = readSourceRecord(id)[cur];
+    if (!rec?.source) {
+      throw new Error(`E_SOURCE: dia.lock 已损坏并备份到 ${bak}，但找不到该槽位的安装来源；请用 dia persona add <源地址> --force 重装`);
+    }
+    lock = { source: rec.source, ref: rec.ref ?? null };
+  }
   // 跨 HOME：update 会重新渲染并写 lock，必须与 render 一样要求显式 --rehome
   assertHomeMatches(lock, id, "update", opts.rehome === true);
   if (!lock.source) throw new Error("E_SOURCE: 该 persona 由本地目录安装，无法 update（重新 persona add）");

@@ -1573,6 +1573,7 @@ async function personaCli(argv: string[]): Promise<number> {
       const r = persona.install(from, { ref: flag(args, "--ref"), host: flag(args, "--host"), home: flag(args, "--home"), dryRun: has(args, "--dry-run"), force: has(args, "--force"), rehome: has(args, "--rehome") });
       out(asJson ? JSON.stringify(r) : `installed ${r.id}@${r.version} -> ${r.rendered.join(", ") || "(dry-run)"}` +
         (r.overwrites?.length ? `\n  ⚠ 覆盖 ${r.overwrites.length} 个已存在产物（已备份）：${r.overwrites.join(", ")}` : "") +
+        (r.retired?.length ? `\n  ↳ 已清理旧 HOME 产物：${r.retired.join(", ")}` : "") +
         (r.msgKit && !r.msgKit.ok ? `\n  ⚠ dia-msg 未启用：${r.msgKit.reason}` : ""));
       for (const w of r.access?.warnings ?? []) if (!asJson) out(`  ⚠ ${w}`);
       if (!asJson && r.access?.declared) out(`  access: 追加 ${r.access.added} 条（跳过 ${r.access.skipped}）→ ${r.access.root}`);
@@ -1581,6 +1582,7 @@ async function personaCli(argv: string[]): Promise<number> {
     } catch (e: any) {
       err(e?.message || String(e));
       const msg = e?.message || "";
+      if (msg.startsWith("E_USAGE")) return 2;
       if (msg.startsWith("E_CONFLICT") || msg.startsWith("E_MANIFEST") || msg.startsWith("E_LOCKED")) return 32;
       if (msg.startsWith("E_HOST")) return 33;
       return 31;
@@ -1718,9 +1720,11 @@ async function personaCli(argv: string[]): Promise<number> {
       if (asJson) out(JSON.stringify(r));
       else if (dryRun) {
         out(`[dry-run] would update ${id} → ${r.installed.version}（原 ${r.previous ?? "-"}；未写盘、未切 active、未建索引）` +
-          (r.installed.overwrites?.length ? `\n  ⚠ 将覆盖 ${r.installed.overwrites.length} 个产物：${r.installed.overwrites.join(", ")}` : ""));
+          (r.installed.overwrites?.length ? `\n  ⚠ 将覆盖 ${r.installed.overwrites.length} 个产物：${r.installed.overwrites.join(", ")}` : "") +
+          (r.installed.retired?.length ? `\n  ↳ 将清理旧 HOME 产物：${r.installed.retired.join(", ")}` : ""));
       } else {
-        out(`updated ${id} → ${r.installed.version}（${String(r.installed.commit || r.installed.hash || "?").slice(0, 8)}, 原 ${r.previous ?? "-"}）`);
+        out(`updated ${id} → ${r.installed.version}（${String(r.installed.commit || r.installed.hash || "?").slice(0, 8)}, 原 ${r.previous ?? "-"}）` +
+          (r.installed.retired?.length ? `\n  ↳ 已清理旧 HOME 产物：${r.installed.retired.join(", ")}` : ""));
       }
       if (!asJson) {
         if (r.installed.access?.declared) out(`  access: 追加 ${r.installed.access.added} 条（跳过 ${r.installed.access.skipped}）→ ${r.installed.access.root}`);
@@ -1780,6 +1784,7 @@ async function personaCli(argv: string[]): Promise<number> {
       if (asJson) out(JSON.stringify(r, null, 1));
       else if (r.check) out(r.drift.length ? `drift ${r.drift.length}:\n  ${r.drift.map((d: any) => `${d.action}: ${d.path}`).join("\n  ")}` : "ok（无 drift）");
       else out(`rendered ${r.id}@${r.version}${r.drift.length ? `（修复 ${r.drift.length} 处，备份 ${r.backups.length}）` : "（无变化）"}` +
+        (r.retired?.length ? `\n  ↳ 已清理旧 HOME 产物：${r.retired.join(", ")}` : "") +
         (r.msgKit && !r.msgKit.ok ? `\n  ⚠ dia-msg 未启用：${r.msgKit.reason}` : ""));
       if (!asJson) for (const w of r.access?.warnings ?? []) out(`  ⚠ ${w}`);
       if (!asJson && r.access?.declared) out(`  access: 追加 ${r.access.added} 条（跳过 ${r.access.skipped}）→ ${r.access.root}`);
@@ -1813,6 +1818,7 @@ async function personaCli(argv: string[]): Promise<number> {
       err(m);
       if (m.startsWith("E_VERSION")) return 21;
       if (m.startsWith("E_NOT_INSTALLED")) return 20;
+      if (m.startsWith("E_MANIFEST") || m.startsWith("E_LOCKED")) return 32;
       return 31;
     }
   }

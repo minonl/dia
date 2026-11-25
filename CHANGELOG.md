@@ -4,6 +4,23 @@
 
 ## Unreleased
 
+### fix(persona): access 评审第四/五轮（恢复路径与边缘场景）
+
+- **`--force` 能从坏 lock 恢复**：`add/update --force` 遇到 `dia.lock` 不可解析时，先把坏文件
+  备份到 `<idDir>/backups/dia.lock.bak-<slot>-<ts>` 再继续重装；不加 `--force` 仍退出 32 且字节不变。
+  `update --force` 的安装来源由旁路记录 `<data>/state/persona-sources.json` 兜回（lock 才是权威）。
+- **`--rehome` 只与 opencode 合成同一次生效**：`render/add --host dsh|codex --rehome` 直接报 `E_USAGE`，
+  不再让 lock 出现 `homedir=B / root=A`；非 opencode 渲染沿用 lock 里记录的 `access.homedir`。
+- **rehome 清理旧 HOME 残留**：旧 agent md / codex `AGENTS.md` 记入 `lock.renderedRetired` 并从
+  `rendered`/`renderedHashes` 移除、文件删除（CLI 打印路径）；`verify` 不再报 missing，`remove` 不再退出 30。
+- **`remove` 遇坏 lock 不再半卸载**：删除前先严格解析所有槽位 lock，任一坏 lock 直接 32，一个文件都不动。
+- **`add --rehome` 隐含覆盖**已有同 id 产物（无需再叠加 `--force`），`--dry-run --json` 始终输出 JSON
+  （含将要清理的旧产物列表）。
+- **嵌套 `versions/<v>` 布局**：`install` 的 prevLock 与 `slotDir/dirOf` 同源，存在 `versions/` 时新槽位也写进去，
+  `update --rehome` 行为确定（同槽位幂等）。
+- **`[` 是字面量**：opencode 只把 `*` / `?` 当通配，`[-]` 不再被当字符类（`<root>/.rc[-]agent/**` 不覆盖 `.rc-agent`）。
+- `render --host dsh|codex` 的汇总行显示 lock 里保留的 `added/skipped`（不再打印「追加 0 条」）。
+
 ### feat(persona): 数据根授权合成（`access`）
 
 - `dia.json` 新增 `access: {read, write, env}`（布尔，缺省 false）与既有的 `data_root` 配对；

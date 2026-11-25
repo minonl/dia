@@ -1728,6 +1728,7 @@ async function personaCli(argv: string[]): Promise<number> {
           (r.installed.retired?.length ? `\n  ↳ 已备份并清理旧 HOME 产物：${r.installed.retired.join(", ")}` : ""));
       }
       if (!asJson) {
+        for (const w of persona.retireKeptWarnings((r.installed.retiredKept ?? []).map((p: string) => ({ path: p, kept: "user-edited" })))) out(`  ⚠ ${w}`);
         if (r.installed.access?.declared) out(`  access: 追加 ${r.installed.access.added} 条（跳过 ${r.installed.access.skipped}）→ ${r.installed.access.root}`);
         for (const w of r.installed.access?.warnings ?? []) out(`  ⚠ ${w}`);
       }

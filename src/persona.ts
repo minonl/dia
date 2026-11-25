@@ -68,6 +68,18 @@ export interface Manifest {
   capabilities?: Record<string, unknown>;
 }
 
+/**
+ * `--rehome` 时判定「不删」的旧产物：
+ *   · `user-edited`：内容与 lock 记录不符（手改）；
+ *   · `kept-shared`：内容对得上，但该路径仍被别的 persona 引用（同一 codex home 的 AGENTS.md），删了会让对方 verify 挂掉。
+ */
+export interface RetiredKept {
+  path: string;
+  kept: "user-edited" | "kept-shared";
+  /** kept-shared 时：引用该产物的其它 persona id */
+  by?: string;
+}
+
 export interface Installed {
   id: string;
   version: string;
@@ -80,6 +92,8 @@ export interface Installed {
   retired?: string[];
   /** --rehome 时保留的旧产物（手改 / 疑似非本 persona 的 AGENTS.md；未删除） */
   retiredKept?: string[];
+  /** `retiredKept` 的明细（保留原因 / 引用者），CLI 据此给不同告警 */
+  retiredKeptDetail?: RetiredKept[];
   /** --rehome 删除前写下的备份文件（<data>/backups/rehome-*） */
   retiredBackups?: string[];
   /** 默认 msg kit 的装配结果（不阻断 persona 安装；失败原因供 doctor/CLI 显示） */
@@ -339,11 +353,12 @@ export function install(from: string, opts: { ref?: string; host?: string; home?
     : { remove: [], kept: [] };
   const retired = retirePlan.remove;
   const retiredKept = retirePlan.kept.map((k) => k.path);
+  const retiredKeptDetail: RetiredKept[] = retirePlan.kept;
 
   if (opts.dryRun) {
     if (hosts.includes("opencode")) rendered.push(opencodeDest!);
     if (hosts.includes("codex")) rendered.push(codexDestPath!);
-    return { id: m.id, version: slot, dir: target, rendered, hash: "dry-run", commit: src.commit, overwrites, retired, retiredKept, ...(report ? { access: report } : {}) };
+    return { id: m.id, version: slot, dir: target, rendered, hash: "dry-run", commit: src.commit, overwrites, retired, retiredKept, retiredKeptDetail, ...(report ? { access: report } : {}) };
   }
 
   // dsh profile 是宿主领地：不是 dia 管理的就别碰。
@@ -514,10 +529,10 @@ export function install(from: string, opts: { ref?: string; host?: string; home?
       retiredBackups.push(...r.backups);
       retiredActual.push(...r.removed);
     }
-    // renderedRetired：已删的记字符串；保留的记 `{ path, kept }`，供人/诊断区分。
+    // renderedRetired：已删的记字符串；保留的记 `{ path, kept, by? }`，供人/诊断区分。
     const retiredRecord: any[] = [
       ...retiredActual,
-      ...retirePlan.kept.map((k) => ({ path: k.path, kept: k.kept })),
+      ...retirePlan.kept.map((k) => ({ path: k.path, kept: k.kept, ...(k.by ? { by: k.by } : {}) })),
     ];
     // 上一版槽位的 lock 也要把这些旧产物记为 retired，否则删旧版本时 verify 恒 missing / remove 报 30。
     if (opts.rehome === true && prevLock && opts.ownedFrom) {
@@ -544,7 +559,7 @@ export function install(from: string, opts: { ref?: string; host?: string; home?
       content: { knowledge: m.knowledge ?? [], commands: m.commands ?? [], dataRoot: m.data_root ?? null, env: m.env ?? null, rendered: inline, config: appliedConfig },
     }, null, 1));
     recordSource(m.id, slot, from, opts.ref);
-    return { id: m.id, version: slot, dir: target, rendered, hash, commit: src.commit, overwrites, retired: retiredActual, retiredKept, retiredBackups, msgKit, ...(report ? { access: report } : {}) };
+    return { id: m.id, version: slot, dir: target, rendered, hash, commit: src.commit, overwrites, retired: retiredActual, retiredKept, retiredKeptDetail: retirePlan.kept, retiredBackups, msgKit, ...(report ? { access: report } : {}) };
   } catch (e) {
     restoreBadLocks();
     throw e;
@@ -727,11 +742,52 @@ function recordSource(id: string, slot: string, source: string, ref?: string | n
  * agent md（`<id>.md`）/ codex `AGENTS.md`。只对**本次确实会产出的角色**判定，
  * 避免 `render --host opencode` 顺手删掉 codex 的产物。
  *
- * **归属校验**（评审）：光看 basename + 父目录不够——别的 persona 可能写过同名
- * `AGENTS.md`（同一 codex home）。只有「当前文件哈希 == lock 里记录的哈希」才认定是本
- * persona 的产物（可删）；否则一律保留并告警。
+ * **归属校验**（评审）分两道：
+ *   ① 当前文件哈希 == 本 persona lock 里记录的哈希（否则手改，保留）；
+ *   ② 该路径没有被**别的 persona** 的 lock 引用（`rendered` / `renderedHashes` / `renderedRetired`）。
+ *      两个 codex persona 共用同一 home 且 AGENTS.md 内容相同时，①会误判成自己的；②必须拦下，
+ *      否则删掉后对方的 verify 直接 MISMATCH。
  */
-interface RetirePlan { remove: string[]; kept: { path: string; kept: "user-edited" }[] }
+interface RetirePlan { remove: string[]; kept: RetiredKept[] }
+
+/**
+ * 扫描**其它已安装 persona 槽位**的 lock，收集它们登记过的渲染产物（path → 引用者 id）。
+ * 坏 lock 静默跳过（清理路径不能因为别人 lock 坏了就整体失败，只能保守保留到自己能读到的部分）。
+ */
+function otherPersonaRefs(ownId: string): Map<string, string[]> {
+  const refs = new Map<string, string[]>();
+  const root = join(dataDir(), "personas");
+  if (!existsSync(root)) return refs;
+  let ids: string[] = [];
+  try { ids = readdirSync(root, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name); }
+  catch { return refs; }
+  for (const id of ids) {
+    if (id === ownId) continue;
+    const idDir = join(root, id);
+    for (const v of versionDirs(idDir)) {
+      const lockPath = join(slotDir(idDir, v), "dia.lock");
+      if (!existsSync(lockPath)) continue;
+      let lock: any;
+      try { lock = JSON.parse(readFileSync(lockPath, "utf8")); } catch { continue; }
+      if (!lock || typeof lock !== "object" || Array.isArray(lock)) continue;
+      const add = (p: unknown) => {
+        if (typeof p !== "string" || !p) return;
+        const abs = resolve(p);
+        const list = refs.get(abs) ?? [];
+        if (!list.includes(id)) list.push(id);
+        refs.set(abs, list);
+      };
+      if (Array.isArray(lock.rendered)) for (const p of lock.rendered) add(p);
+      if (lock.renderedHashes && typeof lock.renderedHashes === "object") {
+        for (const p of Object.keys(lock.renderedHashes)) add(p);
+      }
+      if (Array.isArray(lock.renderedRetired)) {
+        for (const e of lock.renderedRetired) add(typeof e === "string" ? e : e?.path);
+      }
+    }
+  }
+  return refs;
+}
 
 function staleRenderDests(locks: any[], id: string, keepDests: string[]): RetirePlan {
   const keep = new Set(keepDests.map((p) => resolve(p)));
@@ -754,11 +810,19 @@ function staleRenderDests(locks: any[], id: string, keepDests: string[]): Retire
     }
   }
   const remove: string[] = [];
-  const kept: { path: string; kept: "user-edited" }[] = [];
+  const kept: RetiredKept[] = [];
+  // 只为真正要判定的候选路径扫别人的 lock（render 每次都会跑本函数，避免无谓的全库扫描）
+  let sharedRefs: Map<string, string[]> | null = null;
+  const sharedBy = (p: string): string[] => (sharedRefs ??= otherPersonaRefs(id)).get(p) ?? [];
   for (const p of candidates) {
     if (!existsSync(p) && !isSymlink(p)) { remove.push(p); continue; }
+    // ① 哈希对不上 → 不是本 persona 的字节（手改 / 别人写的），保留
     const want = recorded.get(p);
-    if (isSymlink(p) || !want || shaFile(p) !== want) { kept.push({ path: p, kept: "user-edited" }); continue; }
+    const mine = !isSymlink(p) && !!want && shaFile(p) === want;
+    const by = sharedBy(p);
+    if (!mine) { kept.push({ path: p, kept: "user-edited", ...(by.length ? { by: by[0] } : {}) }); continue; }
+    // ② 哈希对得上但别的 persona 还引用它（字节相同的共享 AGENTS.md）→ 保留，否则对方 verify 挂
+    if (by.length) { kept.push({ path: p, kept: "kept-shared", by: by[0] }); continue; }
     remove.push(p);
   }
   return { remove, kept };
@@ -780,13 +844,17 @@ function mergeRetired(prev: any[], add: any[]): any[] {
   return out;
 }
 
-/** 保留项的告警文案（codex `AGENTS.md` 同名冲突要说得更明白）。 */
-export function retireKeptWarnings(kept: { path: string; kept: string }[]): string[] {
+/** 保留项的告警文案（codex `AGENTS.md` 同名冲突 / 共享引用要说得更明白）。 */
+export function retireKeptWarnings(kept: { path: string; kept: string; by?: string }[]): string[] {
   return kept.map((k) => {
+    if (k.kept === "kept-shared") {
+      return `保留 ${k.path}：该产物被其它 persona（${k.by ?? "?"}）引用，已保留（kept-shared）`;
+    }
     const isCodex = basename(k.path) === "AGENTS.md" && basename(dirname(k.path)) === ".codex";
+    const shared = k.by ? `（也被其它 persona（${k.by}）引用）` : "";
     return isCodex
-      ? `保留 ${k.path}：内容与 lock 记录不符，疑似非本 persona 产物，已保留`
-      : `保留 ${k.path}：内容已被手改（kept-user-edited），未删除`;
+      ? `保留 ${k.path}：内容与 lock 记录不符，疑似非本 persona 产物${shared}，已保留`
+      : `保留 ${k.path}：内容已被手改（kept-user-edited）${shared}，未删除`;
   });
 }
 
@@ -1036,7 +1104,7 @@ export function create(id: string, opts: { dir?: string; hosts?: string[]; dryRu
 }
 
 export interface RenderDrift { path: string; action: "missing" | "changed" }
-export interface RenderResult { id: string; version: string; check: boolean; drift: RenderDrift[]; backups: string[]; retired: string[]; retiredKept?: string[]; msgKit?: { ok: boolean; reason?: string; kit?: string }; access?: AccessReport }
+export interface RenderResult { id: string; version: string; check: boolean; drift: RenderDrift[]; backups: string[]; retired: string[]; retiredKept?: string[]; retiredKeptDetail?: RetiredKept[]; msgKit?: { ok: boolean; reason?: string; kit?: string }; access?: AccessReport }
 
 // 宿主会在自己的 profile 目录里改写/生成这些文件（dsh 每次启动重写 cordis.yml，
 // `dsh plugin --profile <id> add <pkg>` 会改 package.json 与锁文件），它们不属于渲染产物：
@@ -1199,7 +1267,8 @@ export function render(id: string, opts: { host?: string; home?: string; check?:
   const retirePlan = staleRenderDests([lock], id, [agentDest, codexDest].filter((p): p is string => !!p));
   const retired = opts.rehome === true ? retirePlan.remove : [];
   const retiredKept = opts.rehome === true ? retirePlan.kept.map((k) => k.path) : [];
-  if (opts.check) return { id, version, check: true, drift, backups: [], retired, retiredKept, ...(report ? { access: report } : {}) };
+  const retiredKeptDetail: RetiredKept[] = opts.rehome === true ? retirePlan.kept : [];
+  if (opts.check) return { id, version, check: true, drift, backups: [], retired, retiredKept, retiredKeptDetail, ...(report ? { access: report } : {}) };
 
   // persona 自带内容（skills/bin 软链）也要重渲染：切版本后软链可能仍指旧槽位，而内容相同 → 曾漏判
   const msgKit = defaultMsg.ensureForPersona(id, m.capabilities);
@@ -1285,10 +1354,10 @@ export function render(id: string, opts: { host?: string; home?: string; check?:
       : { declared: false, added: 0, skipped: 0, root: null };
   const renderedRetired = mergeRetired(lock.renderedRetired ?? [], [
     ...retirePlan.remove,
-    ...retirePlan.kept.map((k) => ({ path: k.path, kept: k.kept })),
+    ...retirePlan.kept.map((k) => ({ path: k.path, kept: k.kept, ...(k.by ? { by: k.by } : {}) })),
   ]);
   writeFileSync(lockPath, JSON.stringify({ ...lock, rendered, renderedHashes, renderedDirs, renderedRetired, access: accessLock }, null, 1));
-  return { id, version, check: false, drift, backups, retired, retiredKept, msgKit, ...(report ? { access: report } : {}) };
+  return { id, version, check: false, drift, backups, retired, retiredKept, retiredKeptDetail, msgKit, ...(report ? { access: report } : {}) };
 }
 
 export interface RenderDriftReport {

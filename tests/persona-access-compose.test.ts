@@ -1700,6 +1700,61 @@ describe("㊶ codex AGENTS.md 同名：按 lock 哈希判定归属，只删自�
   });
 });
 
+describe("㊸ codex 共享 home + 字节相同的 AGENTS.md：按「其它 persona 引用」保留，不误删", () => {
+  test("A render --rehome：文件仍在、renderedRetired=kept-shared；A/B verify 均 0", () => {
+    const h1 = mkdtempSync(join(tmpdir(), "dia-pa-share-h1-"));
+    const h2 = mkdtempSync(join(tmpdir(), "dia-pa-share-h2-"));
+    const idA = "codesharea", idB = "codeshareb";
+    const same = "# shared codex\n\nsame bytes for A and B\n";
+
+    const dirA = mkdtempSync(join(tmpdir(), `dia-pa-${idA}-`));
+    mkdirSync(join(dirA, "agents"), { recursive: true });
+    writeFileSync(join(dirA, "agents", `${idA}.md`), `---\ndescription: ${idA}\n---\nA\n`);
+    writeFileSync(join(dirA, "AGENTS.md"), same);
+    writeFileSync(join(dirA, "dia.json"), JSON.stringify({
+      schema: 1, kind: "persona", id: idA, version: "0.1.0",
+      hosts: ["opencode", "codex"],
+      entry: { opencode: `agents/${idA}.md`, codex: "AGENTS.md" },
+      data_root: `~/.${idA}-agent`, access: { read: true },
+    }));
+
+    const dirB = mkdtempSync(join(tmpdir(), `dia-pa-${idB}-`));
+    writeFileSync(join(dirB, "AGENTS.md"), same);
+    writeFileSync(join(dirB, "dia.json"), JSON.stringify({
+      schema: 1, kind: "persona", id: idB, version: "0.1.0",
+      hosts: ["codex"], entry: { codex: "AGENTS.md" },
+    }));
+
+    expect(run(["persona", "add", idA, "--from", dirA], { DIA_CODEX_HOME: h1 }).status).toBe(0);
+    // 字节完全相同 ⇒ 不算冲突，B 无需 --force 就覆盖了同一个 AGENTS.md
+    expect(run(["persona", "add", idB, "--from", dirB], { DIA_CODEX_HOME: h1 }).status).toBe(0);
+    const agA = join(h1, ".codex", "AGENTS.md");
+    expect(readFileSync(agA, "utf8")).toBe(same);
+
+    const home2 = mkdtempSync(join(tmpdir(), "dia-pa-h-share-"));
+    const agentsA2 = join(data, "agents-share2");
+    mkdirSync(agentsA2, { recursive: true });
+    const r = run(["persona", "render", idA, "--rehome"], { DIA_HOME: home2, DIA_CODEX_HOME: h2, DIA_OPENCODE_AGENTS_DIR: agentsA2 });
+    if (r.status !== 0) console.error(r.stdout, r.stderr);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain(`其它 persona（${idB}）引用`);
+    // 归属判定第二道：虽哈希一致，但 B 还引用它 → 保留，不备份不删
+    expect(existsSync(agA)).toBe(true);
+    expect(readFileSync(agA, "utf8")).toBe(same);
+    expect(readFileSync(join(h2, ".codex", "AGENTS.md"), "utf8")).toBe(same);
+
+    const lockA = JSON.parse(readFileSync(lockOf(idA, "0.1.0+local"), "utf8"));
+    expect(lockA.rendered).not.toContain(agA);
+    expect(lockA.renderedHashes[agA]).toBeUndefined();
+    const retired = lockA.renderedRetired.find((e: any) => e && typeof e === "object" && e.path === agA);
+    expect(retired?.kept).toBe("kept-shared");
+    expect(retired?.by).toBe(idB);
+
+    expect(run(["persona", "verify", idA], { DIA_HOME: home2, DIA_CODEX_HOME: h2, DIA_OPENCODE_AGENTS_DIR: agentsA2 }).status).toBe(0);
+    expect(run(["persona", "verify", idB], { DIA_CODEX_HOME: h1 }).status).toBe(0);
+  });
+});
+
 describe("㊷ 坏 lock + 后续安装失败：lock 不离开原位，可恢复后 remove 干净", () => {
   test("dsh profile 非 dia 管理 → 32 且 lock 原样；修复后 add --force 成功，remove 回收干净", () => {
     const id = "halful";

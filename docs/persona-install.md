@@ -367,6 +367,10 @@ persona 需要在宿主里读写自己的数据根时，**不要手写 permissio
   并记入 `lock.renderedRetired` 且从 `rendered`/`renderedHashes` 移除，`verify` 不再报 missing、`remove` 不再退出 30。
   只有「当前字节 == lock 里记录的哈希」才认定是本 persona 产物；手改过的（或别的 persona 写入的同名
   codex `AGENTS.md`）**保留不删**，`renderedRetired` 里记为 `{ path, kept: "user-edited" }` 并在 CLI 告警。
+  另加一道共享引用校验：删除前扫描**其它已安装 persona 槽位**的 `dia.lock`（`rendered`/`renderedHashes`/`renderedRetired`），
+  该路径仍被别的 persona 引用时（典型：两个 codex persona 共用同一 home 且 `AGENTS.md` 字节相同）**保留不删**，
+  记 `{ path, kept: "kept-shared", by: "<其它 persona id>" }` 并告警「该产物被其它 persona（<id>）引用，已保留」——
+  否则删掉后对方 `verify` 直接 MISMATCH。
 - 计数字段**只有一个口径**（`render --check --json`、真渲染、`install`/`update` 输出与 lock 相同）：
   `added` = **本次合成新增的规则条数**；`skipped` = 源里已有等价规则而跳过的条数；
   `missing` = **dest 相对期望还缺的条数**（只在 `render`/`--check` 报；安装时为 `undefined`）。

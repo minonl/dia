@@ -15,6 +15,9 @@
   内容哈希与 lock 记录不一致（用户手改）时**保留不删**并告警，`renderedRetired` 记为 `{ path, kept: "user-edited" }`。
 - **codex `AGENTS.md` 归属校验**：只有「当前字节 == 本 persona 旧 lock 记录的哈希」才删；
   别的 persona 写入的同名文件保留并告警「疑似非本 persona 产物，已保留」。
+- **共享产物不被误删**：删除前扫描其它已安装 persona 槽位的 `dia.lock`，该路径仍被别的 persona 引用时
+  （同一 codex home + 字节相同的 `AGENTS.md`）保留不删，`renderedRetired` 记 `{ path, kept: "kept-shared", by }`，
+  告警「该产物被其它 persona（<id>）引用，已保留」；只对「哈希一致且无人引用」的产物备份后删除。
 - **dsh profile 归属检查前移到任何写盘之前**：避免先写 agent md 再失败留下「半安装」。
 - **嵌套 `versions/<v>` 下的 `scope.current`** 改用与 `dirOf`/`versionDirs` 同一解析器（嵌套优先），
   `dir`/`kits` 与 `dia persona path` 一致。

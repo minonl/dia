@@ -30,3 +30,23 @@
   并检测 `data_root` 首装后变成 symlink 的情况。
 - 告警：host 为 `dsh`/`codex` 时 `access` 本期不生效、`write=true` 但 `read!=true`、`data_root` 尚不存在。
 - 文档：[`docs/persona-install.md` §5.5](docs/persona-install.md)、`docs/cli.md`；测试：`tests/persona-access-compose.test.ts`。
+
+### fix(persona): access 合成第二轮对抗评审修复
+
+- **high** `persona use` 预检与切指针改用同一版本口径（`active.installedVersions` 的 semver+安装时间），
+  不再用 `persona.list()` 的字符串排序（`0.9.0` vs `0.10.0` 会分叉）；access 校验失败一律在
+  `active.use()` 之前退出 32，`active.json` 不动。
+- **high** `pnpm-lock.yaml` 补上 `yaml@2.9.1`；删掉误引入的 `bun.lock` 与 bun 自动加的 `workspaces` 字段
+  （仓库以 pnpm 为唯一包管理器，CI 用 `--frozen-lockfile`）。
+- **high** `permissions` 项字段校验：必须是 map、`action/resource/effect` 三键齐备且为非空字符串、
+  `effect ∈ {allow,deny,ask}`，否则 `E_MANIFEST`（32 + 行号），不再让 opencode 静默丢弃整份 agent。
+- **medium** 等价规则已存在但被后续规则覆盖（`*: ask` 排在 allow 之后、`.env ask` 排在 read allow 之前）→
+  `E_MANIFEST` 提示作者调顺序，不再 `added=0` 静默失效。
+- **medium** `render`/`verify`/`renderDrift` 统一以 lock 记录的 `homedir` 为准（换 HOME 只 warn），
+  新增 `dia persona render --rehome` 才改写路径并更新 lock。
+- **medium** `render --check --json` 的 `access.added` 改为「dest 相对期望缺几条」（一致时 0），
+  真渲染同口径；`skipped` 仍是「源里已有几条」。
+- **medium** brace deny 用例换成不重叠的 `/var/tmp` fixture，并补 `coversRoot`/`singleCovers` 对照单测
+  （不展开 brace 就必须为 false）。
+- **low** 只替换 frontmatter 文本块，body 逐字节保留（混合换行不再被统一改写）；frontmatter eol 按块自身探测。
+- **low** `persona check` 不再把 `E_MANIFEST` 吞成 `MISMATCH/exit 2`，原样冒泡 32。

@@ -319,7 +319,7 @@ describe("⑤b 更宽 deny 的 glob 写法（全部 fail closed）", () => {
     { id: "deny-ss", resource: () => "/**" },
     { id: "deny-s", resource: () => "/*" },
     { id: "deny-ds", resource: () => "**/*" },
-    { id: "deny-brace", resource: (r) => `{${r},/tmp}/**` },
+    { id: "deny-brace", resource: (r) => `{${r},/var/tmp}/**` },
     { id: "deny-q", resource: () => join(home, ".?-agent/**") }, // `<home>/.?-agent/**` 命中 `.q-agent`
   ];
   for (const c of cases) {
@@ -781,9 +781,265 @@ describe("纯函数 composeAgentText", () => {
       id: "rc", dataRoot: "~/.rc-agent", access: { write: true }, homedir: home,
     });
     const R = join(home, ".rc-agent");
-    for (const deny of ["/**", "/*", "**/*", `{${R},/tmp}/**`, `${home}/.r?-agent/**`]) {
+    for (const deny of ["/**", "/*", "**/*", `{${R},/var/tmp}/**`, `${home}/.r?-agent/**`]) {
       const src = `---\npermissions:\n  - action: edit\n    resource: ${JSON.stringify(deny)}\n    effect: deny\n---\nbody\n`;
       expect(() => accessMod.composeAgentText(src, opts(deny))).toThrow(/E_MANIFEST/);
     }
+  });
+
+  test("brace 覆盖必须真的靠 expandBraces（对照组：不展开就抓不住）", () => {
+    const R = join(home, ".rc-agent");
+    // /var/tmp 不是 home 的祖先：只有 `{R,/var/tmp}` 里的 R 分支能覆盖 root
+    expect(accessMod.coversRoot(`{${R},/var/tmp}/**`, R, home)).toBe(true);
+    // 同一模式不做 brace 展开时 singleCovers 必须为 false —— 否则上面的用例是假通过
+    expect(accessMod.singleCovers(`{${R},/var/tmp}/**`, R)).toBe(false);
+    expect(accessMod.singleCovers(`${R}/**`, R)).toBe(true);
+  });
+});
+
+// ---- ⑮ persona use：目标版本口径 + 预检先于切指针（HIGH） --------------------
+describe("⑮ persona use 选版本与 access 预检", () => {
+  const slotEntry = (id: string, v: string) =>
+    join(data, "personas", id, `${v}+local`, "agents", `${id}.md`);
+  const installV = (id: string, v: string, force = false) => {
+    const dir = makePersona({ id, dataRoot: `~/.${id}-agent`, access: { read: true }, manifestExtra: { version: v } });
+    return run(["persona", "add", id, "--from", dir, ...(force ? ["--force"] : [])]);
+  };
+  const activeRaw = (): any => {
+    try { return JSON.parse(readFileSync(join(data, "state", "active.json"), "utf8")); }
+    catch { return {}; }
+  };
+  const BAD = "---\npermissions:\n  - action: read\n---\nbody\n"; // 缺 resource/effect
+
+  test("0.9.0 合法 / 0.10.0 非法：use 选 0.10.0 → 32，指针未动；0.9.0 不被误拒", () => {
+    expect(installV("useord", "0.9.0").status).toBe(0);
+    expect(installV("useord", "0.10.0", true).status).toBe(0);
+    writeFileSync(slotEntry("useord", "0.10.0"), BAD);
+    const before = activeRaw();
+    const r = run(["persona", "use", "useord"]);
+    expect(r.status).toBe(32);
+    expect(r.stderr).toContain("E_MANIFEST");
+    expect(activeRaw()).toEqual(before);
+    expect(activeRaw().useord).toBeUndefined();
+    const ok = run(["persona", "use", "useord@0.9.0"]);
+    expect(ok.status).toBe(0);
+    expect(activeRaw().useord.version).toBe("0.9.0+local");
+  });
+
+  test("0.10.0 合法 / 0.9.0 非法：use 选 0.10.0 → 0；显式 0.9.0 → 32 且指针不动", () => {
+    expect(installV("userev", "0.10.0").status).toBe(0);
+    expect(installV("userev", "0.9.0", true).status).toBe(0);
+    writeFileSync(slotEntry("userev", "0.9.0"), BAD);
+    const ok = run(["persona", "use", "userev"]);
+    expect(ok.status).toBe(0);
+    expect(activeRaw().userev.version).toBe("0.10.0+local");
+    const bad = run(["persona", "use", "userev@0.9.0"]);
+    expect(bad.status).toBe(32);
+    expect(bad.stderr).toContain("E_MANIFEST");
+    expect(activeRaw().userev.version).toBe("0.10.0+local");
+  });
+});
+
+// ---- ⑯ permissions 项字段残缺：opencode 会整份丢弃 → 必须 32（HIGH） --------
+describe("⑯ permissions 项字段残缺/类型错 → fail closed", () => {
+  const cases: Record<string, string[]> = {
+    "p-missing": ["  - action: read"],
+    "p-num": ["  - action: read", "    resource: 123", "    effect: allow"],
+    "p-effect": ["  - action: read", '    resource: "~/.p-effect-agent/**"', "    effect: Allow"],
+  };
+  for (const [id, perm] of Object.entries(cases)) {
+    test(`${id}: 32 + 行号 + dest 未创建`, () => {
+      const body = ["---", "description: badperm", "permissions:", ...perm, "---", "body", ""].join("\n");
+      const dir = makePersona({ id, dataRoot: `~/.${id}-agent`, access: { read: true }, body });
+      const r = run(["persona", "add", id, "--from", dir]);
+      expectReject(r, id);
+      expect(r.stderr).toMatch(/第 \d+ 行/);
+    });
+  }
+
+  test("dest 已有哨兵字节 → 32 且一个字节都不改", () => {
+    const body = "---\ndescription: x\npermissions:\n  - action: read\n---\nbody\n";
+    const dir = makePersona({ id: "p-sentinel", dataRoot: "~/.p-sentinel-agent", access: { read: true }, body });
+    const dest = agentDest("p-sentinel");
+    writeFileSync(dest, "SENTINEL\n");
+    const r = run(["persona", "add", "p-sentinel", "--from", dir, "--force"]);
+    expect(r.status).toBe(32);
+    expect(r.stderr).toContain("E_MANIFEST");
+    expect(readFileSync(dest, "utf8")).toBe("SENTINEL\n");
+  });
+});
+
+// ---- ⑰ 等价规则存在但顺序会失效 → 32（MEDIUM） ------------------------------
+describe("⑰ 等价规则顺序失效（added=0 但规则实际无效）", () => {
+  const permLines = (R: string, effectStarFirst: boolean) => {
+    const eq = [
+      "  - action: external_directory",
+      `    resource: ${R}/**`,
+      "    effect: allow",
+      "  - action: read",
+      `    resource: ${R}/**`,
+      "    effect: allow",
+      "  - action: edit",
+      `    resource: ${R}/**`,
+      "    effect: allow",
+      "  - action: read",
+      `    resource: ${R}/*.env`,
+      "    effect: ask",
+      "  - action: read",
+      `    resource: ${R}/*.env.*`,
+      "    effect: ask",
+    ];
+    const star = ["  - action: \"*\"", "    resource: \"*\"", "    effect: ask"];
+    return effectStarFirst ? [...star, ...eq] : [...eq, ...star];
+  };
+
+  test("`*: ask` 排在等价 allow 之后 → 32（提示调整顺序）", () => {
+    const id = "ord-star";
+    const R = root(id);
+    const body = ["---", "description: order", "permissions:", ...permLines(R, false), "---", "body", ""].join("\n");
+    const dir = makePersona({ id, dataRoot: `~/.${id}-agent`, access: { read: true, write: true }, body });
+    const r = run(["persona", "add", id, "--from", dir]);
+    expectReject(r, id);
+    expect(r.stderr).toMatch(/调整顺序|覆盖/);
+  });
+
+  test(".env ask 排在 read allow 之前 → 32", () => {
+    const id = "ord-env";
+    const R = root(id);
+    const body = [
+      "---",
+      "description: order",
+      "permissions:",
+      "  - action: read",
+      `    resource: ${R}/*.env`,
+      "    effect: ask",
+      "  - action: read",
+      `    resource: ${R}/*.env.*`,
+      "    effect: ask",
+      "  - action: read",
+      `    resource: ${R}/**`,
+      "    effect: allow",
+      "  - action: edit",
+      `    resource: ${R}/**`,
+      "    effect: deny",
+      "  - action: external_directory",
+      `    resource: ${R}/**`,
+      "    effect: allow",
+      "---",
+      "body",
+      "",
+    ].join("\n");
+    const dir = makePersona({ id, dataRoot: `~/.${id}-agent`, access: { read: true }, body });
+    const r = run(["persona", "add", id, "--from", dir]);
+    expectReject(r, id);
+    expect(r.stderr).toMatch(/调整顺序|覆盖/);
+  });
+
+  test("顺序正确 + 末尾精确路径规则 → 仍成功且字节不变（不误拒）", () => {
+    const id = "ord-ok";
+    const R = root(id);
+    const body = [
+      "---",
+      "description: order",
+      "permissions:",
+      '  - action: "*"',
+      '    resource: "*"',
+      "    effect: ask",
+      ...permLines(R, false).slice(0, 15),
+      "  - action: read",
+      `    resource: ${R}/*.secret`,
+      "    effect: allow",
+      "---",
+      "body",
+      "",
+    ].join("\n");
+    const dir = makePersona({ id, dataRoot: `~/.${id}-agent`, access: { read: true, write: true }, body });
+    const r = run(["persona", "add", id, "--from", dir]);
+    expect(r.status).toBe(0);
+    expect(readFileSync(agentDest(id), "utf8")).toBe(body);
+  });
+});
+
+// ---- ⑱ homedir 口径统一（MEDIUM） ------------------------------------------
+describe("⑱ render/verify 的 homedir 都以 lock 为准", () => {
+  test("换 DIA_HOME：--check 无 drift、有 warn；真渲染不改路径", () => {
+    const id = "rehome1";
+    const dir = makePersona({ id, dataRoot: `~/.${id}-agent`, access: { read: true, write: true } });
+    expect(run(["persona", "add", id, "--from", dir]).status).toBe(0);
+    const dest = agentDest(id);
+    const before = readFileSync(dest, "utf8");
+    const home2 = mkdtempSync(join(tmpdir(), "dia-pa-h2-"));
+    const chk = run(["persona", "render", id, "--check", "--json"], { DIA_HOME: home2 });
+    expect(chk.status).toBe(0);
+    const payload = JSON.parse(chk.stdout);
+    expect(payload.drift).toEqual([]);
+    expect(payload.access.warnings.join("\n")).toContain("homedir 与安装时不同");
+    expect(readFileSync(dest, "utf8")).toBe(before);
+    const rr = run(["persona", "render", id], { DIA_HOME: home2 });
+    expect(rr.status).toBe(0);
+    expect(readFileSync(dest, "utf8")).toBe(before);
+  });
+
+  test("--rehome 才改路径并更新 lock", () => {
+    const id = "rehome2";
+    const dir = makePersona({ id, dataRoot: `~/.${id}-agent`, access: { read: true, write: true } });
+    expect(run(["persona", "add", id, "--from", dir]).status).toBe(0);
+    const home2 = mkdtempSync(join(tmpdir(), "dia-pa-h3-"));
+    const rr = run(["persona", "render", id, "--rehome"], { DIA_HOME: home2 });
+    expect(rr.status).toBe(0);
+    const text = readFileSync(agentDest(id), "utf8");
+    expect(text).toContain(join(home2, `.${id}-agent`));
+    // lock 跟着改写；之后用新 home 校验一致
+    const slot = join(data, "personas", id, "0.1.0+local", "dia.lock");
+    const lock = JSON.parse(readFileSync(slot, "utf8"));
+    expect(lock.access.homedir).toBe(home2);
+    expect(run(["persona", "verify", id], { DIA_HOME: home2 }).status).toBe(0);
+  });
+});
+
+// ---- ⑲ --check 的 added 口径（MEDIUM） -------------------------------------
+describe("⑲ render --check 的 access.added = dest 相对期望缺几条", () => {
+  test("一致时 added=0、skipped=0；非 --check 一致时 added 也为 0", () => {
+    const id = "chkzero";
+    const dir = makePersona({ id, dataRoot: `~/.${id}-agent`, access: { read: true, write: true } });
+    expect(run(["persona", "add", id, "--from", dir]).status).toBe(0);
+    const chk = run(["persona", "render", id, "--check", "--json"]);
+    expect(chk.status).toBe(0);
+    const p = JSON.parse(chk.stdout);
+    expect(p.access.added).toBe(0);
+    expect(p.access.skipped).toBe(0);
+    const rr = run(["persona", "render", id, "--json"]);
+    expect(rr.status).toBe(0);
+    expect(JSON.parse(rr.stdout).access.added).toBe(0);
+  });
+});
+
+// ---- ⑳ persona check 不吞 E_MANIFEST（LOW） --------------------------------
+describe("⑳ persona check 透传 access 错误", () => {
+  test("坏 permissions 项 → 32 + 原始 E_MANIFEST 信息", () => {
+    const id = "chkbad";
+    const dir = makePersona({ id, dataRoot: `~/.${id}-agent`, access: { read: true } });
+    expect(run(["persona", "add", id, "--from", dir]).status).toBe(0);
+    const slot = join(data, "personas", id, "0.1.0+local", "agents", `${id}.md`);
+    writeFileSync(slot, "---\npermissions:\n  - action: read\n---\nbody\n");
+    const r = run(["persona", "check", id]);
+    expect(r.status).toBe(32);
+    expect(r.stderr).toContain("E_MANIFEST");
+    expect(r.stdout).not.toContain("MISMATCH");
+  });
+});
+
+// ---- ㉑ 混合换行：body 逐字节保留（LOW） ------------------------------------
+describe("㉑ 混合换行 body 不被统一改写", () => {
+  test("frontmatter 按块自身 LF；body 的 CRLF 原样保留", async () => {
+    const accessMod: any = await import("../src/persona-access.ts");
+    const src = "---\ndescription: mixed\n---\r\nline1\r\nline2\r\n";
+    const out = accessMod.composeAgentText(src, {
+      id: "mix", dataRoot: "~/.mix-agent", access: { read: true }, homedir: home,
+    });
+    expect(out.text.startsWith("---\n")).toBe(true);
+    expect(out.text).not.toContain("description: mixed\r\n");
+    const idx = out.text.lastIndexOf("---\r\n");
+    expect(out.text.slice(idx)).toBe("---\r\nline1\r\nline2\r\n");
   });
 });

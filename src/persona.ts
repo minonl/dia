@@ -107,8 +107,8 @@ function accessWarnings(m: Manifest, hosts: string[], root: string | null): stri
   return w;
 }
 
-function planAccess(m: Manifest, hosts: string[]): { state: access.AccessState; warnings: string[] } {
-  const state = access.inspectAccess(m, homeDir());
+function planAccess(m: Manifest, hosts: string[], home = homeDir()): { state: access.AccessState; warnings: string[] } {
+  const state = access.inspectAccess(m, home);
   return { state, warnings: state.declared ? accessWarnings(m, hosts, state.root) : [] };
 }
 
@@ -773,7 +773,7 @@ function compareDir(expected: string, actual: string): RenderDrift[] {
  * 用**已安装版本**重渲染到宿主（不换内容）。`check` 只报 drift、不写盘。
  * 覆盖策略：被手改/丢失的产物先备份到 `<data>/backups/render-<ts>/`，再写回。
  */
-export function render(id: string, opts: { host?: string; home?: string; check?: boolean; version?: string } = {}): RenderResult {
+export function render(id: string, opts: { host?: string; home?: string; check?: boolean; version?: string; rehome?: boolean } = {}): RenderResult {
   const idDir = join(dataDir(), "personas", id);
   if (!existsSync(idDir)) throw new Error(`E_NOT_INSTALLED: persona ${id}`);
   const version = opts.version
@@ -783,10 +783,22 @@ export function render(id: string, opts: { host?: string; home?: string; check?:
   const m = readManifest(dir);
   const hosts = opts.host ? [opts.host] : (m.hosts ?? ["opencode"]);
   for (const h of hosts) assertHost(h);
-  const acc = planAccess(m, hosts);
+
+  // homedir 口径统一：lock 里记了安装时的家目录就以它为准（render/verify/renderDrift 同源），
+  // 换 HOME 重跑只会 warn，不会把产物路径改写成新 HOME；要改必须显式 --rehome。
+  const lockPath = join(dir, "dia.lock");
+  let lock: any = {};
+  try { lock = JSON.parse(readFileSync(lockPath, "utf8")); } catch { lock = {}; }
+  const recordedHome = typeof lock.access?.homedir === "string" ? lock.access.homedir : null;
+  const effHome = opts.rehome === true || !recordedHome ? homeDir() : recordedHome;
+  const homeWarn = recordedHome && !opts.rehome && resolve(recordedHome) !== resolve(homeDir())
+    ? `homedir 与安装时不同（lock: ${recordedHome}，当前: ${homeDir()}），按 lock 记录渲染（要改路径用 --rehome）`
+    : null;
+
+  const acc = planAccess(m, hosts, effHome);
   let composed: access.ComposeResult | null = null;
   const report: AccessReport | undefined = acc.state.declared
-    ? { declared: true, added: 0, skipped: 0, root: acc.state.root, warnings: acc.warnings }
+    ? { declared: true, added: 0, skipped: 0, root: acc.state.root, warnings: [...acc.warnings, ...(homeWarn ? [homeWarn] : [])] }
     : undefined;
 
   const drift: RenderDrift[] = [];
@@ -802,8 +814,13 @@ export function render(id: string, opts: { host?: string; home?: string; check?:
     if (!existsSync(agentSrc)) throw new Error("E_MANIFEST: entry.opencode file missing");
     agentDest = join(opencodeAgents(), `${id}.md`);
     // drift 比对用「合成期望」：源永远是未合成的，dest 是合成后的（幂等，不会叠加）
-    composed = composeEntry(m, acc.state, agentSrc);
-    if (report && composed) { report.added = composed.added; report.skipped = composed.skipped; }
+    composed = composeEntry(m, acc.state, agentSrc, effHome);
+    if (report && composed) {
+      // added = dest 相对期望还缺几条（--check 与真渲染同口径；一致时 0）
+      const destNow = existsSync(agentDest) ? readFileSync(agentDest, "utf8") : null;
+      report.added = access.countMissingRules(destNow, composed.text, effHome);
+      report.skipped = composed.skipped;
+    }
     const wantHash = composed ? shaStr(composed.text) : shaFile(agentSrc);
     if (!existsSync(agentDest)) drift.push({ path: agentDest, action: "missing" });
     else if (shaFile(agentDest) !== wantHash) drift.push({ path: agentDest, action: "changed" });
@@ -896,8 +913,6 @@ export function render(id: string, opts: { host?: string; home?: string; check?:
   const inlineRendered = kit.renderContent(dir, dir, inlineManifest, { force: true }) ?? [];
 
   // 只更新渲染产物记录；persona 内容哈希（lock.hash）不变。
-  const lockPath = join(dir, "dia.lock");
-  const lock = JSON.parse(readFileSync(lockPath, "utf8"));
   // 换 codex home 后，旧渲染路径要**剪掉**（否则 lock 里留着已不存在的路径 ⇒ verify 恒 missing）
   const staleCodex = codexDest
     ? (lock.rendered ?? []).filter((p: string) => p.endsWith("/.codex/AGENTS.md") && p !== codexDest)
@@ -916,10 +931,10 @@ export function render(id: string, opts: { host?: string; home?: string; check?:
   if (dshDest) renderedDirs.push({ path: dshDest, hash: hashTree(dshDest) });
   // lock 里的 access 段跟着重渲染刷新（合成条数以本次 render 为准）
   const accessLock = acc.state.declared
-    ? { declared: true, added: composed?.added ?? 0, skipped: composed?.skipped ?? 0, root: acc.state.root, homedir: homeDir() }
+    ? { declared: true, added: composed?.added ?? 0, skipped: composed?.skipped ?? 0, root: acc.state.root, homedir: effHome }
     : { declared: false, added: 0, skipped: 0, root: null };
   writeFileSync(lockPath, JSON.stringify({ ...lock, rendered, renderedHashes, renderedDirs, access: accessLock }, null, 1));
-  return { id, version, check: false, drift, backups, msgKit, ...(report ? { access: { ...report, added: composed?.added ?? 0, skipped: composed?.skipped ?? 0 } } : {}) };
+  return { id, version, check: false, drift, backups, msgKit, ...(report ? { access: report } : {}) };
 }
 
 export interface RenderDriftReport {
@@ -1197,9 +1212,12 @@ export function checkUpstream(id: string, version?: string): UpstreamState {
   if (!existsSync(idDir)) throw new Error("E_NOT_INSTALLED");
   const v = version || (active.effective(id)?.version ?? readdirSync(idDir).sort().pop()!);
   const lock = JSON.parse(readFileSync(join(idDir, v, "dia.lock"), "utf8"));
-  // access 校验失败会抛 E_MANIFEST；这里降级成 verify_ok=false，让 `persona check` 仍能报上游关系
+  // access 校验失败是 E_MANIFEST（CLI 退出 32）：原样冒泡，别吞成 MISMATCH/exit 2
   let verifyOk = false;
-  try { verifyOk = verify(id, v).ok; } catch { verifyOk = false; }
+  try { verifyOk = verify(id, v).ok; } catch (e: any) {
+    if (String(e?.message ?? e).startsWith("E_MANIFEST")) throw e;
+    verifyOk = false;
+  }
   const vres = { ok: verifyOk };
   const out: UpstreamState = {
     id, version: v,

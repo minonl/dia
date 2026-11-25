@@ -311,6 +311,9 @@ persona 需要在宿主里读写自己的数据根时，**不要手写 permissio
 - **字节零变化**：没有规则可追加（全部已存在）时不重新序列化，**原样返回输入**；
 - **幂等**：合成只作用于 persona **源 entry**，不作用于已渲染的 dest；重复 render 字节恒等；
 - **去重**：已存在同一 `(action, 归一化 resource, effect)` 就跳过。归一化只做三件事：`~`/`~/`、`$HOME`/`$HOME/` 展开；尾部后缀保持原样（`/**` 与 `/*` 是**不同**资源，不做包含推断）。
+- **只替换 frontmatter 文本块**：body 逐字节保留（混合换行不会被统一改写）；frontmatter 的换行符按该块自身探测。
+- **顺序校验**：等价规则存在但被后面的规则覆盖（后写生效）时拒绝，而不是 `added=0` 静默成功；
+  不自动重排（重排会改作者语义），报行号让作者自己调。
 
 ### 5.5.3 失败矩阵（全部 fail closed：退出 32、不写盘、不改 lock）
 
@@ -322,6 +325,8 @@ persona 需要在宿主里读写自己的数据根时，**不要手写 permissio
 | `data_root` 已存在且是 symlink / realpath 逃出家目录 / 不是目录 | `E_MANIFEST` |
 | 已有更宽的 `deny`（`action` 为 `*` 或目标 action，resource 覆盖 root 的 glob）会覆盖合成 allow/ask | `E_MANIFEST` |
 | 已有同 `(action, resource)` 但 `effect` 不同 | `E_MANIFEST` + **行号**提示 |
+| 等价规则已存在（`added=0`），但它后面还有 `*: ask` / 更宽的 allow 会把它覆盖掉 | `E_MANIFEST` + 行号，提示调整顺序（不自动重排） |
+| `permissions` 项不是 map、缺 `action`/`resource`/`effect`、字段非字符串或为空、`effect` 不是 `allow|deny|ask` | `E_MANIFEST` + 行号（opencode 会静默丢弃整份 agent） |
 | frontmatter 不是合法 YAML（tab 缩进、重复键、括号不配对等） | `E_MANIFEST` |
 | V1 map（`permissions:` 下 `key: effect`）、`permissions` 下非映射列表项、无 frontmatter、缺收尾 `---` | `E_MANIFEST` |
 | `access.read/write/env` 非 boolean | `E_MANIFEST` |
@@ -342,8 +347,11 @@ brace 交替（`{<root>,/tmp}/**`）、`?` 通配（`~/.<id>-ag?nt/**`）。判�
   合成规则就指向了别处。`verify` 会重新校验 `data_root` 形状（symlink / 非目录 / realpath 逃逸 → 退出 32），
   但**首装时**没有任何东西阻止后来的 symlink —— 建议 persona 自己 `mkdir` 创建真实目录，别用软链。
 - 合成的字节写进 dest，`dia.lock` 的 `renderedHashes` 与 `access: {declared, added, skipped, root, homedir}`
-  都记**合成后**的结果；`homedir` 供 `verify` 用同一家目录重算，换 `DIA_HOME`/`HOME` 重跑不会误报
-  「access 合成与 lock 记录不一致」；
+  都记**合成后**的结果；lock 里已有 `homedir` 时，`render` / `verify` / `renderDrift` **都以它为准**
+  （换 `DIA_HOME`/`HOME` 重跑只 warn「homedir 与安装时不同，按 lock 记录渲染」，不重写路径）；
+  确需改写路径时用 `dia persona render <id> --rehome`（同时更新 lock 的 `homedir`）；
+- `render --check --json` 的 `access.added` 是「dest 相对期望还缺几条」（一致时为 0），
+  `skipped` 是「源里已有几条等价规则」；真渲染用同一口径（修完再报缺几条）；
 - 「已存在且不同」的冲突判断也按合成期望比较（否则重装必 `E_CONFLICT`）。
 
 ## 6. 当前缺口

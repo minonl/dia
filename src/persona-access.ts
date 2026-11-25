@@ -203,7 +203,8 @@ function globToRegExp(glob: string): RegExp {
  * 先剥掉尾部 `/**` / `/*`（含连续），再用「字面前缀是祖先」+「glob 精确匹配 root/祖先」判定——
  * 不用字符串 startsWith 猜，`?` / `{a,b}` / `**` 这类都走得通。
  */
-function singleCovers(pattern: string, root: string): boolean {
+/** 导出仅为测试：brace 必须靠 expandBraces 展开，单条 `{a,b}` 本身不覆盖 root。 */
+export function singleCovers(pattern: string, root: string): boolean {
   let q = pattern.trim();
   if (!q) return false;
   for (;;) {
@@ -228,8 +229,11 @@ function singleCovers(pattern: string, root: string): boolean {
   return false;
 }
 
-/** deny 的 resource 是否覆盖整个 root（`*` / root 本身 / 祖先链上的 glob）。 */
-function coversRoot(resource: string, root: string, home: string): boolean {
+/**
+ * deny 的 resource 是否覆盖整个 root（`*` / root 本身 / 祖先链上的 glob）。
+ * 导出仅为测试：brace 展开若失效，`{a,b}/**` 这类写法必须能被单测直接抓住。
+ */
+export function coversRoot(resource: string, root: string, home: string): boolean {
   const normalized = normalizeResource(resource, home);
   for (const alt of expandBraces(normalized)) {
     if (singleCovers(alt, root)) return true;
@@ -237,7 +241,58 @@ function coversRoot(resource: string, root: string, home: string): boolean {
   return false;
 }
 
-// ---- frontmatter -----------------------------------------------------------
+/**
+ * 后者（pattern）作为**子树规则**是否覆盖前者（target resource）。
+ * 只把 `*` / `**` / 以 `/**`、`/*` 结尾的模式视为「子树覆盖」；精确路径规则只覆盖同一 resource——
+ * 这样 `read R/*.secret` 不会误判成覆盖 `read R/*.env`（避免误拒作者规则）。
+ */
+function subtreeCovers(pattern: string, target: string, home: string): boolean {
+  for (const raw of expandBraces(normalizeResource(pattern, home))) {
+    let q = raw.trim();
+    let subtree = false;
+    for (;;) {
+      if (q === "*" || q === "**") return true;
+      if (q.endsWith("/**")) { q = q.slice(0, -3); subtree = true; continue; }
+      if (q.endsWith("/*")) { q = q.slice(0, -2); subtree = true; continue; }
+      break;
+    }
+    if (!subtree) {
+      if (q === target) return true;
+      continue;
+    }
+    if (!q || q === "/") return true;
+    if (target === q || target.startsWith(q + "/")) return true;
+    const re = globToRegExp(q);
+    if (re.test(target)) return true;
+    for (let anc = dirname(target); anc && anc !== "/" && anc.length >= q.length; anc = dirname(anc)) {
+      if (re.test(anc)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * dest 相对「期望 frontmatter」还缺几条规则（`--check` 的 `access.added` 口径）。
+ * 读不了 dest（缺失/坏 YAML）⇒ 全部算缺；不改任何文件。
+ */
+export function countMissingRules(destText: string | null, expectedText: string, homedirPath: string): number {
+  const home = resolve(homedirPath);
+  const keyOf = (r: Rule) => ruleKey(r.action, r.resource, r.effect, home);
+  const keysOf = (text: string): string[] => {
+    const fm = splitFrontmatter(text);
+    const doc = parseDocument(fm.text);
+    if (doc.errors.length) throw err("frontmatter 不是合法 YAML（读取规则失败）");
+    const node = doc.get("permissions");
+    if (node == null) return [];
+    if (!isSeq(node)) throw err("permissions 必须是列表（YAML 序列）");
+    return readExistingRules(node, fm.text).map(keyOf);
+  };
+  const want = keysOf(expectedText);
+  if (!destText) return want.length;
+  let have: Set<string>;
+  try { have = new Set(keysOf(destText)); } catch { return want.length; }
+  return want.filter((k) => !have.has(k)).length;
+}
 
 interface Frontmatter {
   lines: string[];
@@ -246,21 +301,50 @@ interface Frontmatter {
   fmEnd: number;
   /** frontmatter 内容（不含两端的 `---` 行） */
   text: string;
+  /** frontmatter 内容在原文件中的起始偏移（首行 `---` 之后） */
+  fmStart: number;
+  /** 收尾 `---` 行在原文件中的起始偏移（从这往后逐字节不动） */
+  fmEndOffset: number;
 }
 
-/** 首行 `---` 起、到下一条**列 0 且内容为 `---`** 结束（块标量里的 `---` 有缩进，不会误判）。 */
+/** 按 `\n` 切行，保留每行的原始终止符（`\r\n` / `\n` / 末行无终止符）。 */
+function splitLines(text: string): { content: string; eol: string; start: number }[] {
+  const out: { content: string; eol: string; start: number }[] = [];
+  let start = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (text.charCodeAt(i) !== 10) continue;
+    const hasCr = i > start && text.charCodeAt(i - 1) === 13;
+    out.push({ content: text.slice(start, hasCr ? i - 1 : i), eol: hasCr ? "\r\n" : "\n", start });
+    start = i + 1;
+  }
+  if (start < text.length || !out.length) out.push({ content: text.slice(start), eol: "", start });
+  return out;
+}
+
+/**
+ * 首行 `---` 起、到下一条**列 0 且内容为 `---`** 结束（块标量里的 `---` 有缩进，不会误判）。
+ * eol 按 frontmatter 块自身探测；body 由调用方按偏移逐字节保留（混合换行不被统一改写）。
+ */
 function splitFrontmatter(text: string): Frontmatter {
-  const eol = text.includes("\r\n") ? "\r\n" : "\n";
-  const lines = text.split(/\r?\n/);
-  if (!lines.length || lines[0].trim() !== "---") {
+  const lines = splitLines(text);
+  if (!lines.length || lines[0].content.trim() !== "---") {
     throw err("agent 文件缺少 frontmatter（首行必须是 ---；access 合成只支持 YAML frontmatter）");
   }
   let fmEnd = -1;
   for (let i = 1; i < lines.length; i++) {
-    if (/^---[ \t]*$/.test(lines[i])) { fmEnd = i; break; }
+    if (/^---[ \t]*$/.test(lines[i].content)) { fmEnd = i; break; }
   }
   if (fmEnd < 0) throw err("frontmatter 缺少收尾 ---（列 0 且内容为 --- 的行）");
-  return { lines, eol, fmEnd, text: lines.slice(1, fmEnd).join("\n") };
+  const fmLines = lines.slice(1, fmEnd);
+  const eol = fmLines[0]?.eol || lines[0].eol || "\n";
+  return {
+    lines: lines.map((l) => l.content),
+    eol,
+    fmEnd,
+    text: fmLines.map((l) => l.content).join("\n"),
+    fmStart: lines[1]?.start ?? lines[0].start + lines[0].content.length,
+    fmEndOffset: lines[fmEnd].start,
+  };
 }
 
 interface ExistingRule extends Rule { line: number }
@@ -273,35 +357,41 @@ function lineOf(node: any, fmText: string): number {
   return n + 1;
 }
 
+/** 只有**字符串标量**才算合法字段值：`resource: 123` / `effect: Allow` 必须被拒绝。 */
 const scalarText = (node: any): string | undefined => {
   if (node === null || node === undefined) return undefined;
+  if (isScalar(node)) return typeof node.value === "string" ? node.value : undefined;
   if (typeof node === "string") return node;
-  if (typeof node === "number" || typeof node === "boolean") return String(node);
-  if (isScalar(node)) {
-    const v = node.value;
-    if (v === null || v === undefined) return undefined;
-    return typeof v === "string" ? v : String(v);
-  }
   return undefined;
 };
 
 /**
  * 读现有 `permissions` 序列（AST 遍历，带行号）。
- * 只接受「映射列表项」；map 形式（V1 `key: effect`）与非映射项一律拒绝。
+ * 每一项都必须是 map，且 `action`/`resource`/`effect` 三键齐备、非空字符串、effect 合法——
+ * 少一个字段 opencode 会**静默丢弃整份 agent**，所以这里一律 E_MANIFEST（fail closed）。
  */
 function readExistingRules(seq: any, fmText: string): ExistingRule[] {
   const out: ExistingRule[] = [];
   for (const item of seq.items) {
+    const line = lineOf(item, fmText);
     if (!isMap(item)) {
-      throw err(`permissions 下有非列表项（第 ${lineOf(item, fmText)} 行）：期望 {action, resource, effect}`);
+      throw err(`permissions 下有非列表项（第 ${line} 行）：期望 {action, resource, effect}`);
     }
-    const action = scalarText(item.get("action"));
-    const resource = scalarText(item.get("resource"));
-    const effect = scalarText(item.get("effect"));
-    if (action === undefined && resource === undefined && effect === undefined) {
-      throw err(`permissions 下有非列表项（第 ${lineOf(item, fmText)} 行）：期望 {action, resource, effect}`);
+    const vals: Record<string, string> = {};
+    for (const key of ["action", "resource", "effect"] as const) {
+      if (!item.has(key)) {
+        throw err(`permissions 第 ${line} 行的列表项缺少 ${key}（每项必须同时有 action/resource/effect）`);
+      }
+      const v = scalarText(item.get(key));
+      if (v === undefined || v.trim() === "") {
+        throw err(`permissions 第 ${line} 行的 ${key} 必须是非空字符串（收到 ${JSON.stringify(item.get(key)?.value ?? null)}）`);
+      }
+      vals[key] = v;
     }
-    if (action && resource && effect) out.push({ action, resource, effect, line: lineOf(item, fmText) });
+    if (!["allow", "deny", "ask"].includes(vals.effect)) {
+      throw err(`permissions 第 ${line} 行的 effect 必须是 allow|deny|ask（收到 ${JSON.stringify(vals.effect)}）`);
+    }
+    out.push({ action: vals.action, resource: vals.resource, effect: vals.effect, line });
   }
   return out;
 }
@@ -357,18 +447,22 @@ export function composeAgentText(text: string, opts: ComposeOptions): ComposeRes
 
   // 去重 + 同 (action, resource) 不同 effect 冲突
   const skip = new Set<string>();
+  /** 每个 skip 掉的期望规则，对应源里**最后一次**等价规则的下标（取最后一次：前面的副本可能被覆盖，最后一条才是生效的） */
+  const equivAt = new Map<string, number>();
   for (const want of wants) {
-    for (const cur of existing) {
-      if (cur.action !== want.action) continue;
-      if (normalizeResource(cur.resource, home) !== normalizeResource(want.resource, home)) continue;
+    const key = ruleKey(want.action, want.resource, want.effect, home);
+    existing.forEach((cur, i) => {
+      if (cur.action !== want.action) return;
+      if (normalizeResource(cur.resource, home) !== normalizeResource(want.resource, home)) return;
       if (cur.effect !== want.effect) {
         throw err(
           `permissions 第 ${cur.line} 行已有 ${cur.action} ${cur.resource} ${cur.effect}，` +
           `与 access 合成的 ${want.effect} 冲突（同 action/resource 不同 effect）`,
         );
       }
-      skip.add(ruleKey(want.action, want.resource, want.effect, home));
-    }
+      skip.add(key);
+      equivAt.set(key, i);
+    });
   }
   // 更宽的 deny 会覆盖我们要追加的 allow/ask → 拒绝（不要静默改写别人的安全边界）
   for (const want of wants) {
@@ -380,6 +474,25 @@ export function composeAgentText(text: string, opts: ComposeOptions): ComposeRes
       throw err(
         `permissions 第 ${cur.line} 行已有更宽的 deny（${cur.action} ${cur.resource} deny）` +
         `会覆盖 access 合成的 ${want.effect}（${want.action} ${want.resource}）`,
+      );
+    }
+  }
+  // 顺序校验：等价规则虽然存在（added=0），但它**后面**还有会覆盖它的规则 ⇒ 静默失效。
+  // 不自动重排（重排会改作者语义），让作者把顺序调好或删掉冲突规则。
+  for (const want of wants) {
+    const key = ruleKey(want.action, want.resource, want.effect, home);
+    const at = equivAt.get(key);
+    if (at === undefined) continue;
+    const target = normalizeResource(want.resource, home);
+    for (let i = at + 1; i < existing.length; i++) {
+      const later = existing[i];
+      if (later.effect === want.effect) continue;
+      if (later.action !== "*" && later.action !== want.action) continue;
+      if (!subtreeCovers(later.resource, target, home)) continue;
+      throw err(
+        `permissions 第 ${existing[at].line} 行的 ${want.action} ${want.resource} ${want.effect} 会被` +
+        `第 ${later.line} 行的 ${later.action} ${later.resource} ${later.effect} 覆盖（后写优先）——` +
+        `请调整顺序：让生效的规则排在覆盖它的规则之后（或删掉冲突规则）`,
       );
     }
   }
@@ -398,6 +511,8 @@ export function composeAgentText(text: string, opts: ComposeOptions): ComposeRes
   // 防御：自己的产物必须仍是合法 YAML（否则宁可 fail closed，也不写一个宿主会丢弃的文件）
   if (parseDocument(composed).errors.length) throw err("合成后 frontmatter 不是合法 YAML（拒绝写入）");
 
-  const out = [...fm.lines.slice(0, 1), ...composed.split("\n"), ...fm.lines.slice(fm.fmEnd)];
-  return { text: out.join(fm.eol), added: rules.length, skipped, root };
+  // 只替换 frontmatter 文本块：body（含混合换行/字节）逐字节保留；frontmatter 的 eol 按块自身探测
+  const fmOut = composed ? composed.split("\n").join(fm.eol) + fm.eol : "";
+  const outText = text.slice(0, fm.fmStart) + fmOut + text.slice(fm.fmEndOffset);
+  return { text: outText, added: rules.length, skipped, root };
 }

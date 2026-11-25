@@ -52,9 +52,5 @@
   "homepage": "https://github.com/minonl/dia",
   "dependencies": {
     "yaml": "^2.9.1"
-  },
-  "workspaces": [
-    "packages/*",
-    "!packages/graph-web"
-  ]
+  }
 }

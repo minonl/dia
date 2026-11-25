@@ -1612,14 +1612,13 @@ async function personaCli(argv: string[]): Promise<number> {
     try {
       const resolved = ver ? persona.resolveVersion(id, ver) : null;
       // access 校验必须先于切指针：失败是 E_MANIFEST（32），不能降级成 warn 后 exit 0。
-      // 用「将要切到的那个版本」校验（缺省 = 最新安装，与 active.use 同口径）。
-      const target = resolved ?? (() => {
-        const row = persona.list().find((r) => r.id === id);
-        if (!row || !row.versions.length) throw new Error(`E_NOT_INSTALLED: persona ${id}`);
-        return row.versions[row.versions.length - 1];
-      })();
+      // 目标版本用 active.installedVersions（semver + 安装时间比较）解析——
+      // 与 active.use() 内部同一口径；persona.list() 是字符串排序（0.9.0 > 0.10.0）会分叉。
+      const installed = active.installedVersions(id);
+      if (!installed.length) throw new Error(`E_NOT_INSTALLED: persona ${id}`);
+      const target = resolved ?? installed[installed.length - 1];
       persona.render(id, { version: target, check: true });
-      const r = active.use(id, resolved, { reason: flag(args, "--reason") });
+      const r = active.use(id, target, { reason: flag(args, "--reason") });
       out(asJson ? JSON.stringify(r) : `${id}: ${r.previous ?? "(未设置)"} → ${r.current.version}（${r.current.commit ?? "?"}, by ${r.current.by}）`);
       // 切换版本后宿主产物（agent md / skill 软链 / dsh profile）仍指向旧槽位 → 顺手重渲染，避免 verify 立刻报漂移
       try {
@@ -1700,7 +1699,12 @@ async function personaCli(argv: string[]): Promise<number> {
       if (r.relation === "same" || r.relation === "local-only") return 0;
       if (r.relation === "differs") return 1;
       return 3;
-    } catch (e: any) { err(e?.message || String(e)); return 31; }
+    } catch (e: any) {
+      const m = e?.message || String(e);
+      err(m);
+      if (m.startsWith("E_MANIFEST")) return 32;
+      return 31;
+    }
   }
   if (sub === "update") {
     const allowed = ["--ref", "--force", "--dry-run", "--json"];
@@ -1770,9 +1774,9 @@ async function personaCli(argv: string[]): Promise<number> {
   }
   if (sub === "render") {
     const id = positional(args)[0];
-    if (!id) { err("usage: dia persona render <id> [--host opencode|dsh|codex] [--home DIR] [--check] [--json]"); return 2; }
+    if (!id) { err("usage: dia persona render <id> [--host opencode|dsh|codex] [--home DIR] [--rehome] [--check] [--json]"); return 2; }
     try {
-      const r = persona.render(id, { host: flag(args, "--host"), home: flag(args, "--home"), check: has(args, "--check") });
+      const r = persona.render(id, { host: flag(args, "--host"), home: flag(args, "--home"), check: has(args, "--check"), rehome: has(args, "--rehome") });
       if (asJson) out(JSON.stringify(r, null, 1));
       else if (r.check) out(r.drift.length ? `drift ${r.drift.length}:\n  ${r.drift.map((d: any) => `${d.action}: ${d.path}`).join("\n  ")}` : "ok（无 drift）");
       else out(`rendered ${r.id}@${r.version}${r.drift.length ? `（修复 ${r.drift.length} 处，备份 ${r.backups.length}）` : "（无变化）"}` +

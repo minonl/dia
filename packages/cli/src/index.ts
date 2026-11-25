@@ -1601,7 +1601,7 @@ async function personaCli(argv: string[]): Promise<number> {
     } catch (e: any) {
       const m = e?.message || String(e);
       err(m);
-      if (m.startsWith("E_MANIFEST")) return 32;
+      if (m.startsWith("E_MANIFEST") || m.startsWith("E_LOCKED")) return 32;
       return 31;
     }
   }
@@ -1634,7 +1634,7 @@ async function personaCli(argv: string[]): Promise<number> {
     } catch (e: any) {
       const m = e?.message || String(e);
       err(m);
-      if (m.startsWith("E_MANIFEST")) return 32;
+      if (m.startsWith("E_MANIFEST") || m.startsWith("E_LOCKED")) return 32;
       return m.startsWith("E_VERSION") ? 21 : 31;
     }
   }
@@ -1787,8 +1787,9 @@ async function personaCli(argv: string[]): Promise<number> {
     } catch (e: any) {
       const m = e?.message || String(e);
       err(m);
+      if (m.startsWith("E_USAGE")) return 2;
       if (m.startsWith("E_NOT_INSTALLED")) return 21;
-      if (m.startsWith("E_MANIFEST")) return 32;
+      if (m.startsWith("E_MANIFEST") || m.startsWith("E_LOCKED")) return 32;
       if (m.startsWith("E_HOST")) return 33;
       return 31;
     }

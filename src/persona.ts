@@ -87,7 +87,10 @@ export interface Installed {
 
 export interface AccessReport {
   declared: boolean;
+  /** 本次合成新增的规则条数（与 lock 的 access.added 同口径） */
   added: number;
+  /** dest 相对期望还缺几条（只在 render/--check 报；install 时不填） */
+  missing?: number;
   skipped: number;
   root: string | null;
   /** 需要人看的告警（host 不支持 / write 无 read / root 尚不存在），CLI 默认输出 */
@@ -531,13 +534,50 @@ export function gc(id: string, opts: { keep?: number; dryRun?: boolean; force?: 
   return { kept, removed, skipped };
 }
 
+/**
+ * 严格读 `dia.lock`：存在但解析失败 / 顶层不是对象（含 `null`）一律拒绝，
+ * **绝不降级成 `{}` 再整份写回**——那会把 hash/commit/rendered/kits 永久抹掉。
+ */
+function readLockStrict(lockPath: string): any {
+  const fail = (why: string) => new Error(
+    `E_LOCKED: dia.lock 无法使用（${why}）：${lockPath}\n` +
+    `  请先备份该文件后重装（dia persona add/update --force），或从备份恢复；lock 残缺时拒绝写盘`,
+  );
+  let raw: string;
+  try { raw = readFileSync(lockPath, "utf8"); } catch (e: any) { throw fail(`读取失败：${e?.message ?? e}`); }
+  let lock: any;
+  try { lock = JSON.parse(raw); } catch (e: any) { throw fail(`不是合法 JSON：${e?.message ?? e}`); }
+  if (lock === null || typeof lock !== "object" || Array.isArray(lock)) {
+    throw fail(`顶层必须是对象（收到 ${JSON.stringify(lock)}）`);
+  }
+  return lock;
+}
+
+/**
+ * lock 记录了安装时的家目录 → 当前 HOME 必须一致；否则拒绝（避免把指向别人家目录的授权
+ * 写到当前 HOME 的 agents 目录）。给两条出路：换回原 HOME，或显式 `--rehome` 迁移。
+ */
+function assertHomeMatches(lock: any, id: string, action: "render" | "verify"): void {
+  const recordedHome = typeof lock.access?.homedir === "string" ? lock.access.homedir : null;
+  if (!recordedHome) return;
+  const currentHome = homeDir();
+  if (resolve(recordedHome) === resolve(currentHome)) return;
+  const rehome = action === "render" ? `dia persona render ${id} --rehome` : `dia persona render ${id} --rehome（再 verify）`;
+  throw new Error(
+    `E_MANIFEST: 当前 HOME（${currentHome}）与该 persona 安装时记录的 access.homedir（${recordedHome}）不同；` +
+    `为避免把指向旧家目录的数据根授权写到当前 HOME 的 agents 目录，已拒绝。` +
+    `两条出路：① 切换到安装时的 HOME（${recordedHome}）；② 确认迁移到当前 HOME 时显式运行 ${rehome}`,
+  );
+}
+
 export function verify(id: string, version?: string): VerifyResult {
   const idDir = join(dataDir(), "personas", id);
   if (!existsSync(idDir)) throw new Error("E_NOT_INSTALLED");
   const v = version || active.effective(id)?.version || versionDirs(idDir).sort((a, b) => cmpSemver(b, a))[0];
   if (!v) throw new Error("E_NOT_INSTALLED");
   const dir = existsSync(join(idDir, "versions", v)) ? join(idDir, "versions", v) : join(idDir, v);
-  const lock = JSON.parse(readFileSync(join(dir, "dia.lock"), "utf8"));
+  const lock = readLockStrict(join(dir, "dia.lock"));
+  assertHomeMatches(lock, id, "verify");
   // lock 自身不参与内容哈希
   const files = walkFiles(dir).filter((f) => basename(f) !== "dia.lock");
   const h = createHash("sha256");
@@ -784,24 +824,37 @@ export function render(id: string, opts: { host?: string; home?: string; check?:
   const hosts = opts.host ? [opts.host] : (m.hosts ?? ["opencode"]);
   for (const h of hosts) assertHost(h);
 
-  // homedir 口径统一：lock 里记了安装时的家目录就以它为准（render/verify/renderDrift 同源），
-  // 换 HOME 重跑只会 warn，不会把产物路径改写成新 HOME；要改必须显式 --rehome。
+  if (opts.check && opts.rehome) {
+    throw new Error("E_USAGE: --check 与 --rehome 互斥（先单独运行 dia persona render <id> --rehome 迁移到当前 HOME，再跑 --check）");
+  }
+  // homedir 口径统一：lock 里记了安装时的家目录就以它为准（render/verify/renderDrift 同源）。
+  // 换 HOME 重跑不再 warn 了事——直接拒绝，避免把指向旧家目录的授权写到当前 HOME。
   const lockPath = join(dir, "dia.lock");
-  let lock: any = {};
-  try { lock = JSON.parse(readFileSync(lockPath, "utf8")); } catch { lock = {}; }
+  const lock: any = existsSync(lockPath) ? readLockStrict(lockPath) : {};
+  if (opts.rehome !== true) assertHomeMatches(lock, id, "render");
   const recordedHome = typeof lock.access?.homedir === "string" ? lock.access.homedir : null;
   const effHome = opts.rehome === true || !recordedHome ? homeDir() : recordedHome;
-  const homeWarn = recordedHome && !opts.rehome && resolve(recordedHome) !== resolve(homeDir())
-    ? `homedir 与安装时不同（lock: ${recordedHome}，当前: ${homeDir()}），按 lock 记录渲染（要改路径用 --rehome）`
-    : null;
 
   const acc = planAccess(m, hosts, effHome);
   let composed: access.ComposeResult | null = null;
   const report: AccessReport | undefined = acc.state.declared
-    ? { declared: true, added: 0, skipped: 0, root: acc.state.root, warnings: [...acc.warnings, ...(homeWarn ? [homeWarn] : [])] }
+    ? { declared: true, added: 0, missing: 0, skipped: 0, root: acc.state.root, warnings: acc.warnings }
     : undefined;
 
   const drift: RenderDrift[] = [];
+
+  // 与真渲染同一套前置：内容渲染（files/skills/bin）的 dry-run 也在 --check/预检阶段跑，
+  // 这样 `persona use` 的预检能提前发现坏内容（失败发生在 active.use() 之前）。
+  const hostHasInline = hosts.some((h) => h === "opencode" || h === "dsh");
+  const inlineManifest: any = hostHasInline ? m : { ...m, skills: [] };
+  const inlinePlan = kit.renderContent(dir, dir, inlineManifest, { dryRun: true, force: true }) ?? [];
+  for (const e of inlinePlan) {
+    if (e.type === "dir" || e.type !== "link") continue;
+    const want = resolve(dir, e.value);
+    let cur = "";
+    try { cur = realpathSync(e.path); } catch { drift.push({ path: e.path, action: "missing" }); continue; }
+    if (cur !== realpathSync(want)) drift.push({ path: e.path, action: "changed" });
+  }
   let agentSrc: string | null = null, agentDest: string | null = null;
   let dshSrc: string | null = null, dshDest: string | null = null;
   let codexSrc: string | null = null, codexDest: string | null = null;
@@ -816,9 +869,11 @@ export function render(id: string, opts: { host?: string; home?: string; check?:
     // drift 比对用「合成期望」：源永远是未合成的，dest 是合成后的（幂等，不会叠加）
     composed = composeEntry(m, acc.state, agentSrc, effHome);
     if (report && composed) {
-      // added = dest 相对期望还缺几条（--check 与真渲染同口径；一致时 0）
+      // added = 本次合成新增的规则条数（与 install / lock 同口径）；
+      // missing = dest 相对期望还缺几条（只用于展示，不混进 added）。
       const destNow = existsSync(agentDest) ? readFileSync(agentDest, "utf8") : null;
-      report.added = access.countMissingRules(destNow, composed.text, effHome);
+      report.added = composed.added;
+      report.missing = access.countMissingRules(destNow, composed.text, effHome);
       report.skipped = composed.skipped;
     }
     const wantHash = composed ? shaStr(composed.text) : shaFile(agentSrc);
@@ -856,19 +911,6 @@ export function render(id: string, opts: { host?: string; home?: string; check?:
   if (opts.check) return { id, version, check: true, drift, backups: [], ...(report ? { access: report } : {}) };
 
   // persona 自带内容（skills/bin 软链）也要重渲染：切版本后软链可能仍指旧槽位，而内容相同 → 曾漏判
-  const hostHasInline = hosts.some((h) => h === "opencode" || h === "dsh");
-  const inlineManifest: any = hostHasInline ? m : { ...m, skills: [] };
-  const inlinePlan = kit.renderContent(dir, dir, inlineManifest, { dryRun: true, force: true }) ?? [];
-  const inlineDrift: RenderDrift[] = [];
-  for (const e of inlinePlan) {
-    if (e.type === "dir" || e.type !== "link") continue;
-    const want = resolve(dir, e.value);
-    let cur = "";
-    try { cur = realpathSync(e.path); } catch { inlineDrift.push({ path: e.path, action: "missing" }); continue; }
-    if (cur !== realpathSync(want)) inlineDrift.push({ path: e.path, action: "changed" });
-  }
-  drift.push(...inlineDrift);
-
   const msgKit = defaultMsg.ensureForPersona(id, m.capabilities);
   const backups: string[] = [];
   if (drift.length) {

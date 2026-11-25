@@ -17,7 +17,7 @@
 //     description 块、把带引号的 `"permissions":` 当成没有，结果宿主静默丢弃整个 agent。
 import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
-import { isMap, isScalar, isSeq, parseDocument } from "yaml";
+import { isMap, isSeq, parseDocument } from "yaml";
 
 export interface AccessDecl {
   read?: boolean;
@@ -172,6 +172,25 @@ function expandBraces(pattern: string, depth = 0): string[] {
   return out;
 }
 
+/** glob 里通配 token 的边界：`[` 未闭合时按字面量处理（与 globToRegExp 一致）。 */
+function globTokenBounds(q: string): { first: number; lastEnd: number; has: boolean } {
+  let first = -1, lastEnd = -1;
+  for (let i = 0; i < q.length; i++) {
+    const c = q[i];
+    if (c === "*" || c === "?") {
+      if (first < 0) first = i;
+      lastEnd = i + 1;
+    } else if (c === "[") {
+      const end = q.indexOf("]", i + 1);
+      if (end < 0) continue;
+      if (first < 0) first = i;
+      lastEnd = end + 1;
+      i = end;
+    }
+  }
+  return { first, lastEnd, has: first >= 0 };
+}
+
 /** 权限 resource 的 glob → 正则（opencode 的 `*` 匹配 `/`，`?` 匹配单个字符）。 */
 function globToRegExp(glob: string): RegExp {
   let re = "";
@@ -247,6 +266,10 @@ export function coversRoot(resource: string, root: string, home: string): boolea
  * 这样 `read R/*.secret` 不会误判成覆盖 `read R/*.env`（避免误拒作者规则）。
  */
 function subtreeCovers(pattern: string, target: string, home: string): boolean {
+  // target 自身（通常是 `R/**` 或 `R/*.env`）的静态前缀 / 尾：用于识别中缀 glob。
+  const tb = globTokenBounds(target);
+  const targetPrefix = tb.has ? target.slice(0, tb.first) : target;
+  const targetSuffix = tb.has ? target.slice(tb.lastEnd) : "";
   for (const raw of expandBraces(normalizeResource(pattern, home))) {
     let q = raw.trim();
     let subtree = false;
@@ -258,6 +281,18 @@ function subtreeCovers(pattern: string, target: string, home: string): boolean {
     }
     if (!subtree) {
       if (q === target) return true;
+      // 中缀 / 裸 glob：`R/**/.env`、`**.env` 这类不以 `/**`/`/*` 结尾，
+      // 但会匹配到 target 覆盖的路径。判定口径：与 target 共享静态前缀，
+      // 且静态尾相同（`R/*.secret` 对 `R/*.env` 因尾不同，不误判）。
+      const pb = globTokenBounds(q);
+      if (pb.has && targetSuffix) {
+        const pPrefix = q.slice(0, pb.first);
+        // `R/**/.env` 的静态尾是 `/.env`，target `R/*.env` 的尾是 `.env`：按「边界后的文件名尾」比较
+        const tail = (s: string) => s.replace(/^\/+/, "");
+        const pSuffix = tail(q.slice(pb.lastEnd));
+        const prefixOk = pPrefix === "" || pPrefix.startsWith(targetPrefix) || targetPrefix.startsWith(pPrefix);
+        if (prefixOk && pSuffix !== "" && pSuffix === tail(targetSuffix)) return true;
+      }
       continue;
     }
     if (!q || q === "/") return true;
@@ -280,12 +315,14 @@ export function countMissingRules(destText: string | null, expectedText: string,
   const keyOf = (r: Rule) => ruleKey(r.action, r.resource, r.effect, home);
   const keysOf = (text: string): string[] => {
     const fm = splitFrontmatter(text);
-    const doc = parseDocument(fm.text);
+    const doc = parseDocument(fm.text, { merge: true });
     if (doc.errors.length) throw err("frontmatter 不是合法 YAML（读取规则失败）");
     const node = doc.get("permissions");
-    if (node == null) return [];
-    if (!isSeq(node)) throw err("permissions 必须是列表（YAML 序列）");
-    return readExistingRules(node, fm.text).map(keyOf);
+    const js: any = doc.toJS() ?? {};
+    const perms = js.permissions;
+    if (perms == null) return [];
+    if (!Array.isArray(perms)) throw err("permissions 必须是列表（YAML 序列）");
+    return readExistingRules(perms, node, fm.text).map(keyOf);
   };
   const want = keysOf(expectedText);
   if (!destText) return want.length;
@@ -357,34 +394,29 @@ function lineOf(node: any, fmText: string): number {
   return n + 1;
 }
 
-/** 只有**字符串标量**才算合法字段值：`resource: 123` / `effect: Allow` 必须被拒绝。 */
-const scalarText = (node: any): string | undefined => {
-  if (node === null || node === undefined) return undefined;
-  if (isScalar(node)) return typeof node.value === "string" ? node.value : undefined;
-  if (typeof node === "string") return node;
-  return undefined;
-};
-
 /**
- * 读现有 `permissions` 序列（AST 遍历，带行号）。
+ * 读现有 `permissions` 序列。
+ * 校验值走 `doc.toJS()` 的解析结果（alias / merge key 已 resolve），行号仍从 AST 节点取；
  * 每一项都必须是 map，且 `action`/`resource`/`effect` 三键齐备、非空字符串、effect 合法——
  * 少一个字段 opencode 会**静默丢弃整份 agent**，所以这里一律 E_MANIFEST（fail closed）。
  */
-function readExistingRules(seq: any, fmText: string): ExistingRule[] {
+function readExistingRules(items: any[], seqNode: any, fmText: string): ExistingRule[] {
   const out: ExistingRule[] = [];
-  for (const item of seq.items) {
-    const line = lineOf(item, fmText);
-    if (!isMap(item)) {
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    const node = isSeq(seqNode) ? seqNode.items[i] : undefined;
+    const line = lineOf(node, fmText);
+    if (item === null || typeof item !== "object" || Array.isArray(item)) {
       throw err(`permissions 下有非列表项（第 ${line} 行）：期望 {action, resource, effect}`);
     }
     const vals: Record<string, string> = {};
     for (const key of ["action", "resource", "effect"] as const) {
-      if (!item.has(key)) {
+      if (!Object.prototype.hasOwnProperty.call(item, key)) {
         throw err(`permissions 第 ${line} 行的列表项缺少 ${key}（每项必须同时有 action/resource/effect）`);
       }
-      const v = scalarText(item.get(key));
-      if (v === undefined || v.trim() === "") {
-        throw err(`permissions 第 ${line} 行的 ${key} 必须是非空字符串（收到 ${JSON.stringify(item.get(key)?.value ?? null)}）`);
+      const v = (item as any)[key];
+      if (typeof v !== "string" || v.trim() === "") {
+        throw err(`permissions 第 ${line} 行的 ${key} 必须是非空字符串（收到 ${JSON.stringify(v)}）`);
       }
       vals[key] = v;
     }
@@ -429,7 +461,7 @@ export function composeAgentText(text: string, opts: ComposeOptions): ComposeRes
     env: opts.access?.env === true,
   };
   const fm = splitFrontmatter(text);
-  const doc = parseDocument(fm.text);
+  const doc = parseDocument(fm.text, { merge: true });
   if (doc.errors.length) {
     const first = doc.errors[0];
     throw err(`frontmatter 不是合法 YAML：${String(first.message).split("\n")[0]}`);
@@ -440,10 +472,14 @@ export function composeAgentText(text: string, opts: ComposeOptions): ComposeRes
 
   const wants = desiredRules(root, access);
   const permNode = doc.get("permissions");
-  if (permNode != null && !isSeq(permNode)) {
+  // 校验看解析后的 JS 值（alias / merge key 会 resolve）；只有追加规则时用 AST 节点。
+  const js: any = doc.toJS() ?? {};
+  const permissionsJs = js.permissions;
+  if (permNode != null && !isSeq(permNode) && !Array.isArray(permissionsJs)) {
     throw err("permissions 必须是列表（YAML 序列）；map 形式（V1 的 key: effect）不支持");
   }
-  const existing = isSeq(permNode) ? readExistingRules(permNode, fm.text) : [];
+  const jsPerms: any[] = Array.isArray(permissionsJs) ? permissionsJs : [];
+  const existing = readExistingRules(jsPerms, permNode, fm.text);
 
   // 去重 + 同 (action, resource) 不同 effect 冲突
   const skip = new Set<string>();
@@ -504,12 +540,13 @@ export function composeAgentText(text: string, opts: ComposeOptions): ComposeRes
   if (isSeq(permNode)) {
     for (const r of rules) permNode.add(doc.createNode(r));
   } else {
-    doc.set("permissions", doc.createNode(rules));
+    // 顶层 alias（`permissions: *p`）：用解析后的值 + 新规则重建序列节点
+    doc.set("permissions", doc.createNode([...jsPerms, ...rules]));
   }
 
   const composed = doc.toString({ lineWidth: 0 }).replace(/\n+$/, "");
   // 防御：自己的产物必须仍是合法 YAML（否则宁可 fail closed，也不写一个宿主会丢弃的文件）
-  if (parseDocument(composed).errors.length) throw err("合成后 frontmatter 不是合法 YAML（拒绝写入）");
+  if (parseDocument(composed, { merge: true }).errors.length) throw err("合成后 frontmatter 不是合法 YAML（拒绝写入）");
 
   // 只替换 frontmatter 文本块：body（含混合换行/字节）逐字节保留；frontmatter 的 eol 按块自身探测
   const fmOut = composed ? composed.split("\n").join(fm.eol) + fm.eol : "";

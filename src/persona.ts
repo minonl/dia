@@ -214,7 +214,7 @@ function hashTree(root: string): string {
   return h.digest("hex");
 }
 
-export function install(from: string, opts: { ref?: string; host?: string; home?: string; dryRun?: boolean; force?: boolean; ownedFrom?: string } = {}): Installed {
+export function install(from: string, opts: { ref?: string; host?: string; home?: string; dryRun?: boolean; force?: boolean; ownedFrom?: string; rehome?: boolean } = {}): Installed {
   const src = resolveSource(from, opts.ref);
   const m = readManifest(src.dir);
   if (m.kind !== "persona") throw new Error("E_MANIFEST: not a persona");
@@ -228,16 +228,24 @@ export function install(from: string, opts: { ref?: string; host?: string; home?
   const rendered: string[] = [];
   const overwrites: string[] = [];
 
+  // 跨 HOME 闸门（与 verify/render 同口径）：已有槽位 / 上一版 lock 记录的家目录必须与当前一致，
+  // 否则 add --force / update 会绕过 render/verify 的保护，把指向旧 HOME 的授权写进当前 HOME。
+  const gateLock = (lockPath: string): any => {
+    if (!existsSync(lockPath)) return null;
+    const lock = readLockStrict(lockPath);
+    assertHomeMatches(lock, m.id, "install", opts.rehome === true);
+    return lock;
+  };
+  const prevLock = opts.ownedFrom ? gateLock(join(dataDir(), "personas", m.id, opts.ownedFrom, "dia.lock")) : null;
+  // 目标槽位的 lock 也要先过闸（放在 staging 之前，失败不留临时目录）
+  const existingTargetLock = gateLock(join(target, "dia.lock"));
+
   // 升级（update 传入 ownedFrom）时：上一版 lock 记录过的渲染产物 = dia 托管，
   // 内容变化属于正常升级 → 可覆盖（先备份）。普通 add/重装不带 ownedFrom，仍按冲突拒绝（保护手改）。
   const ownedRendered = new Set<string>();
-  if (opts.ownedFrom) {
-    try {
-      const prevDir = join(dataDir(), "personas", m.id, opts.ownedFrom);
-      const prevLock = JSON.parse(readFileSync(join(prevDir, "dia.lock"), "utf8"));
-      for (const p of Object.keys(prevLock.renderedHashes ?? {})) ownedRendered.add(resolve(p));
-      for (const p of prevLock.rendered ?? []) ownedRendered.add(resolve(p));
-    } catch { /* 无 lock：按首次安装 */ }
+  if (prevLock) {
+    for (const p of Object.keys(prevLock.renderedHashes ?? {})) ownedRendered.add(resolve(p));
+    for (const p of prevLock.rendered ?? []) ownedRendered.add(resolve(p));
   }
 
   // 先检查宿主冲突，避免破坏已安装目录
@@ -313,8 +321,7 @@ export function install(from: string, opts: { ref?: string; host?: string; home?
     const stagingHash = hashTree(staging);
     let reuseTarget = false;
     if (existsSync(target)) {
-      const existing = (() => { try { return JSON.parse(readFileSync(join(target, "dia.lock"), "utf8")); } catch { return null; } })();
-      if (existing && existing.hash === stagingHash) {
+      if (existingTargetLock && existingTargetLock.hash === stagingHash) {
         // 幂等：同槽位同内容 → 不重装版本，但仍要跑一遍宿主渲染（--force 时恢复被手改的产物）
         rmSync(staging, { recursive: true, force: true });
         reuseTarget = true;
@@ -556,17 +563,29 @@ function readLockStrict(lockPath: string): any {
 /**
  * lock 记录了安装时的家目录 → 当前 HOME 必须一致；否则拒绝（避免把指向别人家目录的授权
  * 写到当前 HOME 的 agents 目录）。给两条出路：换回原 HOME，或显式 `--rehome` 迁移。
+ * `allowRehome=true`（调用方已看到 --rehome）时直接放行。
  */
-function assertHomeMatches(lock: any, id: string, action: "render" | "verify"): void {
+function assertHomeMatches(
+  lock: any,
+  id: string,
+  action: "render" | "verify" | "install" | "update",
+  allowRehome = false,
+): void {
+  if (allowRehome) return;
   const recordedHome = typeof lock.access?.homedir === "string" ? lock.access.homedir : null;
   if (!recordedHome) return;
   const currentHome = homeDir();
   if (resolve(recordedHome) === resolve(currentHome)) return;
-  const rehome = action === "render" ? `dia persona render ${id} --rehome` : `dia persona render ${id} --rehome（再 verify）`;
+  const rehome = action === "update"
+    ? `dia persona update ${id} --rehome`
+    : action === "install"
+      ? `dia persona add ${id} … --rehome`
+      : `dia persona render ${id} --rehome`;
   throw new Error(
     `E_MANIFEST: 当前 HOME（${currentHome}）与该 persona 安装时记录的 access.homedir（${recordedHome}）不同；` +
     `为避免把指向旧家目录的数据根授权写到当前 HOME 的 agents 目录，已拒绝。` +
-    `两条出路：① 切换到安装时的 HOME（${recordedHome}）；② 确认迁移到当前 HOME 时显式运行 ${rehome}`,
+    `两条出路：① 切换到安装时的 HOME（${recordedHome}）；② 确认迁移到当前 HOME 时显式运行 ${rehome}` +
+    (action === "verify" ? "（再 verify）" : ""),
   );
 }
 
@@ -971,10 +990,22 @@ export function render(id: string, opts: { host?: string; home?: string; check?:
   if (codexDest) renderedHashes[codexDest] = shaFile(codexDest);
   const renderedDirs = [...(lock.renderedDirs ?? []).filter((d: any) => d.path !== dshDest)];
   if (dshDest) renderedDirs.push({ path: dshDest, hash: hashTree(dshDest) });
-  // lock 里的 access 段跟着重渲染刷新（合成条数以本次 render 为准）
-  const accessLock = acc.state.declared
-    ? { declared: true, added: composed?.added ?? 0, skipped: composed?.skipped ?? 0, root: acc.state.root, homedir: effHome }
-    : { declared: false, added: 0, skipped: 0, root: null };
+  // lock 里的 access 段跟着重渲染刷新，但 **added/skipped/root 只由 opencode 合成决定**：
+  // `render --host dsh|codex` 不会合成 permissions，必须保留上一次（opencode）的值，
+  // 否则跑一次 dsh 渲染就能把「追加 0 条」永久写进 lock。host 不生效由告警行说明。
+  const prevAccess = lock.access && typeof lock.access === "object" ? lock.access : null;
+  const accessLock = composed
+    ? { declared: true, added: composed.added, skipped: composed.skipped, root: acc.state.root, homedir: effHome }
+    : acc.state.declared
+      ? {
+          ...(prevAccess ?? {}),
+          declared: true,
+          added: prevAccess?.added ?? 0,
+          skipped: prevAccess?.skipped ?? 0,
+          root: prevAccess?.root ?? acc.state.root,
+          homedir: effHome,
+        }
+      : { declared: false, added: 0, skipped: 0, root: null };
   writeFileSync(lockPath, JSON.stringify({ ...lock, rendered, renderedHashes, renderedDirs, access: accessLock }, null, 1));
   return { id, version, check: false, drift, backups, msgKit, ...(report ? { access: report } : {}) };
 }
@@ -1253,7 +1284,7 @@ export function checkUpstream(id: string, version?: string): UpstreamState {
   const idDir = join(dataDir(), "personas", id);
   if (!existsSync(idDir)) throw new Error("E_NOT_INSTALLED");
   const v = version || (active.effective(id)?.version ?? readdirSync(idDir).sort().pop()!);
-  const lock = JSON.parse(readFileSync(join(idDir, v, "dia.lock"), "utf8"));
+  const lock = readLockStrict(join(slotDir(idDir, v), "dia.lock"));
   // access 校验失败是 E_MANIFEST（CLI 退出 32）：原样冒泡，别吞成 MISMATCH/exit 2
   let verifyOk = false;
   try { verifyOk = verify(id, v).ok; } catch (e: any) {
@@ -1291,15 +1322,17 @@ export function checkUpstream(id: string, version?: string): UpstreamState {
  */
 export function update(
   id: string,
-  opts: { ref?: string; force?: boolean; dryRun?: boolean } = {},
+  opts: { ref?: string; force?: boolean; dryRun?: boolean; rehome?: boolean } = {},
 ): { installed: Installed; previous: string | null; applied?: boolean } {
   const idDir = join(dataDir(), "personas", id);
   if (!existsSync(idDir)) throw new Error("E_NOT_INSTALLED");
   const cur = active.effective(id)?.version ?? readdirSync(idDir).sort().pop()!;
-  const lock = JSON.parse(readFileSync(join(idDir, cur, "dia.lock"), "utf8"));
+  const lock = readLockStrict(join(slotDir(idDir, cur), "dia.lock"));
+  // 跨 HOME：update 会重新渲染并写 lock，必须与 render 一样要求显式 --rehome
+  assertHomeMatches(lock, id, "update", opts.rehome === true);
   if (!lock.source) throw new Error("E_SOURCE: 该 persona 由本地目录安装，无法 update（重新 persona add）");
   // 不传 host：按 manifest 的 hosts 全量重渲染（旧实现用 rendered[0] 推断 host → 多 host 的 dsh profile 永不刷新）
-  const r = install(lock.source, { ref: opts.ref ?? lock.ref ?? undefined, force: opts.force, ownedFrom: cur, dryRun: opts.dryRun });
+  const r = install(lock.source, { ref: opts.ref ?? lock.ref ?? undefined, force: opts.force, ownedFrom: cur, dryRun: opts.dryRun, rehome: opts.rehome });
   if (opts.dryRun) return { installed: r, previous: cur, applied: false };
   const u = active.use(id, r.version, { reason: `update from ${lock.source}` });
   return { installed: r, previous: u.previous, applied: true };

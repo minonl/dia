@@ -277,9 +277,14 @@ persona 需要在宿主里读写自己的数据根时，**不要手写 permissio
 | `data_root` | string | — | 数据根，**必须**形如 `~/.<id>-<后缀>`（直挂家目录一层） |
 | `access.read` | boolean | `false` | 允许读 `<root>/**` |
 | `access.write` | boolean | `false` | 允许写 `<root>/**`（**false 时显式写 deny**） |
-| `access.env` | boolean | `false` | 允许读 `.env` / `.env.*`（false 时两条 ask 兜住） |
+| `access.env` | boolean | `false` | `true` 时**不再加 `.env` ask**：数据根内任意深度的 `*.env` / `*.env.*` 读取全部免确认（含 `romm.env` 这类 token 文件）；`false` 时两条 ask 兜住 |
 
 `read`/`write`/`env` **三者必须都是布尔**；写字符串（如 `"false"`）或数字 → `E_MANIFEST`（退出 32）。
+
+> **`env:true` 的代价必须知情**：`env` 缺省或为 `false` 时，两条 ask 只挂在 `action=read` 上
+> （`read <root>/*.env ask`、`read <root>/*.env.* ask`）；`grep` / `shell` 等其它 action **不受这两条约束**
+> （它们按宿主各自的默认规则走，别以为 shell 读 `.env` 也会被拦）。设 `env:true` 等于把数据根里
+> **所有** `.env`（任意深度，包括保存 token 的 `romm.env`）的**读取**放开，只在确实需要读 token 时才开。
 
 ### 5.5.1 合成规则（顺序固定，追加到 `permissions` 序列**尾部**）
 
@@ -291,11 +296,12 @@ persona 需要在宿主里读写自己的数据根时，**不要手写 permissio
 | 4 | `read=true` 且 `env!=true` | `read <root>/*.env ask`、`read <root>/*.env.* ask` |
 
 第 4 组必须排在第 2 条**之后**（宿主规则后写生效），否则会被 read allow 吃掉。
-`root` 写展开后的**绝对路径**；`env=true` 时不加第 4 组。
+`root` 写展开后的**绝对路径**；`env=true` 时**不加第 4 组**（数据根内任意深度 `.env` 读取免确认）。
 
 **`.env` 兜底为什么够**：opencode 的权限 resource 按 glob 匹配，且 `*` **匹配 `/`**（官方文档原文）。
 所以 `read <root>/*.env ask` 已经覆盖 `<root>` 下**任意深度子目录**里的 `.env`（`*` 能跨过 `/`），
-不需要再补 `**/.env`；`*.env.*` 同理覆盖 `x.env.local` 这类。
+不需要再补 `**/.env`；`*.env.*` 同理覆盖 `x.env.local` 这类。注意这两条只约束 `action=read`，
+`grep` / `shell` 不受控。
 
 ### 5.5.2 结构处理（yaml Document round-trip）
 
@@ -330,28 +336,35 @@ persona 需要在宿主里读写自己的数据根时，**不要手写 permissio
 | frontmatter 不是合法 YAML（tab 缩进、重复键、括号不配对等） | `E_MANIFEST` |
 | V1 map（`permissions:` 下 `key: effect`）、`permissions` 下非映射列表项、无 frontmatter、缺收尾 `---` | `E_MANIFEST` |
 | `access.read/write/env` 非 boolean | `E_MANIFEST` |
+| `dia.lock` 存在但不是合法 JSON / 顶层为 `null` / 不是对象 | `E_LOCKED`，**退出 32**（`verify`/`render`/`use`/`check`/`update`/`add` 全部不写盘） |
 | `verify` / `persona use` 遇到上述 access 错误 | `E_MANIFEST`，**退出 32**（不再降级成 warn 或 exit 1） |
 
 **「更宽 deny」的 glob 判定**（覆盖 root 即拒绝，覆盖 root 的写法包括但不限于）：
-`/**`、`/*`、`**/*`、`*`/`**`、`<root>/**`、root 的祖先 glob（`~/*`）、
-brace 交替（`{<root>,/tmp}/**`）、`?` 通配（`~/.<id>-ag?nt/**`）。判定用前缀/glob 语义
-（`*` 匹配 `/`、`?` 匹配单字符、`{a,b}` 展开），不是字符串 `startsWith`。
+`/**`、`/*`、`**/*`、`*`/`**`、`<root>/**`、root 的祖先 glob（`~/*`）、`?` 通配（`~/.<id>-ag?nt/**`）。
+判定用前缀/glob 语义（`*` 匹配 `/`、`?` 匹配单字符），不是字符串 `startsWith`。
+**花括号不是 glob**：opencode 把 `{ } [ ] ( ) |` 当字面量转义，只有 `*` / `?` 通配，
+所以 `{<root>,/tmp}/**` 这种写法**不**被视为覆盖 root（按字面路径处理）。
 
 ### 5.5.4 边界与告警
 
 - **本期只对 opencode 生效**：host 为 `dsh` / `codex` 时声明 `access` 只输出一行
   `access 对 host=<x> 本期不生效`（不阻断安装）。dsh 的权限由 profile 插件决定，codex 没有同款 permissions 结构。
+  这类 `render --host dsh|codex` **不会改写** lock 里的 `access.added/skipped/root`（保留上一次 opencode 合成的值），
+  否则跑一次 dsh 渲染就会把「追加 0 条」永久写进 lock。
 - `access.write=true` 但 `read!=true` → 告警（只加写规则，读仍按宿主默认）；
 - `data_root` 尚不存在 → 告警（不拒绝：数据根通常由 persona 自己首次运行时创建）。
   **风险**：dia 不负责创建 `data_root`；如果首装时它不存在，之后有别的流程把它建成 **symlink**，
   合成规则就指向了别处。`verify` 会重新校验 `data_root` 形状（symlink / 非目录 / realpath 逃逸 → 退出 32），
   但**首装时**没有任何东西阻止后来的 symlink —— 建议 persona 自己 `mkdir` 创建真实目录，别用软链。
 - 合成的字节写进 dest，`dia.lock` 的 `renderedHashes` 与 `access: {declared, added, skipped, root, homedir}`
-  都记**合成后**的结果；lock 里已有 `homedir` 时，`render` / `verify` / `renderDrift` **都以它为准**
-  （换 `DIA_HOME`/`HOME` 重跑只 warn「homedir 与安装时不同，按 lock 记录渲染」，不重写路径）；
-  确需改写路径时用 `dia persona render <id> --rehome`（同时更新 lock 的 `homedir`）；
-- `render --check --json` 的 `access.added` 是「dest 相对期望还缺几条」（一致时为 0），
-  `skipped` 是「源里已有几条等价规则」；真渲染用同一口径（修完再报缺几条）；
+  都记**合成后**的结果；lock 里已有 `homedir` 时，`render` / `verify` / `update` / `add` **都以它为准**：
+  **当前 HOME 与记录不一致时一律拒绝（`E_MANIFEST`，退出 32）**，不会「只 warn 后按旧路径渲染」
+  （那会把指向旧家目录的授权写到当前 HOME）。两条出路：① 换回原 HOME；② 显式 `--rehome`
+  （`dia persona render <id> --rehome` / `update <id> --rehome` / `add <id> … --rehome`），同时更新 lock 的 `homedir`；
+- 计数字段**只有一个口径**（`render --check --json`、真渲染、`install`/`update` 输出与 lock 相同）：
+  `added` = **本次合成新增的规则条数**；`skipped` = 源里已有等价规则而跳过的条数；
+  `missing` = **dest 相对期望还缺的条数**（只在 `render`/`--check` 报；安装时为 `undefined`）。
+  三者互不混用：`added` 不是「还缺几条」；一致时 `missing=0` 而 `added` 仍是合成规则总数。
 - 「已存在且不同」的冲突判断也按合成期望比较（否则重装必 `E_CONFLICT`）。
 
 ## 6. 当前缺口

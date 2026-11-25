@@ -1570,7 +1570,7 @@ async function personaCli(argv: string[]): Promise<number> {
     const from = flag(args, "--from") || id;
     if (!from) { err("missing --from"); return 2; }
     try {
-      const r = persona.install(from, { ref: flag(args, "--ref"), host: flag(args, "--host"), home: flag(args, "--home"), dryRun: has(args, "--dry-run"), force: has(args, "--force") });
+      const r = persona.install(from, { ref: flag(args, "--ref"), host: flag(args, "--host"), home: flag(args, "--home"), dryRun: has(args, "--dry-run"), force: has(args, "--force"), rehome: has(args, "--rehome") });
       out(asJson ? JSON.stringify(r) : `installed ${r.id}@${r.version} -> ${r.rendered.join(", ") || "(dry-run)"}` +
         (r.overwrites?.length ? `\n  ⚠ 覆盖 ${r.overwrites.length} 个已存在产物（已备份）：${r.overwrites.join(", ")}` : "") +
         (r.msgKit && !r.msgKit.ok ? `\n  ⚠ dia-msg 未启用：${r.msgKit.reason}` : ""));
@@ -1581,7 +1581,7 @@ async function personaCli(argv: string[]): Promise<number> {
     } catch (e: any) {
       err(e?.message || String(e));
       const msg = e?.message || "";
-      if (msg.startsWith("E_CONFLICT") || msg.startsWith("E_MANIFEST")) return 32;
+      if (msg.startsWith("E_CONFLICT") || msg.startsWith("E_MANIFEST") || msg.startsWith("E_LOCKED")) return 32;
       if (msg.startsWith("E_HOST")) return 33;
       return 31;
     }
@@ -1702,19 +1702,19 @@ async function personaCli(argv: string[]): Promise<number> {
     } catch (e: any) {
       const m = e?.message || String(e);
       err(m);
-      if (m.startsWith("E_MANIFEST")) return 32;
+      if (m.startsWith("E_MANIFEST") || m.startsWith("E_LOCKED")) return 32;
       return 31;
     }
   }
   if (sub === "update") {
-    const allowed = ["--ref", "--force", "--dry-run", "--json"];
+    const allowed = ["--ref", "--force", "--dry-run", "--rehome", "--json"];
     warnUnknownFlags(args, allowed);
-    const bools = new Set(["--force", "--dry-run", "--json"]);
+    const bools = new Set(["--force", "--dry-run", "--rehome", "--json"]);
     const id = positional(args, bools)[0];
     if (!id) { err("missing id"); return 2; }
     const dryRun = has(args, "--dry-run");
     try {
-      const r = persona.update(id, { ref: flag(args, "--ref"), force: has(args, "--force"), dryRun });
+      const r = persona.update(id, { ref: flag(args, "--ref"), force: has(args, "--force"), dryRun, rehome: has(args, "--rehome") });
       if (asJson) out(JSON.stringify(r));
       else if (dryRun) {
         out(`[dry-run] would update ${id} → ${r.installed.version}（原 ${r.previous ?? "-"}；未写盘、未切 active、未建索引）` +
@@ -1732,7 +1732,7 @@ async function personaCli(argv: string[]): Promise<number> {
     } catch (e: any) {
       const m = e?.message || String(e);
       err(m);
-      if (m.startsWith("E_CONFLICT") || m.startsWith("E_MANIFEST")) return 32;
+      if (m.startsWith("E_CONFLICT") || m.startsWith("E_MANIFEST") || m.startsWith("E_LOCKED")) return 32;
       return m.startsWith("E_SOURCE") ? 34 : 31;
     }
   }

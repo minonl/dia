@@ -137,41 +137,6 @@ export function normalizeResource(resource: string, homedirPath: string): string
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-/** `{a,b}` 展开（支持嵌套；上限 64 个候选，防病态输入）。 */
-function expandBraces(pattern: string, depth = 0): string[] {
-  if (depth > 8) return [pattern];
-  const start = pattern.indexOf("{");
-  if (start < 0) return [pattern];
-  let level = 0;
-  let end = -1;
-  for (let i = start; i < pattern.length; i++) {
-    if (pattern[i] === "{") level++;
-    else if (pattern[i] === "}") { level--; if (!level) { end = i; break; } }
-  }
-  if (end < 0) return [pattern];
-  const head = pattern.slice(0, start);
-  const inner = pattern.slice(start + 1, end);
-  const tail = pattern.slice(end + 1);
-  const parts: string[] = [];
-  let cur = "";
-  let d = 0;
-  for (const ch of inner) {
-    if (ch === "," && d === 0) { parts.push(cur); cur = ""; continue; }
-    if (ch === "{") d++;
-    else if (ch === "}") d--;
-    cur += ch;
-  }
-  parts.push(cur);
-  const out: string[] = [];
-  for (const p of parts) {
-    for (const r of expandBraces(head + p + tail, depth + 1)) {
-      out.push(r);
-      if (out.length >= 64) return out;
-    }
-  }
-  return out;
-}
-
 /** glob 里通配 token 的边界：`[` 未闭合时按字面量处理（与 globToRegExp 一致）。 */
 function globTokenBounds(q: string): { first: number; lastEnd: number; has: boolean } {
   let first = -1, lastEnd = -1;
@@ -218,11 +183,13 @@ function globToRegExp(glob: string): RegExp {
 }
 
 /**
- * 单个（无 brace）模式是否覆盖整棵 root 子树。
+ * 单个模式是否覆盖整棵 root 子树。
  * 先剥掉尾部 `/**` / `/*`（含连续），再用「字面前缀是祖先」+「glob 精确匹配 root/祖先」判定——
- * 不用字符串 startsWith 猜，`?` / `{a,b}` / `**` 这类都走得通。
+ * 不用字符串 startsWith 猜，`?` / `*` / 字符类这类都走得通。
+ *
+ * 注意：**花括号不是 glob**。opencode 把 `{ } [ ] ( ) |` 当字面量转义，只有 `*` / `?` 通配
+ * （`[abc]` 字符类由 globToRegExp 处理）；因此 `{root,/tmp}/**` 是字面路径，**不**覆盖 root。
  */
-/** 导出仅为测试：brace 必须靠 expandBraces 展开，单条 `{a,b}` 本身不覆盖 root。 */
 export function singleCovers(pattern: string, root: string): boolean {
   let q = pattern.trim();
   if (!q) return false;
@@ -250,14 +217,10 @@ export function singleCovers(pattern: string, root: string): boolean {
 
 /**
  * deny 的 resource 是否覆盖整个 root（`*` / root 本身 / 祖先链上的 glob）。
- * 导出仅为测试：brace 展开若失效，`{a,b}/**` 这类写法必须能被单测直接抓住。
+ * 导出仅为测试：`*` / `?` 的覆盖判定必须能被单测直接抓住；花括号是字面量，不参与覆盖。
  */
 export function coversRoot(resource: string, root: string, home: string): boolean {
-  const normalized = normalizeResource(resource, home);
-  for (const alt of expandBraces(normalized)) {
-    if (singleCovers(alt, root)) return true;
-  }
-  return false;
+  return singleCovers(normalizeResource(resource, home), root);
 }
 
 /**
@@ -270,44 +233,43 @@ function subtreeCovers(pattern: string, target: string, home: string): boolean {
   const tb = globTokenBounds(target);
   const targetPrefix = tb.has ? target.slice(0, tb.first) : target;
   const targetSuffix = tb.has ? target.slice(tb.lastEnd) : "";
-  for (const raw of expandBraces(normalizeResource(pattern, home))) {
-    let q = raw.trim();
-    let subtree = false;
-    for (;;) {
-      if (q === "*" || q === "**") return true;
-      if (q.endsWith("/**")) { q = q.slice(0, -3); subtree = true; continue; }
-      if (q.endsWith("/*")) { q = q.slice(0, -2); subtree = true; continue; }
-      break;
+  const raw = normalizeResource(pattern, home);
+  let q = raw.trim();
+  let subtree = false;
+  for (;;) {
+    if (q === "*" || q === "**") return true;
+    if (q.endsWith("/**")) { q = q.slice(0, -3); subtree = true; continue; }
+    if (q.endsWith("/*")) { q = q.slice(0, -2); subtree = true; continue; }
+    break;
+  }
+  if (!subtree) {
+    if (q === target) return true;
+    // 中缀 / 裸 glob：`R/**/.env`、`**.env` 这类不以 `/**`/`/*` 结尾，
+    // 但会匹配到 target 覆盖的路径。判定口径：与 target 共享静态前缀，
+    // 且静态尾相同（`R/*.secret` 对 `R/*.env` 因尾不同，不误判）。
+    const pb = globTokenBounds(q);
+    if (pb.has && targetSuffix) {
+      const pPrefix = q.slice(0, pb.first);
+      // `R/**/.env` 的静态尾是 `/.env`，target `R/*.env` 的尾是 `.env`：按「边界后的文件名尾」比较
+      const tail = (s: string) => s.replace(/^\/+/, "");
+      const pSuffix = tail(q.slice(pb.lastEnd));
+      const prefixOk = pPrefix === "" || pPrefix.startsWith(targetPrefix) || targetPrefix.startsWith(pPrefix);
+      if (prefixOk && pSuffix !== "" && pSuffix === tail(targetSuffix)) return true;
     }
-    if (!subtree) {
-      if (q === target) return true;
-      // 中缀 / 裸 glob：`R/**/.env`、`**.env` 这类不以 `/**`/`/*` 结尾，
-      // 但会匹配到 target 覆盖的路径。判定口径：与 target 共享静态前缀，
-      // 且静态尾相同（`R/*.secret` 对 `R/*.env` 因尾不同，不误判）。
-      const pb = globTokenBounds(q);
-      if (pb.has && targetSuffix) {
-        const pPrefix = q.slice(0, pb.first);
-        // `R/**/.env` 的静态尾是 `/.env`，target `R/*.env` 的尾是 `.env`：按「边界后的文件名尾」比较
-        const tail = (s: string) => s.replace(/^\/+/, "");
-        const pSuffix = tail(q.slice(pb.lastEnd));
-        const prefixOk = pPrefix === "" || pPrefix.startsWith(targetPrefix) || targetPrefix.startsWith(pPrefix);
-        if (prefixOk && pSuffix !== "" && pSuffix === tail(targetSuffix)) return true;
-      }
-      continue;
-    }
-    if (!q || q === "/") return true;
-    if (target === q || target.startsWith(q + "/")) return true;
-    const re = globToRegExp(q);
-    if (re.test(target)) return true;
-    for (let anc = dirname(target); anc && anc !== "/" && anc.length >= q.length; anc = dirname(anc)) {
-      if (re.test(anc)) return true;
-    }
+    return false;
+  }
+  if (!q || q === "/") return true;
+  if (target === q || target.startsWith(q + "/")) return true;
+  const re = globToRegExp(q);
+  if (re.test(target)) return true;
+  for (let anc = dirname(target); anc && anc !== "/" && anc.length >= q.length; anc = dirname(anc)) {
+    if (re.test(anc)) return true;
   }
   return false;
 }
 
 /**
- * dest 相对「期望 frontmatter」还缺几条规则（`--check` 的 `access.added` 口径）。
+ * dest 相对「期望 frontmatter」还缺几条规则（`--check` 的 `access.missing` 口径）。
  * 读不了 dest（缺失/坏 YAML）⇒ 全部算缺；不改任何文件。
  */
 export function countMissingRules(destText: string | null, expectedText: string, homedirPath: string): number {
@@ -440,7 +402,9 @@ function desiredRules(root: string, access: AccessDecl): Rule[] {
   if (access.read === true) out.push({ action: "read", resource: glob, effect: "allow" });
   out.push({ action: "edit", resource: glob, effect: access.write === true ? "allow" : "deny" });
   if (access.read === true && access.env !== true) {
-    // 读整个 root 会把 .env 一起放开；这两条必须排在 read allow 之后才生效
+    // 读整个 root 会把 .env 一起放开；这两条必须排在 read allow 之后才生效。
+    // `*` 在 opencode 里匹配 `/`，所以这两条已覆盖 root 下**任意深度**的 `*.env` / `*.env.*`；
+    // env=true 时不加这两条 ⇒ 数据根内所有 .env（含 romm.env 这类 token 文件）读取免确认。
     out.push({ action: "read", resource: `${root}/*.env`, effect: "ask" });
     out.push({ action: "read", resource: `${root}/*.env.*`, effect: "ask" });
   }

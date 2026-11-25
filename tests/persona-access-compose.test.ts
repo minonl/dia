@@ -319,7 +319,8 @@ describe("⑤b 更宽 deny 的 glob 写法（全部 fail closed）", () => {
     { id: "deny-ss", resource: () => "/**" },
     { id: "deny-s", resource: () => "/*" },
     { id: "deny-ds", resource: () => "**/*" },
-    { id: "deny-brace", resource: (r) => `{${r},/var/tmp}/**` },
+    // opencode 里花括号是字面量、只有 * / ? 通配：用真实通配写法验证覆盖
+    { id: "deny-star", resource: () => join(home, "*-agent/**") },
     { id: "deny-q", resource: () => join(home, ".?-agent/**") }, // `<home>/.?-agent/**` 命中 `.q-agent`
   ];
   for (const c of cases) {
@@ -415,10 +416,11 @@ describe("⑨⑩⑪ env / write / 类型", () => {
     for (const { i } of asks) expect(i).toBeGreaterThan(readAllow);
   });
 
-  test("env=true → 没有 .env ask", () => {
+  test("env=true → 没有 .env ask（数据根内任意深度 .env 读取免确认）", () => {
     const dir = makePersona({ id: "envon", dataRoot: "~/.envon-agent", access: { read: true, write: true, env: true } });
     expect(run(["persona", "add", "envon", "--from", dir]).status).toBe(0);
     const perms = fm(readFileSync(agentDest("envon"), "utf8")).permissions as any[];
+    expect(perms.some((p) => p.effect === "ask" && /(^|\/)\.env(\.|$)/.test(String(p.resource)))).toBe(false);
     expect(perms.some((p) => p.effect === "ask")).toBe(false);
   });
 
@@ -777,22 +779,16 @@ describe("纯函数 composeAgentText", () => {
     })).toThrow(/E_MANIFEST/);
   });
 
-  test("coversRoot：`/**` `/*` `**/*` `{a,b}/**` `?` 都算覆盖", () => {
-    const opts = (resource: string) => ({
-      id: "rc", dataRoot: "~/.rc-agent", access: { write: true }, homedir: home,
-    });
+  test("coversRoot：`/**` `/*` `**/*` `?` `*` 都算覆盖", () => {
     const R = join(home, ".rc-agent");
-    for (const deny of ["/**", "/*", "**/*", `{${R},/var/tmp}/**`, `${home}/.r?-agent/**`]) {
-      const src = `---\npermissions:\n  - action: edit\n    resource: ${JSON.stringify(deny)}\n    effect: deny\n---\nbody\n`;
-      expect(() => accessMod.composeAgentText(src, opts(deny))).toThrow(/E_MANIFEST/);
+    for (const deny of ["/**", "/*", "**/*", `${home}/.r?-agent/**`, `${home}/*-agent/**`]) {
+      expect(accessMod.coversRoot(deny, R, home)).toBe(true);
     }
   });
 
-  test("brace 覆盖必须真的靠 expandBraces（对照组：不展开就抓不住）", () => {
+  test("花括号不是 glob：`{root,/tmp}/**` 是字面路径，不算覆盖（opencode 只把 * / ? 当通配）", () => {
     const R = join(home, ".rc-agent");
-    // /var/tmp 不是 home 的祖先：只有 `{R,/var/tmp}` 里的 R 分支能覆盖 root
-    expect(accessMod.coversRoot(`{${R},/var/tmp}/**`, R, home)).toBe(true);
-    // 同一模式不做 brace 展开时 singleCovers 必须为 false —— 否则上面的用例是假通过
+    expect(accessMod.coversRoot(`{${R},/var/tmp}/**`, R, home)).toBe(false);
     expect(accessMod.singleCovers(`{${R},/var/tmp}/**`, R)).toBe(false);
     expect(accessMod.singleCovers(`${R}/**`, R)).toBe(true);
   });
@@ -1234,5 +1230,109 @@ describe("㉗ persona use 预检跑 kit.renderContent（失败先于 active.use�
     const after = existsSync(activeFile) ? readFileSync(activeFile, "utf8") : "";
     expect(after).toBe(before);
     expect(after).not.toContain(id);
+  });
+});
+
+// ---- ㉘ 坏 lock × 六个入口：统一 32（HIGH） ---------------------------------
+describe("㉘ 坏 lock（坏 JSON / null）在 verify/render/use/check/update/add 都统一 32", () => {
+  const entries = ["verify", "render", "use", "check", "update", "add"] as const;
+  const bads: [string, string][] = [["badjson", "{not json"], ["null", "null"]];
+  for (const [kind, bad] of bads) {
+    for (const entry of entries) {
+      test(`${entry} × ${kind} → 32 + E_LOCKED，lock/产物字节不变`, () => {
+        const id = `lk-${entry}-${kind}`;
+        const dir = makePersona({ id, dataRoot: `~/.${id}-agent`, access: { read: true, write: true } });
+        expect(run(["persona", "add", id, "--from", dir]).status).toBe(0);
+        const slotDir = join(data, "personas", id);
+        const slot = join(slotDir, readdirSync(slotDir)[0]);
+        const lockPath = join(slot, "dia.lock");
+        const dest = agentDest(id);
+        const destBefore = readFileSync(dest, "utf8");
+        writeFileSync(lockPath, bad);
+        const args = entry === "add"
+          ? ["persona", "add", id, "--from", dir]
+          : ["persona", entry, id];
+        const r = run(args);
+        expect(r.status).toBe(32);
+        expect(r.stderr).toContain("E_LOCKED");
+        expect(readFileSync(lockPath, "utf8")).toBe(bad);
+        expect(readFileSync(dest, "utf8")).toBe(destBefore);
+      });
+    }
+  }
+});
+
+// ---- ㉙ 跨 HOME：add --force / update 也必须拒绝（MEDIUM） --------------------
+describe("㉙ 跨 HOME 时 add/update 不能绕过闸门", () => {
+  test("同槽位再 add（含 --force）跨 HOME → 32，提示 --rehome，产物不变", () => {
+    const id = "rehomeadd";
+    const dir = makePersona({ id, dataRoot: `~/.${id}-agent`, access: { read: true, write: true } });
+    expect(run(["persona", "add", id, "--from", dir]).status).toBe(0);
+    const dest = agentDest(id);
+    const before = readFileSync(dest, "utf8");
+    const home2 = mkdtempSync(join(tmpdir(), "dia-pa-h-add-"));
+    for (const extra of [[], ["--force"], ["--dry-run"]]) {
+      const r = run(["persona", "add", id, "--from", dir, ...extra], { DIA_HOME: home2 });
+      expect(r.status).toBe(32);
+      expect(r.stderr).toContain("E_MANIFEST");
+      expect(r.stderr).toContain("--rehome");
+      expect(readFileSync(dest, "utf8")).toBe(before);
+    }
+    // --rehome 放行：产物改写成新 HOME 的数据根
+    const ok = run(["persona", "add", id, "--from", dir, "--force", "--rehome"], { DIA_HOME: home2 });
+    expect(ok.status).toBe(0);
+    expect(readFileSync(dest, "utf8")).toContain(join(home2, `.${id}-agent`));
+  });
+
+  test("update 跨 HOME → 32；加 --rehome 才成功且 lock.access.homedir 更新", () => {
+    const id = "rehomeupd";
+    const dir = makePersona({ id, dataRoot: `~/.${id}-agent`, access: { read: true, write: true } });
+    expect(run(["persona", "add", id, "--from", dir]).status).toBe(0);
+    const slotDir = join(data, "personas", id);
+    const slot = join(slotDir, readdirSync(slotDir)[0]);
+    const lockPath = join(slot, "dia.lock");
+    const lockBefore = readFileSync(lockPath, "utf8");
+    const home2 = mkdtempSync(join(tmpdir(), "dia-pa-h-upd-"));
+    const bad = run(["persona", "update", id], { DIA_HOME: home2 });
+    expect(bad.status).toBe(32);
+    expect(bad.stderr).toContain("E_MANIFEST");
+    expect(bad.stderr).toContain("--rehome");
+    expect(readFileSync(lockPath, "utf8")).toBe(lockBefore);
+    const ok = run(["persona", "update", id, "--rehome"], { DIA_HOME: home2 });
+    expect(ok.status).toBe(0);
+    expect(JSON.parse(readFileSync(lockPath, "utf8")).access.homedir).toBe(home2);
+  });
+});
+
+// ---- ㉚ render --host dsh|codex 不改写 lock.access.added/skipped（LOW） ------
+describe("㉚ render --host dsh 保留 lock 里的 access.added/skipped", () => {
+  test("opencode 装完 added=5；再 render --host dsh 仍为 5，并打印不生效告警", () => {
+    const id = "dhspres";
+    const dir = mkdtempSync(join(tmpdir(), `dia-pa-${id}-`));
+    mkdirSync(join(dir, "agents"), { recursive: true });
+    mkdirSync(join(dir, "platform", "dsh", "p"), { recursive: true });
+    writeFileSync(join(dir, "agents", `${id}.md`), `---\ndescription: ${id}\nmode: primary\n---\nYou are ${id}.\n`);
+    writeFileSync(join(dir, "platform", "dsh", "p", "cordis.yml"), "[]\n");
+    writeFileSync(join(dir, "dia.json"), JSON.stringify({
+      schema: 1, kind: "persona", id, version: "0.1.0",
+      hosts: ["opencode", "dsh"],
+      entry: { opencode: `agents/${id}.md`, dsh: "platform/dsh/p" },
+      data_root: `~/.${id}-agent`,
+      access: { read: true, write: true },
+    }));
+    expect(run(["persona", "add", id, "--from", dir]).status).toBe(0);
+    const slotDir = join(data, "personas", id);
+    const slot = join(slotDir, readdirSync(slotDir)[0]);
+    const lockPath = join(slot, "dia.lock");
+    const before = JSON.parse(readFileSync(lockPath, "utf8")).access;
+    expect(before.added).toBe(5);
+    expect(before.skipped).toBe(0);
+    const r = run(["persona", "render", id, "--host", "dsh"]);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("access 对 host=dsh 本期不生效");
+    const after = JSON.parse(readFileSync(lockPath, "utf8")).access;
+    expect(after.added).toBe(before.added);
+    expect(after.skipped).toBe(before.skipped);
+    expect(after.root).toBe(before.root);
   });
 });

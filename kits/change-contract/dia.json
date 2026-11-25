@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "kind": "kit",
+  "id": "change-contract",
+  "version": "0.1.0",
+  "root": ".",
+  "tags": ["change", "contract", "scope", "ux", "review", "certainty"],
+  "knowledge": ["knowledge"],
+  "skills": [{ "from": "skills/change-contract", "name": "change-contract", "mode": "link" }],
+  "bin": [{ "from": "bin/cc-check.mjs", "name": "cc-check" }],
+  "requires": { "dia": ">=0.0.36" }
+}

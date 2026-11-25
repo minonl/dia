@@ -1,20 +1,21 @@
 import { describe, expect, test, beforeAll, beforeEach } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { parse as parseYaml } from "yaml";
 
 // persona 数据根授权合成（docs/persona-install.md §5.5）
-// 用「yaml 解析渲染后的 frontmatter」做精确断言：规则顺序即安全语义，不能靠 grep。
-// 环境中没有 yaml 包（离线），用 bun 内置的 Bun.YAML.parse。
+// 合成走 yaml 包的 Document round-trip；断言也用 yaml 解析渲染产物——
+// 规则顺序即安全语义，不能靠 grep。
 
 const cli = join(import.meta.dir, "..", "packages", "cli", "src", "index.ts");
 const sha = (p: string) => createHash("sha256").update(readFileSync(p)).digest("hex");
 
 let data: string, home: string, work: string;
 
-const env = () => ({
+const env = (over: Record<string, string | undefined> = {}) => ({
   ...process.env,
   DIA_ROOT: data,
   DIA_HOME: home,
@@ -23,17 +24,26 @@ const env = () => ({
   DIA_DSH_PROFILES_DIR: join(data, "dsh-profiles"),
   // 显式清掉外部注入，避免别处测试/宿主环境把 codex home 钉死
   DIA_CODEX_HOME: "",
+  ...over,
 });
 
-const run = (args: string[]) => spawnSync("bun", [cli, ...args], { encoding: "utf8", env: env() });
+const run = (args: string[], over: Record<string, string | undefined> = {}) =>
+  spawnSync("bun", [cli, ...args], { encoding: "utf8", env: env(over) });
 const agentDest = (id: string) => join(data, "agents-out", `${id}.md`);
 
-/** 取 frontmatter 并用 YAML 解析 */
-function fm(text: string): any {
-  const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-  if (!m) throw new Error("no frontmatter");
-  return Bun.YAML.parse(m[1]);
+/** 取 frontmatter 文本（收尾只认列 0 的 `---`，块标量里的 `---` 有缩进） */
+function fmText(text: string): string {
+  const lines = text.split(/\r?\n/);
+  if (lines[0]?.trim() !== "---") throw new Error("no frontmatter");
+  const end = lines.findIndex((l, i) => i > 0 && /^---[ \t]*$/.test(l));
+  if (end < 0) throw new Error("no closing ---");
+  return lines.slice(1, end).join("\n");
 }
+const fm = (text: string): any => parseYaml(fmText(text));
+
+const rule = (action: string, resource: string, effect: string) => ({ action, resource, effect });
+const has = (perms: any[], r: { action: string; resource: string; effect: string }) =>
+  perms.some((p) => p?.action === r.action && p?.resource === r.resource && p?.effect === r.effect);
 
 interface PersonaSpec {
   id: string;
@@ -64,6 +74,13 @@ function makePersona(spec: PersonaSpec, dir = mkdtempSync(join(tmpdir(), `dia-pa
 }
 
 const root = (id: string) => join(home, `.${id}-agent`);
+
+/** fail closed 断言：退出码精确 32、报 E_MANIFEST、dest 不存在 */
+function expectReject(r: { status: number | null; stderr: string }, id: string) {
+  expect(r.status).toBe(32);
+  expect(r.stderr).toContain("E_MANIFEST");
+  expect(existsSync(agentDest(id))).toBe(false);
+}
 
 beforeAll(() => {
   data = mkdtempSync(join(tmpdir(), "dia-pa-data-"));
@@ -214,6 +231,26 @@ describe("④ 去重", () => {
     const reads = (y.permissions as any[]).filter((p) => p.action === "read" && p.effect === "allow");
     expect(reads.length).toBe(1); // 不重复追加（~ 归一化后与合成期望同键）
   });
+
+  test("行尾注释不影响去重（同键仍只留一条）", () => {
+    const R = root("cdupe");
+    const body = [
+      "---",
+      "description: cdupe",
+      "permissions: # 键行注释",
+      "  - action: read # 行尾",
+      `    resource: ${R}/** # 行尾`,
+      "    effect: allow # 行尾",
+      "---",
+      "body",
+      "",
+    ].join("\n");
+    const dir = makePersona({ id: "cdupe", dataRoot: "~/.cdupe-agent", access: { read: true }, body });
+    expect(run(["persona", "add", "cdupe", "--from", dir]).status).toBe(0);
+    const y = fm(readFileSync(agentDest("cdupe"), "utf8"));
+    const reads = (y.permissions as any[]).filter((p) => p.action === "read" && p.effect === "allow");
+    expect(reads.length).toBe(1);
+  });
 });
 
 describe("⑤⑥ 冲突 fail closed", () => {
@@ -275,6 +312,39 @@ describe("⑤⑥ 冲突 fail closed", () => {
   });
 });
 
+// 更宽 deny 的 5 种 glob 写法：合成 allow 会被静默覆盖 —— 必须全部 32
+describe("⑤b 更宽 deny 的 glob 写法（全部 fail closed）", () => {
+  const R5 = (id: string) => root(id);
+  const cases: { id: string; resource: (r: string) => string }[] = [
+    { id: "deny-ss", resource: () => "/**" },
+    { id: "deny-s", resource: () => "/*" },
+    { id: "deny-ds", resource: () => "**/*" },
+    { id: "deny-brace", resource: (r) => `{${r},/tmp}/**` },
+    { id: "deny-q", resource: () => join(home, ".?-agent/**") }, // `<home>/.?-agent/**` 命中 `.q-agent`
+  ];
+  for (const c of cases) {
+    test(`${c.id}: 更宽 deny → 32`, () => {
+      // deny-q 需要 root 形如 ~/.q?-agent（id=q）；其它写法与 id 无关
+      const id = c.id === "deny-q" ? "q" : c.id;
+      const r = R5(id);
+      const body = [
+        "---",
+        "description: denyglob",
+        "permissions:",
+        "  - action: edit",
+        `    resource: ${JSON.stringify(c.resource(r))}`,
+        "    effect: deny",
+        "---",
+        "body",
+        "",
+      ].join("\n");
+      const dir = makePersona({ id, dataRoot: `~/.${id}-agent`, access: { write: true }, body });
+      const res = run(["persona", "add", id, "--from", dir]);
+      expectReject(res, id);
+    });
+  }
+});
+
 describe("⑦ 畸形 data_root 矩阵", () => {
   const SENTINEL = "SENTINEL-UNTOUCHED\n";
   const cases: { id: string; dataRoot?: string; access?: any; setup?: () => void }[] = [
@@ -297,13 +367,13 @@ describe("⑦ 畸形 data_root 矩阵", () => {
   ];
 
   for (const c of cases) {
-    test(`${c.id}: 非零退出 + dest 字节未变`, () => {
+    test(`${c.id}: 退出 32 + dest 字节未变`, () => {
       c.setup?.();
       const dir = makePersona({ id: c.id, dataRoot: c.dataRoot, access: c.access });
       const dest = agentDest(c.id);
       writeFileSync(dest, SENTINEL);
       const r = run(["persona", "add", c.id, "--from", dir]);
-      expect(r.status).not.toBe(0);
+      expect(r.status).toBe(32);
       expect(r.stderr).toContain("E_MANIFEST");
       expect(existsSync(dest)).toBe(true);
       expect(readFileSync(dest, "utf8")).toBe(SENTINEL);
@@ -311,21 +381,20 @@ describe("⑦ 畸形 data_root 矩阵", () => {
   }
 });
 
-describe("⑧ 结构异常", () => {
+describe("⑧ 结构异常（退出 32、不写盘）", () => {
+  // 注：flow-style `permissions: [ … ]` 自 yaml round-trip 起重写后**合法**（见 ⑫ fixture）。
   const bodies: Record<string, string> = {
     "s-nofm": "You are nobody.\n",
-    "s-flow": "---\ndescription: flow\npermissions: [{action: read, resource: x, effect: allow}]\n---\nbody\n",
     "s-v1": "---\ndescription: v1\npermissions:\n  read: allow\n  edit: deny\n---\nbody\n",
     "s-tab": "---\ndescription: tab\npermissions:\n\t- action: read\n\t  resource: x\n\t  effect: allow\n---\nbody\n",
     "s-mapitem": "---\ndescription: scalar\npermissions:\n  - read\n---\nbody\n",
+    "s-badyaml": "---\ndescription: bad\npermissions: [unclosed\n---\nbody\n",
   };
   for (const [id, body] of Object.entries(bodies)) {
     test(`${id}: 退出 32`, () => {
       const dir = makePersona({ id, dataRoot: `~/.${id}-agent`, access: { read: true }, body });
       const r = run(["persona", "add", id, "--from", dir]);
-      expect(r.status).toBe(32);
-      expect(r.stderr).toContain("E_MANIFEST");
-      expect(existsSync(agentDest(id))).toBe(false);
+      expectReject(r, id);
     });
   }
 });
@@ -399,6 +468,287 @@ describe("⑨⑩⑪ env / write / 类型", () => {
   });
 });
 
+// ---- ⑫ 邪门但合法的 frontmatter：yaml round-trip 必须原样保留 -----------------
+interface Fixture {
+  id: string;
+  body: string;
+  access: any;
+  /** 额外断言（dest 全文 + 解析后的 frontmatter + 合成根） */
+  extra?: (dest: string, y: any, R: string) => void;
+}
+
+const FIXTURES: Fixture[] = [
+  {
+    id: "fm-block",
+    body: [
+      "---",
+      "description: |",
+      "  line one",
+      "  ---",
+      "  line two",
+      "mode: primary",
+      "---",
+      "body",
+      "",
+    ].join("\n"),
+    access: { read: true },
+    extra: (_dest, y) => {
+      // 块标量里的列 0 `---`（缩进后）不能被当收尾
+      expect(y.description).toBe("line one\n---\nline two\n");
+      expect(y.mode).toBe("primary");
+    },
+  },
+  {
+    id: "fm-quoted",
+    body: [
+      "---",
+      "description: quoted",
+      '"permissions":',
+      '  - action: "*"',
+      '    resource: "*"',
+      "    effect: ask",
+      "---",
+      "body",
+      "",
+    ].join("\n"),
+    access: { read: true },
+    extra: (dest, y) => {
+      expect(y.permissions[0]).toEqual(rule("*", "*", "ask"));
+      // 带引号的键就是 permissions：不能重复映射键（重复 → 宿主丢弃整个 agent）
+      expect((dest.match(/^\s*"?permissions"?\s*:/gm) ?? []).length).toBe(1);
+    },
+  },
+  {
+    id: "fm-c0-comment",
+    body: [
+      "---",
+      "description: c0",
+      "permissions:",
+      "# 列 0 注释：不该截断 permissions 块",
+      '  - action: "*"',
+      '    resource: "*"',
+      "    effect: ask",
+      "browser: deny",
+      "---",
+      "body",
+      "",
+    ].join("\n"),
+    access: { read: true },
+    extra: (dest, y) => {
+      expect(dest).toContain("列 0 注释");
+      expect(y.browser).toBe("deny");
+      expect(y.permissions[0]).toEqual(rule("*", "*", "ask"));
+    },
+  },
+  {
+    id: "fm-indent-comment",
+    body: [
+      "---",
+      "description: ind",
+      "permissions:",
+      '  - action: "*"',
+      '    resource: "*"',
+      "    effect: ask",
+      "    # 缩进注释",
+      "  # 更浅的缩进注释",
+      "---",
+      "body",
+      "",
+    ].join("\n"),
+    access: { read: true },
+    extra: (dest, y) => {
+      expect(dest).toContain("缩进注释");
+      expect(dest).toContain("更浅的缩进注释");
+      expect(y.permissions[0]).toEqual(rule("*", "*", "ask"));
+    },
+  },
+  {
+    id: "fm-inline-comment",
+    body: [
+      "---",
+      "description: tail # 行尾注释",
+      "permissions: # 键行带注释",
+      '  - action: "*" # 行尾',
+      '    resource: "*" # 行尾',
+      "    effect: ask # 行尾",
+      "---",
+      "body",
+      "",
+    ].join("\n"),
+    access: { read: true },
+    extra: (dest, y) => {
+      expect(y.description).toBe("tail");
+      expect(dest).toContain("行尾注释");
+      expect(dest).toContain("键行带注释");
+      expect(y.permissions[0]).toEqual(rule("*", "*", "ask"));
+    },
+  },
+  {
+    id: "fm-flow-item",
+    body: [
+      "---",
+      "description: flowitem",
+      'permissions: [{action: read, resource: "~/.fm-flow-item-agent/**", effect: allow}]',
+      "---",
+      "body",
+      "",
+    ].join("\n"),
+    access: { read: true, env: true },
+    extra: (_dest, y, R) => {
+      // flow 单行项合法；同键去重（read allow 已存在 → 只补 external_directory + edit deny）
+      expect(y.permissions.filter((p: any) => p.action === "read" && p.effect === "allow").length).toBe(1);
+      expect(has(y.permissions, rule("external_directory", `${R}/**`, "allow"))).toBe(true);
+      expect(has(y.permissions, rule("edit", `${R}/**`, "deny"))).toBe(true);
+    },
+  },
+  {
+    id: "fm-top-flow",
+    body: [
+      "---",
+      "description: topflow",
+      "meta: {author: me, tags: [a, b]}",
+      "permissions: []",
+      "---",
+      "body",
+      "",
+    ].join("\n"),
+    access: { write: true },
+    extra: (_dest, y) => {
+      expect(y.meta).toEqual({ author: "me", tags: ["a", "b"] });
+    },
+  },
+  {
+    id: "fm-crlf",
+    body: [
+      "---",
+      "description: crlf",
+      "permissions:",
+      '  - action: "*"',
+      '    resource: "*"',
+      "    effect: ask",
+      "---",
+      "body",
+      "",
+    ].join("\r\n"),
+    access: { read: true },
+    extra: (dest, y) => {
+      // 全文件保持 CRLF，不能混进裸 LF
+      expect(dest.startsWith("---\r\n")).toBe(true);
+      expect(/(^|[^\r])\n/.test(dest)).toBe(false);
+      expect(y.description).toBe("crlf");
+    },
+  },
+];
+
+describe("⑫ 邪门但合法的 frontmatter（yaml round-trip）", () => {
+  const installed = new Map<string, string>();
+  for (const f of FIXTURES) {
+    test(`${f.id}: 合成成功且内容/注释保留`, () => {
+      const dir = makePersona({ id: f.id, dataRoot: `~/.${f.id}-agent`, access: f.access, body: f.body });
+      const r = run(["persona", "add", f.id, "--from", dir]);
+      expect(r.status).toBe(0);
+      const dest = readFileSync(agentDest(f.id), "utf8");
+      installed.set(f.id, dest);
+      const y = fm(dest);
+      const R = root(f.id);
+      expect(has(y.permissions, rule("external_directory", `${R}/**`, "allow"))).toBe(true);
+      // 合成规则必须压在已有 `*: ask` 之后
+      expect(y.permissions[y.permissions.length - 1].action).not.toBe("*");
+      f.extra?.(dest, y, R);
+    });
+  }
+
+  test("全部 fixture 再 render 一次：字节不变（round-trip 稳定）", () => {
+    for (const f of FIXTURES) {
+      expect(run(["persona", "render", f.id]).status).toBe(0);
+      expect(readFileSync(agentDest(f.id), "utf8")).toBe(installed.get(f.id)!);
+    }
+  });
+});
+
+// ---- ⑬ verify 与 access ------------------------------------------------------
+describe("⑬ verify / access 一致性", () => {
+  test("装完 verify ok；产物被改 → 1 且报「产物被改动」", () => {
+    const dir = makePersona({ id: "vfy", dataRoot: "~/.vfy-agent", access: { read: true, write: true } });
+    expect(run(["persona", "add", "vfy", "--from", dir]).status).toBe(0);
+    const ok = run(["persona", "verify", "vfy"]);
+    expect(ok.status).toBe(0);
+    writeFileSync(agentDest("vfy"), "---\ndescription: hacked\n---\n");
+    const bad = run(["persona", "verify", "vfy"]);
+    expect(bad.status).toBe(1);
+    expect(bad.stdout + bad.stderr).toContain("产物被改动");
+  });
+
+  test("换 HOME 重跑 verify：仍 ok，不误报「与 lock 不一致」", () => {
+    const dir = makePersona({ id: "vfyhome", dataRoot: "~/.vfyhome-agent", access: { read: true, write: true } });
+    expect(run(["persona", "add", "vfyhome", "--from", dir]).status).toBe(0);
+    const other = mkdtempSync(join(tmpdir(), "dia-pa-otherhome-"));
+    const res = run(["persona", "verify", "vfyhome"], { DIA_HOME: other });
+    expect(res.status).toBe(0);
+    expect(res.stdout).not.toContain("与 lock 记录不一致");
+  });
+
+  test("data_root 首装后变成 symlink → verify 退出 32（E_MANIFEST）", () => {
+    const dir = makePersona({ id: "vfyroot", dataRoot: "~/.vfyroot-agent", access: { read: true } });
+    expect(run(["persona", "add", "vfyroot", "--from", dir]).status).toBe(0);
+    const outside = mkdtempSync(join(tmpdir(), "dia-pa-vfyroot-outside-"));
+    symlinkSync(outside, root("vfyroot"), "dir");
+    const res = run(["persona", "verify", "vfyroot"]);
+    expect(res.status).toBe(32);
+    expect(res.stderr).toContain("E_MANIFEST");
+  });
+
+  test("verify 遇到坏 frontmatter → 32（不是 1）", () => {
+    // 装完之后把已安装槽位的 entry 改成非法 YAML（模拟宿主侧/手改把合成基础弄坏）
+    const dir = makePersona({ id: "vfybad", dataRoot: "~/.vfybad-agent", access: { read: true } });
+    expect(run(["persona", "add", "vfybad", "--from", dir]).status).toBe(0);
+    const slotDir = join(data, "personas", "vfybad");
+    const slot = join(slotDir, readdirSync(slotDir)[0], "agents", "vfybad.md");
+    writeFileSync(slot, "---\npermissions: [unclosed\n---\nbody\n");
+    const res = run(["persona", "verify", "vfybad"]);
+    expect(res.status).toBe(32);
+    expect(res.stderr).toContain("E_MANIFEST");
+  });
+
+  test("persona use 不把 E_MANIFEST 降级成 warn（32，且切指针前失败）", () => {
+    const dir = makePersona({ id: "usebad", dataRoot: "~/.usebad-agent", access: { read: true } });
+    expect(run(["persona", "add", "usebad", "--from", dir]).status).toBe(0);
+    const slotDir = join(data, "personas", "usebad");
+    const slot = join(slotDir, readdirSync(slotDir)[0], "agents", "usebad.md");
+    writeFileSync(slot, "---\npermissions: [unclosed\n---\nbody\n");
+    const res = run(["persona", "use", "usebad"]);
+    expect(res.status).toBe(32);
+    expect(res.stderr).toContain("E_MANIFEST");
+    const activeFile = join(data, "state", "active.json");
+    if (existsSync(activeFile)) expect(readFileSync(activeFile, "utf8")).not.toContain("usebad");
+  });
+});
+
+// ---- ⑭ CLI 输出：--check --json 的 access 计数 -------------------------------
+describe("⑭ render --check --json 的 access 计数", () => {
+  test("dest 缺失时 drift=1 且 access.added 非 0", () => {
+    const dir = makePersona({ id: "chkjson", dataRoot: "~/.chkjson-agent", access: { read: true, write: true } });
+    expect(run(["persona", "add", "chkjson", "--from", dir]).status).toBe(0);
+    rmSync(agentDest("chkjson"));
+    const res = run(["persona", "render", "chkjson", "--check", "--json"]);
+    expect(res.status).toBe(1);
+    const payload = JSON.parse(res.stdout);
+    expect(payload.drift.length).toBe(1);
+    expect(payload.access.added).toBeGreaterThan(0);
+    expect(payload.access.root).toBe(root("chkjson"));
+    // --check 不写盘
+    expect(existsSync(agentDest("chkjson"))).toBe(false);
+  });
+
+  test("persona update 非 JSON 分支输出 access 告警", () => {
+    const dir = makePersona({ id: "updacc", dataRoot: "~/.updacc-agent", access: { write: true } });
+    expect(run(["persona", "add", "updacc", "--from", dir]).status).toBe(0);
+    const res = run(["persona", "update", "updacc"]);
+    expect(res.status).toBe(0);
+    expect(res.stdout).toContain("read!=true");
+  });
+});
+
 describe("纯函数 composeAgentText", () => {
   let accessMod: any;
   beforeAll(async () => {
@@ -418,5 +768,22 @@ describe("纯函数 composeAgentText", () => {
     const twice = accessMod.composeAgentText(once.text, opts);
     expect(twice.text).toBe(once.text);
     expect(twice.added).toBe(0);
+  });
+
+  test("非法 YAML 的 frontmatter 直接拒绝（不猜、不降级）", () => {
+    expect(() => accessMod.composeAgentText("---\npermissions: [oops\n---\n", {
+      id: "dabo3", dataRoot: "~/.dabo3-agent", access: { read: true }, homedir: home,
+    })).toThrow(/E_MANIFEST/);
+  });
+
+  test("coversRoot：`/**` `/*` `**/*` `{a,b}/**` `?` 都算覆盖", () => {
+    const opts = (resource: string) => ({
+      id: "rc", dataRoot: "~/.rc-agent", access: { write: true }, homedir: home,
+    });
+    const R = join(home, ".rc-agent");
+    for (const deny of ["/**", "/*", "**/*", `{${R},/tmp}/**`, `${home}/.r?-agent/**`]) {
+      const src = `---\npermissions:\n  - action: edit\n    resource: ${JSON.stringify(deny)}\n    effect: deny\n---\nbody\n`;
+      expect(() => accessMod.composeAgentText(src, opts(deny))).toThrow(/E_MANIFEST/);
+    }
   });
 });

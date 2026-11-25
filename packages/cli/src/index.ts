@@ -1575,6 +1575,7 @@ async function personaCli(argv: string[]): Promise<number> {
         (r.overwrites?.length ? `\n  ⚠ 覆盖 ${r.overwrites.length} 个已存在产物（已备份）：${r.overwrites.join(", ")}` : "") +
         (r.msgKit && !r.msgKit.ok ? `\n  ⚠ dia-msg 未启用：${r.msgKit.reason}` : ""));
       for (const w of r.access?.warnings ?? []) if (!asJson) out(`  ⚠ ${w}`);
+      if (!asJson && r.access?.declared) out(`  access: 追加 ${r.access.added} 条（跳过 ${r.access.skipped}）→ ${r.access.root}`);
       if (!has(args, "--dry-run")) await autoIndexPersona(r.id);
       return 0;
     } catch (e: any) {
@@ -1597,7 +1598,12 @@ async function personaCli(argv: string[]): Promise<number> {
       const r = persona.verify(id, flag(args, "--version"));
       out(asJson ? JSON.stringify(r) : `${r.ok ? "ok" : "MISMATCH"} ${r.dir}${r.ok ? "" : `\n  - ${r.issues.join("\n  - ")}`}`);
       return r.ok ? 0 : 1;
-    } catch (e: any) { err(e?.message || String(e)); return 31; }
+    } catch (e: any) {
+      const m = e?.message || String(e);
+      err(m);
+      if (m.startsWith("E_MANIFEST")) return 32;
+      return 31;
+    }
   }
   if (sub === "use") {
     const spec = positional(args)[0];
@@ -1605,20 +1611,32 @@ async function personaCli(argv: string[]): Promise<number> {
     const [id, ver] = spec.split("@");
     try {
       const resolved = ver ? persona.resolveVersion(id, ver) : null;
-      const r = active.use(id, resolved || (has(args, "--latest") ? null : null), { reason: flag(args, "--reason") });
+      // access 校验必须先于切指针：失败是 E_MANIFEST（32），不能降级成 warn 后 exit 0。
+      // 用「将要切到的那个版本」校验（缺省 = 最新安装，与 active.use 同口径）。
+      const target = resolved ?? (() => {
+        const row = persona.list().find((r) => r.id === id);
+        if (!row || !row.versions.length) throw new Error(`E_NOT_INSTALLED: persona ${id}`);
+        return row.versions[row.versions.length - 1];
+      })();
+      persona.render(id, { version: target, check: true });
+      const r = active.use(id, resolved, { reason: flag(args, "--reason") });
       out(asJson ? JSON.stringify(r) : `${id}: ${r.previous ?? "(未设置)"} → ${r.current.version}（${r.current.commit ?? "?"}, by ${r.current.by}）`);
       // 切换版本后宿主产物（agent md / skill 软链 / dsh profile）仍指向旧槽位 → 顺手重渲染，避免 verify 立刻报漂移
       try {
         const rd = persona.render(id);
         if (rd.drift.length) out(`  ↳ 已重渲染 ${rd.drift.length} 个宿主产物`);
       } catch (e: any) {
-        err(`warn: 宿主产物未重渲染（${e?.message || e}）；可稍后运行 dia persona render ${id}`);
+        const m = e?.message || String(e);
+        if (m.startsWith("E_MANIFEST")) throw e;
+        err(`warn: 宿主产物未重渲染（${m}）；可稍后运行 dia persona render ${id}`);
       }
       await autoIndexPersona(id);
       return 0;
     } catch (e: any) {
-      err(e?.message || String(e));
-      return String(e?.message || "").startsWith("E_VERSION") ? 21 : 31;
+      const m = e?.message || String(e);
+      err(m);
+      if (m.startsWith("E_MANIFEST")) return 32;
+      return m.startsWith("E_VERSION") ? 21 : 31;
     }
   }
   if (sub === "gc") {
@@ -1700,6 +1718,10 @@ async function personaCli(argv: string[]): Promise<number> {
       } else {
         out(`updated ${id} → ${r.installed.version}（${String(r.installed.commit || r.installed.hash || "?").slice(0, 8)}, 原 ${r.previous ?? "-"}）`);
       }
+      if (!asJson) {
+        if (r.installed.access?.declared) out(`  access: 追加 ${r.installed.access.added} 条（跳过 ${r.installed.access.skipped}）→ ${r.installed.access.root}`);
+        for (const w of r.installed.access?.warnings ?? []) out(`  ⚠ ${w}`);
+      }
       // dry-run 不得写知识索引（autoIndexPersona 会真建索引）
       if (!dryRun) await autoIndexPersona(id);
       return 0;
@@ -1756,6 +1778,7 @@ async function personaCli(argv: string[]): Promise<number> {
       else out(`rendered ${r.id}@${r.version}${r.drift.length ? `（修复 ${r.drift.length} 处，备份 ${r.backups.length}）` : "（无变化）"}` +
         (r.msgKit && !r.msgKit.ok ? `\n  ⚠ dia-msg 未启用：${r.msgKit.reason}` : ""));
       if (!asJson) for (const w of r.access?.warnings ?? []) out(`  ⚠ ${w}`);
+      if (!asJson && r.access?.declared) out(`  access: 追加 ${r.access.added} 条（跳过 ${r.access.skipped}）→ ${r.access.root}`);
       return r.check && r.drift.length ? 1 : 0;
     } catch (e: any) {
       const m = e?.message || String(e);

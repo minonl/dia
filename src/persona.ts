@@ -112,14 +112,17 @@ function planAccess(m: Manifest, hosts: string[]): { state: access.AccessState; 
   return { state, warnings: state.declared ? accessWarnings(m, hosts, state.root) : [] };
 }
 
-/** 合成 opencode entry 的期望字节（未声明 access → null，保持零回归）。 */
-function composeEntry(m: Manifest, state: access.AccessState, entryAbs: string): access.ComposeResult | null {
+/**
+ * 合成 opencode entry 的期望字节（未声明 access → null，保持零回归）。
+ * `home` 缺省 = 当前家目录；verify 会传 lock 里记录的家目录（换 HOME 重跑不应误报）。
+ */
+function composeEntry(m: Manifest, state: access.AccessState, entryAbs: string, home = homeDir()): access.ComposeResult | null {
   if (!state.declared) return null;
   return access.composeAgentText(readFileSync(entryAbs, "utf8"), {
     id: m.id,
     dataRoot: String(m.data_root),
     access: m.access ?? {},
-    homedir: homeDir(),
+    homedir: home,
   });
 }
 
@@ -421,7 +424,7 @@ export function install(from: string, opts: { ref?: string; host?: string; home?
   const renderedHashes: Record<string, string> = {};
   for (const f of rendered) renderedHashes[f] = shaFile(f);
   writeFileSync(join(target, "dia.lock"), JSON.stringify({ id: m.id, version: m.version, slot, commit: src.commit, source: from, ref: opts.ref ?? null, installedAt: new Date().toISOString(), hash, rendered, renderedHashes, renderedDirs, kits: kitRefs,
-    access: { declared: acc.state.declared, added: composed?.added ?? 0, skipped: composed?.skipped ?? 0, root: acc.state.root },
+    access: { declared: acc.state.declared, added: composed?.added ?? 0, skipped: composed?.skipped ?? 0, root: acc.state.root, homedir: homeDir() },
     content: { knowledge: m.knowledge ?? [], commands: m.commands ?? [], dataRoot: m.data_root ?? null, env: m.env ?? null, rendered: inline, config: appliedConfig },
   }, null, 1));
   return { id: m.id, version: slot, dir: target, rendered, hash, commit: src.commit, overwrites, msgKit, ...(report ? { access: report } : {}) };
@@ -550,22 +553,30 @@ export function verify(id: string, version?: string): VerifyResult {
     else if (shaFile(f) !== expectedHash) issues.push(`产物被改动：${f}`);
   }
 
-  // access 合成与 lock 同步校验：源没变但期望字节变了（dia 升级改了合成规则）⇒ 需要重渲染
-  try {
-    const m = JSON.parse(readFileSync(join(dir, "dia.json"), "utf8")) as Manifest;
-    const st = access.inspectAccess(m, homeDir());
-    if (st.declared) {
-      const entry = m.entry?.opencode;
-      const dest = join(opencodeAgents(), `${id}.md`);
-      if (entry && lock.renderedHashes?.[dest]) {
-        const want = composeEntry(m, st, resolve(dir, entry));
-        if (want && shaStr(want.text) !== lock.renderedHashes[dest]) {
-          issues.push(`access 合成与 lock 记录不一致（重跑 dia persona render ${id}）`);
+  // access 合成与 lock 同步校验：源没变但期望字节变了（dia 升级改了合成规则）⇒ 需要重渲染。
+  // 用 lock 记录的家目录重算（换 DIA_HOME/HOME 重跑不该误报）；access 的校验错误向上抛
+  // E_MANIFEST（CLI 退出 32），不再降级成一条可被忽略的 issue。
+  const m = JSON.parse(readFileSync(join(dir, "dia.json"), "utf8")) as Manifest;
+  if (m.access !== undefined) {
+    try {
+      const recordedHome = typeof lock.access?.homedir === "string" ? lock.access.homedir : homeDir();
+      const st = access.inspectAccess(m, recordedHome);
+      if (st.declared) {
+        const entry = m.entry?.opencode;
+        const dest = join(opencodeAgents(), `${id}.md`);
+        if (entry && lock.renderedHashes?.[dest]) {
+          const want = composeEntry(m, st, resolve(dir, entry), recordedHome);
+          if (want && shaStr(want.text) !== lock.renderedHashes[dest]) {
+            issues.push(`access 合成与 lock 记录不一致（重跑 dia persona render ${id}）`);
+          }
         }
       }
+    } catch (e: any) {
+      const msg = String(e?.message ?? e);
+      // access 的声明/路径/合成错误一律 fail closed（32）；entry 文件缺失等其它问题仍报 issue
+      if (msg.startsWith("E_MANIFEST")) throw e;
+      issues.push(`access 合成校验失败：${msg}`);
     }
-  } catch (e: any) {
-    issues.push(`access 合成校验失败：${e?.message ?? e}`);
   }
 
   // 宿主自管的 profile 目录（dsh 会在启动时重写 cordis.yml、装插件时改 package.json）：
@@ -762,11 +773,13 @@ function compareDir(expected: string, actual: string): RenderDrift[] {
  * 用**已安装版本**重渲染到宿主（不换内容）。`check` 只报 drift、不写盘。
  * 覆盖策略：被手改/丢失的产物先备份到 `<data>/backups/render-<ts>/`，再写回。
  */
-export function render(id: string, opts: { host?: string; home?: string; check?: boolean } = {}): RenderResult {
+export function render(id: string, opts: { host?: string; home?: string; check?: boolean; version?: string } = {}): RenderResult {
   const idDir = join(dataDir(), "personas", id);
   if (!existsSync(idDir)) throw new Error(`E_NOT_INSTALLED: persona ${id}`);
-  const version = active.effective(id)?.version ?? readdirSync(idDir).filter((v) => statSync(join(idDir, v)).isDirectory()).sort().pop()!;
-  const dir = join(idDir, version);
+  const version = opts.version
+    ? resolveVersion(id, opts.version)
+    : (active.effective(id)?.version ?? readdirSync(idDir).filter((v) => statSync(join(idDir, v)).isDirectory()).sort().pop()!);
+  const dir = slotDir(idDir, version);
   const m = readManifest(dir);
   const hosts = opts.host ? [opts.host] : (m.hosts ?? ["opencode"]);
   for (const h of hosts) assertHost(h);
@@ -790,6 +803,7 @@ export function render(id: string, opts: { host?: string; home?: string; check?:
     agentDest = join(opencodeAgents(), `${id}.md`);
     // drift 比对用「合成期望」：源永远是未合成的，dest 是合成后的（幂等，不会叠加）
     composed = composeEntry(m, acc.state, agentSrc);
+    if (report && composed) { report.added = composed.added; report.skipped = composed.skipped; }
     const wantHash = composed ? shaStr(composed.text) : shaFile(agentSrc);
     if (!existsSync(agentDest)) drift.push({ path: agentDest, action: "missing" });
     else if (shaFile(agentDest) !== wantHash) drift.push({ path: agentDest, action: "changed" });
@@ -902,7 +916,7 @@ export function render(id: string, opts: { host?: string; home?: string; check?:
   if (dshDest) renderedDirs.push({ path: dshDest, hash: hashTree(dshDest) });
   // lock 里的 access 段跟着重渲染刷新（合成条数以本次 render 为准）
   const accessLock = acc.state.declared
-    ? { declared: true, added: composed?.added ?? 0, skipped: composed?.skipped ?? 0, root: acc.state.root }
+    ? { declared: true, added: composed?.added ?? 0, skipped: composed?.skipped ?? 0, root: acc.state.root, homedir: homeDir() }
     : { declared: false, added: 0, skipped: 0, root: null };
   writeFileSync(lockPath, JSON.stringify({ ...lock, rendered, renderedHashes, renderedDirs, access: accessLock }, null, 1));
   return { id, version, check: false, drift, backups, msgKit, ...(report ? { access: { ...report, added: composed?.added ?? 0, skipped: composed?.skipped ?? 0 } } : {}) };
@@ -1183,7 +1197,10 @@ export function checkUpstream(id: string, version?: string): UpstreamState {
   if (!existsSync(idDir)) throw new Error("E_NOT_INSTALLED");
   const v = version || (active.effective(id)?.version ?? readdirSync(idDir).sort().pop()!);
   const lock = JSON.parse(readFileSync(join(idDir, v, "dia.lock"), "utf8"));
-  const vres = verify(id, v);
+  // access 校验失败会抛 E_MANIFEST；这里降级成 verify_ok=false，让 `persona check` 仍能报上游关系
+  let verifyOk = false;
+  try { verifyOk = verify(id, v).ok; } catch { verifyOk = false; }
+  const vres = { ok: verifyOk };
   const out: UpstreamState = {
     id, version: v,
     source: lock.source ?? null, ref: lock.ref ?? null,

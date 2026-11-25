@@ -192,3 +192,30 @@ describe("dia kb 作用域与委派", () => {
     expect(r.status).not.toBe(0);
   });
 });
+
+describe("嵌套 versions/<v> 布局下的作用域解析", () => {
+  test("scope.current 的 dir 与 dirOf（persona path）一致，kits 非空", () => {
+    const id = "nestedscope";
+    const slot = "0.1.0+local";
+    const dir = join(data, "personas", id, "versions", slot);
+    mkdirSync(join(dir, "knowledge"), { recursive: true });
+    writeFileSync(join(dir, "knowledge", "k.md"), "# k\n");
+    writeFileSync(join(dir, "run.sh"), "#!/bin/sh\n");
+    writeFileSync(join(dir, "dia.json"), JSON.stringify({ schema: 1, kind: "persona", id, version: "0.1.0" }));
+    writeFileSync(join(dir, "dia.lock"), JSON.stringify({
+      id, version: "0.1.0", slot, hash: "x",
+      content: { knowledge: ["knowledge"], commands: [{ name: "ncmd", entry: "run.sh" }] },
+    }));
+
+    const s = scope.current(id);
+    expect(s.dir).toBe(dir);
+    expect(s.version).toBe(slot);
+    expect(s.kits.length).toBeGreaterThan(0);
+    expect(s.knowledgeRoot).toBe(join(dir, "knowledge"));
+
+    // 与 `dia persona path`（内部走 dirOf）同一解析器
+    const r = runCli(["persona", "path", id]);
+    expect(r.status).toBe(0);
+    expect(r.stdout.trim()).toBe(dir);
+  });
+});

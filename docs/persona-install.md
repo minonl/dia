@@ -336,7 +336,7 @@ persona 需要在宿主里读写自己的数据根时，**不要手写 permissio
 | frontmatter 不是合法 YAML（tab 缩进、重复键、括号不配对等） | `E_MANIFEST` |
 | V1 map（`permissions:` 下 `key: effect`）、`permissions` 下非映射列表项、无 frontmatter、缺收尾 `---` | `E_MANIFEST` |
 | `access.read/write/env` 非 boolean | `E_MANIFEST` |
-| `dia.lock` 存在但不是合法 JSON / 顶层为 `null` / 不是对象 | `E_LOCKED`，**退出 32**（`verify`/`render`/`use`/`check`/`update`/`add` 默认不写盘；`add`/`update` 加 `--force` 时先把坏 lock 备份到 `<idDir>/backups/` 再继续重装） |
+| `dia.lock` 存在但不是合法 JSON / 顶层为 `null` / 不是对象 | `E_LOCKED`，**退出 32**（`verify`/`render`/`use`/`check`/`update`/`add` 默认不写盘；`add`/`update` 加 `--force` 时先把坏 lock **复制**备份到 `<data>/backups/persona-locks/<id>/`，原文件留在原位；安装成功后才被新 lock 覆盖） |
 | `verify` / `persona use` 遇到上述 access 错误 | `E_MANIFEST`，**退出 32**（不再降级成 warn 或 exit 1） |
 
 **「更宽 deny」的 glob 判定**（覆盖 root 即拒绝，覆盖 root 的写法包括但不限于）：
@@ -363,8 +363,10 @@ persona 需要在宿主里读写自己的数据根时，**不要手写 permissio
   （那会把指向旧家目录的授权写到当前 HOME）。两条出路：① 换回原 HOME；② 显式 `--rehome`
   （`dia persona render <id> --rehome` / `update <id> --rehome` / `add <id> … --rehome`），同时更新 lock 的 `homedir`；
   `--rehome` **只在与 opencode 合成的同一次操作里生效**：`render/add --host dsh|codex --rehome` 直接 `E_USAGE`，
-  不会写出 `homedir=B / root=A` 的矛盾 lock。迁移后旧 HOME 的 agent md / codex `AGENTS.md` 会记入
-  `lock.renderedRetired` 并从 `rendered`/`renderedHashes` 移除（文件删除），`verify` 不再报 missing、`remove` 不再退出 30。
+  不会写出 `homedir=B / root=A` 的矛盾 lock。迁移后旧 HOME 的 agent md / codex `AGENTS.md` 会**先备份到 `<data>/backups/rehome-<id>-<ts>/` 再删**，
+  并记入 `lock.renderedRetired` 且从 `rendered`/`renderedHashes` 移除，`verify` 不再报 missing、`remove` 不再退出 30。
+  只有「当前字节 == lock 里记录的哈希」才认定是本 persona 产物；手改过的（或别的 persona 写入的同名
+  codex `AGENTS.md`）**保留不删**，`renderedRetired` 里记为 `{ path, kept: "user-edited" }` 并在 CLI 告警。
 - 计数字段**只有一个口径**（`render --check --json`、真渲染、`install`/`update` 输出与 lock 相同）：
   `added` = **本次合成新增的规则条数**；`skipped` = 源里已有等价规则而跳过的条数；
   `missing` = **dest 相对期望还缺的条数**（只在 `render`/`--check` 报；安装时为 `undefined`）。

@@ -4,10 +4,25 @@
 
 ## Unreleased
 
+### fix(persona): access 评审第六轮（备份位置 / 产物归属 / 失败可恢复）
+
+- **坏 lock 备份移出 persona 目录**：改到 `<data>/backups/persona-locks/<id>/dia.lock.bak-<slot>-<ts>`，
+  不再被当成一个已安装版本（`persona list` 假版本、`active` 指到 `backups`、`gc --keep` 删备份）。
+  历史遗留的 `<idDir>/backups/` 由 `versionDirs`/`installedVersions`/`gc`/`remove` 显式排除，`remove` 删槽位时一并清掉。
+- **坏 lock 只复制不移动**：备份放在所有前置校验之后、写盘之前；安装失败时原 lock 仍在原位
+  （槽位被替换成无 lock 的目录时也会写回），`remove`/重装都保留了依据。
+- **`--rehome` 清理旧产物先备份再删**：删除前写到 `<data>/backups/rehome-<id>-<ts>/`；
+  内容哈希与 lock 记录不一致（用户手改）时**保留不删**并告警，`renderedRetired` 记为 `{ path, kept: "user-edited" }`。
+- **codex `AGENTS.md` 归属校验**：只有「当前字节 == 本 persona 旧 lock 记录的哈希」才删；
+  别的 persona 写入的同名文件保留并告警「疑似非本 persona 产物，已保留」。
+- **dsh profile 归属检查前移到任何写盘之前**：避免先写 agent md 再失败留下「半安装」。
+- **嵌套 `versions/<v>` 下的 `scope.current`** 改用与 `dirOf`/`versionDirs` 同一解析器（嵌套优先），
+  `dir`/`kits` 与 `dia persona path` 一致。
+
 ### fix(persona): access 评审第四/五轮（恢复路径与边缘场景）
 
 - **`--force` 能从坏 lock 恢复**：`add/update --force` 遇到 `dia.lock` 不可解析时，先把坏文件
-  备份到 `<idDir>/backups/dia.lock.bak-<slot>-<ts>` 再继续重装；不加 `--force` 仍退出 32 且字节不变。
+  **复制**备份到 `<data>/backups/persona-locks/<id>/dia.lock.bak-<slot>-<ts>` 再继续重装；不加 `--force` 仍退出 32 且字节不变。
   `update --force` 的安装来源由旁路记录 `<data>/state/persona-sources.json` 兜回（lock 才是权威）。
 - **`--rehome` 只与 opencode 合成同一次生效**：`render/add --host dsh|codex --rehome` 直接报 `E_USAGE`，
   不再让 lock 出现 `homedir=B / root=A`；非 opencode 渲染沿用 lock 里记录的 `access.homedir`。

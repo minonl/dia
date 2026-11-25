@@ -1344,7 +1344,8 @@ describe("㉚ render --host dsh 保留 lock 里的 access.added/skipped", () => 
 const idDirOf = (id: string) => join(data, "personas", id);
 const slotOf = (id: string, ver: string) => join(idDirOf(id), ver);
 const lockOf = (id: string, ver: string) => join(slotOf(id, ver), "dia.lock");
-const backupsOf = (id: string) => join(idDirOf(id), "backups");
+// 坏 lock 备份现在在 data 备份根（评审 HIGH：不能放进 personas/<id>/，否则会被当版本）
+const backupsOf = (id: string) => join(data, "backups", "persona-locks", id);
 const hasLockBackup = (id: string) =>
   existsSync(backupsOf(id)) && readdirSync(backupsOf(id)).some((n) => n.includes("dia.lock.bak"));
 
@@ -1547,5 +1548,198 @@ describe("㊳ 嵌套 versions/<v> 布局 + update --rehome 行为确定", () => 
     const lock = JSON.parse(readFileSync(join(idDir, "versions", "0.1.0+local", "dia.lock"), "utf8"));
     expect(lock.access.homedir).toBe(home2);
     expect(run(["persona", "verify", id], { DIA_HOME: home2 }).status).toBe(0);
+  });
+});
+
+// ============================================================================
+// 评审跟进：坏 lock 备份位置 / rehome 备份 / AGENTS.md 归属 / 失败可恢复 / 嵌套 scope
+// ============================================================================
+
+const listRow = (id: string) => {
+  const r = run(["persona", "list", "--json"]);
+  expect(r.status).toBe(0);
+  return JSON.parse(r.stdout).find((row: any) => row.id === id);
+};
+
+describe("㊴ 坏 lock 备份落在 <data>/backups/persona-locks，不污染版本目录", () => {
+  test("add --force：personas/<id>/backups 不存在；list 无 backups；gc --keep 1 不删备份", () => {
+    const id = "lkbakroot";
+    const dir = makePersona({ id, dataRoot: `~/.${id}-agent`, access: { read: true } });
+    expect(run(["persona", "add", id, "--from", dir]).status).toBe(0);
+    const slot = readdirSync(idDirOf(id)).find((n) => n.startsWith("0.1.0"))!;
+    writeFileSync(lockOf(id, slot), "{bad");
+    expect(run(["persona", "add", id, "--from", dir, "--force"]).status).toBe(0);
+
+    expect(hasLockBackup(id)).toBe(true);
+    expect(existsSync(join(idDirOf(id), "backups"))).toBe(false);
+
+    const row = listRow(id);
+    expect(row.versions).not.toContain("backups");
+    expect(row.versions.length).toBe(1);
+
+    // gc 只碰版本槽位：备份在 <data>/backups，不能被 --keep 删掉
+    expect(run(["persona", "gc", id, "--keep", "1"]).status).toBe(0);
+    expect(hasLockBackup(id)).toBe(true);
+  });
+
+  test("历史 personas/<id>/backups：不算版本；remove --version 后 active 不指向它并被清掉", () => {
+    const id = "lklega";
+    const d1 = makePersona({ id, manifestExtra: { version: "0.1.0" } });
+    const d2 = makePersona({ id, manifestExtra: { version: "0.2.0" } });
+    expect(run(["persona", "add", id, "--from", d1]).status).toBe(0);
+    expect(run(["persona", "add", id, "--from", d2]).status).toBe(0);
+
+    // 模拟历史遗留的 `<idDir>/backups/`
+    const legacy = join(idDirOf(id), "backups");
+    mkdirSync(legacy, { recursive: true });
+    writeFileSync(join(legacy, "dia.lock.bak-legacy"), "{bad");
+
+    const row = listRow(id);
+    expect(row.versions.some((v: string) => v.startsWith("backups"))).toBe(false);
+    expect(row.versions.length).toBe(2);
+
+    // 让 0.1.0 成为生效版本：删它时必须重指到 0.2.0，而不是排序垫底的 backups
+    expect(run(["persona", "use", `${id}@0.1.0`]).status).toBe(0);
+    expect(run(["persona", "remove", id, "--version", "0.1.0"]).status).toBe(0);
+    const active = JSON.parse(readFileSync(join(data, "state", "active.json"), "utf8"))[id];
+    expect(active.version).not.toBe("backups");
+    expect(active.version.startsWith("0.2.0")).toBe(true);
+    expect(existsSync(legacy)).toBe(false);
+  });
+});
+
+describe("㊵ rehome 清理旧 dest：先备份再删；手改过的保留并告警", () => {
+  test("add --rehome：未改的旧 dest 备份到 <data>/backups/rehome-* 后才删", () => {
+    const id = "rehbak";
+    const dir = makePersona({ id, dataRoot: `~/.${id}-agent`, access: { read: true } });
+    const agentsA = join(data, "agents-A3"), agentsB = join(data, "agents-B3");
+    mkdirSync(agentsA, { recursive: true });
+    mkdirSync(agentsB, { recursive: true });
+    expect(run(["persona", "add", id, "--from", dir], { DIA_OPENCODE_AGENTS_DIR: agentsA }).status).toBe(0);
+    const destA = join(agentsA, `${id}.md`);
+    const before = readFileSync(destA, "utf8");
+    const home2 = mkdtempSync(join(tmpdir(), "dia-pa-h-rbak-"));
+    const r = run(["persona", "add", id, "--from", dir, "--rehome"], { DIA_HOME: home2, DIA_OPENCODE_AGENTS_DIR: agentsB });
+    if (r.status !== 0) console.error(r.stdout, r.stderr);
+    expect(r.status).toBe(0);
+    expect(existsSync(destA)).toBe(false);
+
+    const bdirs = readdirSync(join(data, "backups")).filter((n) => n.startsWith(`rehome-${id}-`));
+    expect(bdirs.length).toBeGreaterThan(0);
+    const bdir = join(data, "backups", bdirs[bdirs.length - 1]);
+    expect(readdirSync(bdir)).toContain(`${id}.md`);
+    expect(readFileSync(join(bdir, `${id}.md`), "utf8")).toBe(before);
+  });
+
+  test("render --rehome：手改过的旧 dest 保留（kept-user-edited）+ 告警，verify 仍 0", () => {
+    const id = "rehkeep";
+    const dir = makePersona({ id, dataRoot: `~/.${id}-agent`, access: { read: true } });
+    const agentsA = join(data, "agents-A4"), agentsB = join(data, "agents-B4");
+    mkdirSync(agentsA, { recursive: true });
+    mkdirSync(agentsB, { recursive: true });
+    expect(run(["persona", "add", id, "--from", dir], { DIA_OPENCODE_AGENTS_DIR: agentsA }).status).toBe(0);
+    const destA = join(agentsA, `${id}.md`);
+    writeFileSync(destA, "user edited\n");
+
+    const home2 = mkdtempSync(join(tmpdir(), "dia-pa-h-rkeep-"));
+    const r = run(["persona", "render", id, "--rehome"], { DIA_HOME: home2, DIA_OPENCODE_AGENTS_DIR: agentsB });
+    if (r.status !== 0) console.error(r.stdout, r.stderr);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("kept-user-edited");
+    expect(existsSync(destA)).toBe(true);
+    expect(readFileSync(destA, "utf8")).toBe("user edited\n");
+
+    const lock = JSON.parse(readFileSync(lockOf(id, "0.1.0+local"), "utf8"));
+    expect(lock.renderedRetired.some((e: any) => typeof e === "object" && e.path === destA && e.kept === "user-edited")).toBe(true);
+    expect(run(["persona", "verify", id], { DIA_HOME: home2, DIA_OPENCODE_AGENTS_DIR: agentsB }).status).toBe(0);
+  });
+});
+
+describe("㊶ codex AGENTS.md 同名：按 lock 哈希判定归属，只删自己的", () => {
+  test("A rehome 不删 B 写入的 AGENTS.md（告警保留）；B verify 仍 0", () => {
+    const h1 = mkdtempSync(join(tmpdir(), "dia-pa-codex-h1-"));
+    const h2 = mkdtempSync(join(tmpdir(), "dia-pa-codex-h2-"));
+    const idA = "codexowna", idB = "codexownb";
+
+    const dirA = mkdtempSync(join(tmpdir(), `dia-pa-${idA}-`));
+    mkdirSync(join(dirA, "agents"), { recursive: true });
+    writeFileSync(join(dirA, "agents", `${idA}.md`), `---\ndescription: ${idA}\n---\nA\n`);
+    writeFileSync(join(dirA, "AGENTS.md"), "A codex\n");
+    writeFileSync(join(dirA, "dia.json"), JSON.stringify({
+      schema: 1, kind: "persona", id: idA, version: "0.1.0",
+      hosts: ["opencode", "codex"],
+      entry: { opencode: `agents/${idA}.md`, codex: "AGENTS.md" },
+      data_root: `~/.${idA}-agent`, access: { read: true },
+    }));
+
+    const dirB = mkdtempSync(join(tmpdir(), `dia-pa-${idB}-`));
+    writeFileSync(join(dirB, "AGENTS.md"), "B codex\n");
+    writeFileSync(join(dirB, "dia.json"), JSON.stringify({
+      schema: 1, kind: "persona", id: idB, version: "0.1.0",
+      hosts: ["codex"], entry: { codex: "AGENTS.md" },
+    }));
+
+    const agentsA = join(data, "agents-A5");
+    mkdirSync(agentsA, { recursive: true });
+    expect(run(["persona", "add", idA, "--from", dirA], { DIA_CODEX_HOME: h1, DIA_OPENCODE_AGENTS_DIR: agentsA }).status).toBe(0);
+    expect(run(["persona", "add", idB, "--from", dirB, "--host", "codex", "--force"], { DIA_CODEX_HOME: h1 }).status).toBe(0);
+
+    const agA = join(h1, ".codex", "AGENTS.md");
+    expect(readFileSync(agA, "utf8")).toBe("B codex\n");
+
+    const home2 = mkdtempSync(join(tmpdir(), "dia-pa-h-own-"));
+    const agentsA2 = join(data, "agents-A6");
+    mkdirSync(agentsA2, { recursive: true });
+    const r = run(["persona", "render", idA, "--rehome"], { DIA_HOME: home2, DIA_CODEX_HOME: h2, DIA_OPENCODE_AGENTS_DIR: agentsA2 });
+    if (r.status !== 0) console.error(r.stdout, r.stderr);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("疑似非本 persona 产物");
+    expect(existsSync(agA)).toBe(true);
+    expect(readFileSync(agA, "utf8")).toBe("B codex\n");
+    expect(run(["persona", "verify", idB], { DIA_CODEX_HOME: h1 }).status).toBe(0);
+  });
+});
+
+describe("㊷ 坏 lock + 后续安装失败：lock 不离开原位，可恢复后 remove 干净", () => {
+  test("dsh profile 非 dia 管理 → 32 且 lock 原样；修复后 add --force 成功，remove 回收干净", () => {
+    const id = "halful";
+    const dir = mkdtempSync(join(tmpdir(), `dia-pa-${id}-`));
+    mkdirSync(join(dir, "agents"), { recursive: true });
+    mkdirSync(join(dir, "platform", "dsh", "p"), { recursive: true });
+    writeFileSync(join(dir, "agents", `${id}.md`), `---\ndescription: ${id}\n---\nbody\n`);
+    writeFileSync(join(dir, "platform", "dsh", "p", "cordis.yml"), "[]\n");
+    writeFileSync(join(dir, "dia.json"), JSON.stringify({
+      schema: 1, kind: "persona", id, version: "0.1.0",
+      hosts: ["opencode", "dsh"],
+      entry: { opencode: `agents/${id}.md`, dsh: "platform/dsh/p" },
+      data_root: `~/.${id}-agent`, access: { read: true },
+    }));
+    expect(run(["persona", "add", id, "--from", dir]).status).toBe(0);
+
+    const idDir = idDirOf(id);
+    const slot = readdirSync(idDir).find((n) => n.startsWith("0.1.0"))!;
+    const lockP = lockOf(id, slot);
+    const profile = join(data, "dsh-profiles", id);
+    // 让 dsh profile 变成「非 dia 管理」，并把 target slot 的 lock 弄坏
+    rmSync(join(profile, ".dia-managed"), { force: true });
+    writeFileSync(lockP, "{bad");
+
+    const bad = run(["persona", "add", id, "--from", dir, "--force"]);
+    expect(bad.status).toBe(32);
+    expect(bad.stderr).toContain("E_CONFLICT");
+    // 关键：坏 lock 没有被提前移走（原文件原样留在原位），remove/重装都还有依据
+    expect(readFileSync(lockP, "utf8")).toBe("{bad");
+
+    // 修复后重装 → 成功；再 remove 能完整回收 agent md
+    writeFileSync(join(profile, ".dia-managed"), JSON.stringify({ id, version: "0.1.0" }));
+    const ok = run(["persona", "add", id, "--from", dir, "--force"]);
+    if (ok.status !== 0) console.error(ok.stdout, ok.stderr);
+    expect(ok.status).toBe(0);
+    expect(run(["persona", "verify", id]).status).toBe(0);
+
+    const rm = run(["persona", "remove", id]);
+    expect(rm.status).toBe(0);
+    expect(existsSync(agentDest(id))).toBe(false);
+    expect(existsSync(idDir)).toBe(false);
   });
 });

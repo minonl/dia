@@ -13,6 +13,8 @@ set -uo pipefail
 
 # tests must not inherit the developer global config
 export DIA_JOB_CONFIG=/dev/null
+# issue #258：测试永不写真实 gui/$UID（沙箱 HOME 挡不住 launchctl 域）
+export DIA_JOB_NO_LAUNCHD=1
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 YT="$HERE/../bin/dia-job"
@@ -119,11 +121,12 @@ printf '%s' "$OUT5" | grep -q "launchctl bootstrap 失败" && bad "仍在尝试�
 echo "== 6. 静态契约：launchd 写入点**必须都在隔离守卫下**（2026-10-16 实测踩到"守卫打错行"）=="
 # install 的 bootout/tootstrap 必须在 if _launchd_off 分支内；uninstall 的 bootout 必须带守卫前缀。
 # 教训：`replace(...,1)` 命中了 install 里的**同名行** ⇒ uninstall 未隔离 ⇒ 定点复现里真实任务被 bootout ✗
-_n_bootout="$(grep -c 'launchctl bootout' "$YT" || true)"   # 不计缩进（uninstall 那处前缀是守卫）
-_n_guarded="$(grep -c '_launchd_off || launchctl bootout' "$YT" || true)"
-[ "$_n_bootout" = "2" ] && ok "bootout 调用点 = 2（install + uninstall）" || bad "bootout 调用点数异常：$_n_bootout"
-[ "$_n_guarded" = "1" ] && ok "其中 uninstall 那处带 _launchd_off 守卫" || bad "守卫缺失/重复：$_n_guarded"
+_n_bootout="$(grep -c 'launchctl bootout "' "$YT" || true)"   # install + uninstall + gc --orphans
+_n_guarded="$(grep -c 'if ! _launchd_off; then' "$YT" || true)"
+[ "$_n_bootout" = "3" ] && ok "bootout 调用点 = 3（install + uninstall + gc --orphans）" || bad "bootout 调用点数异常：$_n_bootout"
+[ "$_n_guarded" = "1" ] && ok "uninstall 的 bootout 在 ! _launchd_off 分支内" || bad "uninstall 隔离分支缺失/重复：$_n_guarded"
 grep -q 'if _launchd_off; then' "$YT" && ok "install 侧走 if _launchd_off 分支" || bad "install 侧未见隔离分支"
+grep -q 'gc_orphans' "$YT" && grep -q -- '--orphans' "$YT" && ok "gc --orphans 入口存在" || bad "缺 gc --orphans"
 grep -q 'launchctl bootstrap' "$YT" && ! grep -q '_launchd_off || launchctl bootstrap' "$YT" && ok "bootstrap 未被冗余守卫（已在 if 分支内）" || bad "bootstrap 守卫位置可疑"
 
 echo

@@ -1435,7 +1435,15 @@ cmd_uninstall() {
       _own=1
     fi
     if [ "$_own" = 1 ]; then
-      _launchd_off || launchctl bootout "gui/$UID_NUM/$(label_for "$name")" 2>/dev/null || true   # ⚠️ 守卫必须在**这一行**（先前误命中 install 的同名行 ⇒ uninstall 未隔离，实测踩到）
+      # 先确认已加载再 bootout；失败**不能静默**（issue #258：临时 HOME 的孤儿服务曾因 || true 留下）
+      if ! _launchd_off; then
+        if launchctl print "gui/$UID_NUM/$(label_for "$name")" >/dev/null 2>&1; then
+          if ! launchctl bootout "gui/$UID_NUM/$(label_for "$name")"; then
+            echo "  ✗ launchctl bootout 失败：$(label_for "$name")（服务可能仍在运行；已保留 plist/registry，便于重试）" >&2
+            return 1
+          fi
+        fi
+      fi
       [ -f "$f" ] && rm -f "$f" && echo "  · 已删 plist"
     else
       echo "  ! plist 属于其它 job 根（${_prog}），跳过下线/删除（避免误删新根注册）"
@@ -1660,15 +1668,52 @@ cmd_registry_gc() {
   return 0
 }
 
+# gc --orphans：列出/清理「label 仍是 local.dia-job-*，但 plist 不在当前 HOME/当前 job 根」的孤儿服务。
+# 由来（issue #258）：测试用沙箱 HOME 却 bootstrap 到真实 gui/$UID，临时目录删了服务还活着。
+gc_orphans() {
+  local apply="${1:-0}"
+  [ "$PLATFORM" = macos ] || { echo "gc --orphans 仅 macOS（launchd）"; return 0; }
+  if [ "$apply" = 1 ] && _launchd_off; then
+    echo "DIA_JOB_NO_LAUNCHD=1：只列出孤儿，不执行 bootout（测试隔离）"
+    apply=0
+  fi
+  local labels n=0 l path
+  labels="$(launchctl list 2>/dev/null | awk -v p="$DIA_JOB_LABEL_PREFIX" 'index($3,p)==1 {print $3}' | sort -u)"
+  if [ -z "$labels" ]; then echo "未发现 $DIA_JOB_LABEL_PREFIX* 的已加载任务"; return 0; fi
+  while IFS= read -r l; do
+    [ -n "$l" ] || continue
+    path="$(launchctl print "gui/$UID_NUM/$l" 2>/dev/null | sed -n 's/^[[:space:]]*path = //p' | head -1)"
+    [ -n "$path" ] || continue
+    case "$path" in
+      "$HOME/Library/LaunchAgents/"*|"$YAN_DATA_ROOT/launchagents/"*) continue ;;
+    esac
+    n=$((n+1))
+    echo "  · $l → $path"
+    if [ "$apply" = 1 ]; then
+      if launchctl bootout "gui/$UID_NUM/$l" 2>/dev/null; then echo "    · 已 bootout"
+      else echo "    ! bootout 失败（可能已卸载/无权限）" >&2; fi
+    fi
+  done <<< "$labels"
+  if [ "$n" = 0 ]; then
+    echo "未发现孤儿任务（所有 $DIA_JOB_LABEL_PREFIX* 的 plist 都在当前根）"
+  else
+    echo "孤儿 $n 个$([ "$apply" = 1 ] && echo '（已 bootout）' || echo '（dry-run；加 --apply 执行 bootout）')"
+  fi
+  return 0
+}
+
 cmd_gc() {  # 清理 <数据根>/tasks 下超过 N 天的 state/日志/心跳（Q2：默认 30 天）
-  local days=30 dry=0
+  local days=30 dry=0 orphans=0 apply=0
   while [ $# -gt 0 ]; do case "$1" in
     --days) days="$2"; shift 2 ;;
     --dry-run) dry=1; shift ;;
-    -h|--help) echo "用法：yan-task gc [--days N] [--dry-run]   # 清理旧 state/日志/心跳（registry.json 永不清理）"; return 0 ;;
-    -*) echo "用法：yan-task gc [--days N] [--dry-run]（未知参数：$1）" >&2; return 2 ;;
+    --orphans) orphans=1; shift ;;
+    --apply) apply=1; shift ;;
+    -h|--help) echo "用法：yan-task gc [--days N] [--dry-run] | gc --orphans [--apply]   # 旧 state/日志/心跳；--orphans 清 launchd 孤儿"; return 0 ;;
+    -*) echo "用法：yan-task gc [--days N] [--dry-run] | gc --orphans [--apply]（未知参数：$1）" >&2; return 2 ;;
     *) shift ;;
   esac; done
+  if [ "$orphans" = 1 ]; then gc_orphans "$apply"; return $?; fi
   local dir="$YAN_DATA_ROOT/tasks"
   [ -d "$dir" ] || { echo "无 $dir"; return 0; }
   local n=0 f

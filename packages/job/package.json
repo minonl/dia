@@ -7,6 +7,6 @@
     "dia-job": "bin/dia-job"
   },
   "scripts": {
-    "test": "bash tests/bootstrap.test.sh && bash tests/p2.test.sh && bash tests/policy.test.sh && bash tests/install.test.sh && bash tests/linux.test.sh && bash tests/registry-gc.test.sh && bash tests/doctor-registry.test.sh"
+    "test": "bash tests/bootstrap.test.sh && bash tests/p2.test.sh && bash tests/policy.test.sh && bash tests/install.test.sh && bash tests/linux.test.sh && bash tests/registry-gc.test.sh && bash tests/doctor-registry.test.sh && bash tests/orphans.test.sh"
   }
 }

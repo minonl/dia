@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated": "2026-11-11",
+  "updated": "2026-11-27",
   "note": "单一事实源：平台支持范围、实测版本、已知坑。人读视图由 dia doctor 派生，不要手抄进 md。",
   "platforms": {
     "opencode": {
@@ -46,8 +46,10 @@
       "range": null,
       "tested": [],
       "notes": [
-        "只有配置注入实践（~/.codex/config.toml），未纳入 dia 渲染"
-      ]
+        "代码已支持 render --host codex：渲染到假 HOME（默认 <data>/codex-home），绝不写真实 ~/.codex；单测见 tests/persona-codex*.test.ts",
+        "注册表仍标 supported:false：未在真实 codex 上冒烟；翻 true 前先按 tested_note 补真机验证（codex debug 能加载 AGENTS.md）"
+      ],
+      "tested_note": "未真机冒烟；翻 true 前在装有 codex 的机器上跑：`dia persona render <id> --host codex --check` + codex 实际加载该 AGENTS.md"
     },
     "mimocode": {
       "supported": false,

@@ -12,7 +12,7 @@ updated: 2026-11-09
 > 来源：yan-agent `core/knowledge/tools/pnpm.md`（2026-11-09 迁入 kit/node）。
 
 > 跨项目可复用的 pnpm 版本升级坑与 pnpm 12「runtime」发行架构，方案式记录（条件 → 解法）。
-> hummus 专属升级上下文见 hummus 仓库 `docs/knowledge/pnpm-12-upgrade.md`；dockerfiles-v2 镜像精确发布姿势见 dockerfiles-v2 仓库 `CLAUDE.md`「精确发布指定镜像」。
+> project-a 专属升级上下文见 project-a 仓库 `docs/knowledge/pnpm-12-upgrade.md`；images 镜像精确发布姿势见 images 仓库 `CLAUDE.md`「精确发布指定镜像」。
 
 ## pnpm 12 发行版结构（native binary + wrapper）
 
@@ -91,12 +91,12 @@ pnpm 12 默认开启 `manage-package-manager-versions`（corepack 替代）。bi
   `virtualStoreType: global` → 全量重装 → **lint / typecheck / test / build / serve 全验**（含 `node *.mjs` 类脚本）。
   迁移背景见 `workflows/worktree-forms.md` §3。
 
-### ⛔ 试点结论（2026-10-16，hummus）：**React+TS monorepo 当前不可用**，暂停启用
+### ⛔ 试点结论（2026-10-16，project-a）：**React+TS monorepo 当前不可用**，暂停启用
 
 **一句话**：收益很实在（新 worktree 安装 **2.9s**、`node_modules` **1.9M**），但 GVS 会**打破 TS 类型单例**
-⇒ hummus 的 CI 同款 `nx typecheck web-hub` 直接失败。**我们这边不改动任何仓**，等上游或另找方案。
+⇒ project-a 的 CI 同款 `nx typecheck web-hub` 直接失败。**我们这边不改动任何仓**，等上游或另找方案。
 
-**双 worktree 实测（hummus origin/main，pnpm 11.28.2 + `virtualStoreType: global`）**：
+**双 worktree 实测（project-a origin/main，pnpm 11.28.2 + `virtualStoreType: global`）**：
 
 | 维度 | 对照（现状 isolated） | GVS |
 |---|---|---|
@@ -117,7 +117,7 @@ pnpm 12 默认开启 `manage-package-manager-versions`（corepack 替代）。bi
 
 **绕法失败记录（省得重试）**：
 - `tsconfig.base.json` `paths` 加 `"@types/react"` 单钉 ⇒ **无效**（TS 的 `@types/*` **自动查找不走 paths**）。
-- 把 `react` 映射到 `./node_modules/@types/react` ⇒ **TS 侧 0 错**（类型单例达成），但 hummus 的 vite 配置
+- 把 `react` 映射到 `./node_modules/@types/react` ⇒ **TS 侧 0 错**（类型单例达成），但 project-a 的 vite 配置
   有 **`resolve.tsconfigPaths: true`** ⇒ 同一别名**被用到运行时** ⇒ vitest 4 个文件挂
   （`"." is not exported under the conditions [...] from .../@types/react`）⇒ **不可用**。
   ⇒ 真要救，必须把 pin 放进「**只有 tsc 读到、vite 读不到**」的配置层（typecheck / build-dts 专用 tsconfig），
@@ -125,7 +125,7 @@ pnpm 12 默认开启 `manage-package-manager-versions`（corepack 替代）。bi
 
 **复现步骤（约 3 分钟，勿在共享主 checkout 做）**：
 ```bash
-bash `dia wt` create <hummus 主仓> gvs-pilot --base origin/main
+bash `dia wt` create <project-a 主仓> gvs-pilot --base origin/main
 cd <worktree> && # package.json: pnpm@11.15.1 → pnpm@11.28.2；pnpm-workspace.yaml 头部加 virtualStoreType: global
 pnpm install                                    # 首装冷 store ~36s；再装（热）~3s
 pnpm exec nx typecheck web-hub --skip-nx-cache  # ← GVS 下 40 错；关掉 GVS 同版本 pnpm 下 0 错
@@ -153,10 +153,10 @@ pnpm 12 起 **`.npmrc` 只读 auth/registry 设置**，其余设置（`hoistPatt
 2. `pnpm install`（非 frozen）生成 lockfile env 头部 → 提交
 3. 存量验证：`pnpm install --frozen-lockfile` 应 `Already up to date`
 4. 全量重装验证：删 node_modules 后 `pnpm install` + typecheck/lint/build
-5. CI：镜像（dockerfiles-v2 `pnpm` 镜像）与 packageManager 版本对齐；`pnpm install -g pnpm@latest-N`
+5. CI：镜像（images `pnpm` 镜像）与 packageManager 版本对齐；`pnpm install -g pnpm@latest-N`
    装的是 runtime binary，配合 packageManager 字段自动用对应版本
 
-## node_modules 悬空软链：`nx` / 二进制集体「找不到模块」（2026-10-08 实测，hummus 主仓）
+## node_modules 悬空软链：`nx` / 二进制集体「找不到模块」（2026-10-08 实测，project-a 主仓）
 
 **症状**：仓库内 `nx` / `oxfmt` / pre-push hook 报类如
 `Could not find Nx modules at "<repo>"` 或 `Cannot find module '<repo>/node_modules/<pkg>/bin/...'`，
@@ -166,10 +166,10 @@ pnpm 12 起 **`.npmrc` 只读 auth/registry 设置**，其余设置（`hoistPatt
 
 ```bash
 find node_modules -maxdepth 1 -type l ! -exec test -e {} \; -print   # 悬空软链清单
-readlink node_modules/oxfmt                                          # 看指向（本机实测指向已删的 hummus-worktree--pe-close/node_modules/.pnpm/...）
+readlink node_modules/oxfmt                                          # 看指向（本机实测指向已删的 project-a-worktree--pe-close/node_modules/.pnpm/...）
 ```
 
-**修法**：仓库根 `pnpm install --frozen-lockfile --prefer-offline` —— 实测 hummus 主仓 21.9s
+**修法**：仓库根 `pnpm install --frozen-lockfile --prefer-offline` —— 实测 project-a 主仓 21.9s
 （94 个悬空链 → 0），只重建链接：**不改** `pnpm-lock.yaml`、工作区仍干净、`oxfmt/oxlint/nx` 全部恢复可执行。
 
 **要点**：

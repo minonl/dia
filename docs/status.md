@@ -1,7 +1,18 @@
 # dia 状态页（单一事实源）
 
-> 更新：2026-11-03（复核：`bun test tests` 286/39 全绿）。任何"现在做到哪了"的问题，以本页为准；其他文档是细节。
+> 更新：2026-11-27（补丁；复核：`dia 0.1.8` / `bun test tests` 1192 / `dia doctor` warn）。
+> 本页 §1–§4 仍是 **2026-11-03 快照**，未逐行重写；「现在做到哪了」优先看 [`overview.md`](overview.md) §3。
 > 规则：状态必须能追到**命令/测试/提交**；没有证据的写"未验证"。
+
+---
+
+## 0. 2026-11-27 补丁（最近一次迭代）
+
+- `0.1.7`：公开仓当前树脱敏（#259）；`0.1.8`：pre-push 私有词表（#261，`latest`）。
+- npm：`0.1.6` 已撤回；`0.1.0–0.1.5` 已 deprecate（超 72h，tarball 仍在）。
+- 与 §3 旧数字的偏差：测试 **1192**（不是 286）；job **25**（不是 5）；仓库已 **public**；`doctor` 当前 **warn**（`dws-auth-check` / `case-intake` 两个定时任务失败）。
+- 残留：Git 历史仍有 7 个提交含旧标识；详见 `security/public-release.md` §6。
+
 
 ---
 
@@ -33,7 +44,7 @@
 | `team-automation.md` | 计划→实现→验证全自动循环 | **未实现**（D0.6–D0.9 只跑通 mock / ACP 驱动） |
 | `proposals.md` | `team next` 目标候选 | **v0 已实现**（`dia team next`，纯规则打分） |
 | `security-sandbox.md` | 沙箱单 seam、档位、fail-closed | **部分未实现**（S4–S7） |
-| `security/public-release.md` | 公开 release 门禁 | **BLOCKED until audit** |
+| `security/public-release.md` | 公开 release 门禁 | **部分**：当前树已清洗；Git 历史 7 个提交仍含旧标识（见 §6） |
 | `acp-integration.md` / `ecosystem-*.md` | ACP 与生态选型 | **设计 / 参考**（server 未做） |
 | `model-behavior.md` / `model-baseline-sidecar.md` | 客户端模型调控、基准 sidecar | **有据，未实施**（D2） |
 | `evolution-process.md` | `(T,D,O)`、V 型、压缩 | **理论**（D3 未实施） |
@@ -92,7 +103,7 @@
 | D0.23 | doctor 平台版本自检 | **完成** | `platform:opencode` / `platform:dsh` 报版本（缺宿主 = warn，不判红）；`tests/active-doctor.test.ts` |
 | D0.44 | 配置迁移走 LLM 任务 | **完成** | `docs/migrations/llm-migration.md`：升级只改声明；迁移=任务+判据+回滚；禁止代码里堆版本分支（安全敏感/原子场景例外） |
 | D0.85 | deps 版本通配（2.2.x） | **完成** | `parseSpec/matchesSpec`：登记 `2.2.x`/`2.2` 容忍补丁漂移，主.次不匹配仍 warn；`opencode` 登记改为 `host_cli:opencode@2.2.x`（实测 2.2.5 → ok） |
-| D0.84 | dsh 插件运行时验证 | **完成** | 用 `dia-test` profile（headless 模板 + `dsh-llm-pi-ai` 接乐言网关 `ai-models.infra.leyantech.com/v1`，key 走 `LEYAN_AI_MODELS_AUTH_TOKEN`）+ `dia msg dsh install`；`dsh headless` 实跑输出 `[dia-inbox] 有 7 条未读…`，证明 `systemPrompt.context` 注入生效 |
+| D0.84 | dsh 插件运行时验证 | **完成** | 用 `dia-test` profile（headless 模板 + `dsh-llm-pi-ai` 接示例网关 `ai-models.example.com/v1`，key 走 `EXAMPLE_AI_MODELS_AUTH_TOKEN`）+ `dia msg dsh install`；`dsh headless` 实跑输出 `[dia-inbox] 有 7 条未读…`，证明 `systemPrompt.context` 注入生效 |
 | D0.83 | 托管产物变化免 --force | **完成** | `update` 收集上一版 lock 的 `renderedHashes`/`rendered` 作为「dia 托管」集合；托管文件内容变化自动覆盖（备份到 `backups/force-*`），非托管仍拒绝；测试：git 源改配方后 `update` 免 --force |
 | D0.83 | doctor 增加 job.health | **完成** | 只读聚合 `<jobRoot>/tasks/*.state.jsonl`：最近一次 `verdict != ok` / 无 state / state 损坏 → 一条 warn（点名最多 4 个 + `dia job logs` 提示）；不执行任何命令、不改 verdict |
 | D0.82 | persona update 全 host 重渲染；冲突提示 --force | **完成** | `update()` 不再用 `rendered[0]` 推断单 host（多 host 的 dsh profile 以前永不刷新）；`E_CONFLICT` 文案补「--force 覆盖，先备份」；测试：opencode+dsh 双 host 更新 |

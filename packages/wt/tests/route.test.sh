@@ -34,7 +34,7 @@ mkrepo(){  # <name> <remote-url>（空 URL ⇒ 不配 remote）
   git -C "$d" -c user.email=t@t -c user.name=t commit -qm init; printf '%s' "$d"
 }
 MINE="$(mkrepo myrepo git@git.example.com:example-user/myrepo.git)"
-TEAM="$(mkrepo teamrepo https://git.example.com/fed/teamrepo.git)"
+TEAM="$(mkrepo teamrepo https://git.example.com/org/teamrepo.git)"
 NOREMOTE="$(mkrepo noremote)"
 
 echo "== 1. 无配置 + 非我命名空间 ⇒ MR（安全侧）=="

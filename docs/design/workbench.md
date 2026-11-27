@@ -26,14 +26,14 @@
 | # | 原设计假设 | 实测事实 | v2 修正 |
 |---|---|---|---|
 | B1 | opencode 读 `session`/`message` | `session` 是**遗留表**：34 行，最新 `2026-10-02`；真实数据在 `session_v2` 1137 行（最新今天）+ `session_message` 110811 行 | §4.1：**v2 only**；旧表只做一次性迁移（有损），不保留永久回退 |
-| B2 | 采集 2s 内完成 | dsh 415 个 zstd 同步解压 5.2s；hummus 44 棵 wt 逐棵 `git status` 16.3s | §4.5 / §9.1：**快照读与采集分离**（`dia wb` 只读快照，`dia wb refresh` 采集）；dsh 走子进程 + 水位；wt 只查已认领 |
+| B2 | 采集 2s 内完成 | dsh 415 个 zstd 同步解压 5.2s；project-a 44 棵 wt 逐棵 `git status` 16.3s | §4.5 / §9.1：**快照读与采集分离**（`dia wb` 只读快照，`dia wb refresh` 采集）；dsh 走子进程 + 水位；wt 只查已认领 |
 | B3 | 消息可存 `track:` 地址并事后改投 | `SESSION_RE` 拒绝冒号；消息落盘路径 = `inbox/<session_id>/` | §7.2：新增 additive 字段 `to_addr`/`to_resolved`；**v1 不改投已落盘消息**，未解析的进 `queue.jsonl` |
 | B4 | 15min/12h 阈值够用 | 宿主有 `time_suspended/time_idle/idle_outcome/time_archived`；等 CI 40 分钟的会话会被判 suspect 而不可路由 | §5.2：**投递就绪**与**路由可用**拆成两个判定；claim/心跳可把 suspect 提升为可路由 |
 | B5 | 判据可执行 | token 两条路径差 91/8/384；「杀会话变 orphan」要等 12h；当前 0 claim 会秒过 | §11：判据全部改为 **fixture + `--now` 注入 + 容差** |
 
 ### 0.3 其余采纳项
 
-- **多仓 track 一等公民**（§3.1 / §9.2）；`repo` 统一为完整 group 路径（`fed/lyzr/hummus`），
+- **多仓 track 一等公民**（§3.1 / §9.2）；`repo` 统一为完整 group 路径（`org/group/project-a`），
   修掉 `claims.scopeFor()` 只取末两段导致 track↔claim 永不相等的问题。
 - **claim 键加工作树身份**（§6.2）：`repo_slug::toplevel_hash::relpath`，否则跨 wt 同名文件误冲突。
 - **`dia wt` 只做薄封装**（§6.4）：不直读 JSONL、参数白名单、未知 `-*` 报错；`list` 补 flag 解析与 `--json`。
@@ -52,11 +52,11 @@
 |---|---|
 | 任务台账无会话/目录/资源维度 | `~/.dia/tasks/ledger.jsonl` 141 条；union 字段 = `ts/event/id/status/evidence/title/role/judge/deps/touches/prio/owner`，**无 session/cwd/wt** |
 | 消息寻址靠手写 session id | `dia agents list` = `(none)` |
-| 工作树大量无人认领 | hummus `dia wt list` 44 条（含 main），其中 **4 棵 prunable**；`dia claims` 活跃 **0** 条（4 行 = claim 2 + release 2） |
+| 工作树大量无人认领 | project-a `dia wt list` 44 条（含 main），其中 **4 棵 prunable**；`dia claims` 活跃 **0** 条（4 行 = claim 2 + release 2） |
 | 会话身份与投递通道脱节 | `~/.dia/collab/sessions/*.json` 35 个，**0 个有 pane**；`tmux ls` = no server |
 | 会话状态 ≠ 任务状态 | 35 个 collab 会话中，≤15min 有活动 **0** 个、≤12h **1** 个（中位 190h） |
 | 数据源用错 | `session` 34 行停在 2026-10-02；`session_v2` 1137 行、`session_message` 110811 行 |
-| 成本不可得 | `session_v2.cost` 1137 条中仅 **2 条 > 0**（合计 0.79 USD）；`pricing.ts` 只覆盖 3 个型号，实际 `leyantech/*` 覆盖 **0** |
+| 成本不可得 | `session_v2.cost` 1137 条中仅 **2 条 > 0**（合计 0.79 USD）；`pricing.ts` 只覆盖 3 个型号，实际 `example/*` 覆盖 **0** |
 | 同一条线被切碎 | 灰度开通被三次 redteam 回灌成 3 条独立 task（`t-6d1bb07d` / `t-08912881` / `t-a6638c20`） |
 
 ### 1.2 目标 / 非目标
@@ -166,10 +166,10 @@ stateDiagram-v2
 ```jsonc
 {"ts":"2026-11-18T10:00:00.000Z","event":"open","id":"tr-3f9a1c2e",
  "title":"灰度开通服务","goal":"redteam 回灌收口并上线",
- "next":"补 reply 幂等单测","waiting_on":{"kind":"human","ref":"min","note":"等验收"},
- "repo":["fed/lyzr/hummus","fed/lyzr/yan-agent"],
- "prio":"P1","owner":"min","stage":"dev","remind_at":"2026-11-19T09:00:00+08:00",
- "refs":[{"kind":"mr","value":"!1975","repo":"fed/lyzr/hummus"}]}
+ "next":"补 reply 幂等单测","waiting_on":{"kind":"human","ref":"maintainer","note":"等验收"},
+ "repo":["org/group/project-a","org/group/yan-agent"],
+ "prio":"P1","owner":"maintainer","stage":"dev","remind_at":"2026-11-19T09:00:00+08:00",
+ "refs":[{"kind":"mr","value":"!1975","repo":"org/group/project-a"}]}
 {"ts":"…","event":"bind","id":"tr-3f9a1c2e","session":"ses_abc","role":"lead","host":"opencode"}
 {"ts":"…","event":"stage","id":"tr-3f9a1c2e","status":"blocked","reason":"lead dead 12h","next":"改派 lead"}
 {"ts":"…","event":"handoff","id":"tr-3f9a1c2e","from":"ses_abc","to":"ses_def","reason":"终端关闭"}
@@ -193,8 +193,8 @@ stateDiagram-v2
 
 ```jsonc
 {"schema_v":1,"session_id":"ses_abc","host":"opencode","host_scope":"mac",
- "cwd":"/Users/min/repos/leyan/hummus-worktree--store-groups",
- "repo":"fed/lyzr/hummus","branch":"feat/store-groups",
+ "cwd":"~/repos/project-a-worktree--store-groups",
+ "repo":"org/group/project-a","branch":"feat/store-groups",
  "tracks":["tr-3f9a1c2e"],
  "first_seen":"…","last_activity":"…","last_heartbeat":null,
  "liveness":"suspect","liveness_evidence":[
@@ -204,7 +204,7 @@ stateDiagram-v2
  "resumable":true,"delivery_ready":false,"route_eligible":true,
  "turns":42,"tools":{"bash":96,"edit":18},"tool_errors":3,
  "tokens":{"input":120000,"output":8000,"cache_read":90000,"cache_write":0},
- "cost_usd":null,"priced":false,"models":["leyantech/deepseek-v4.1-flash"],
+ "cost_usd":null,"priced":false,"models":["example/deepseek-v4.1-flash"],
  "title":"灰度开通收口","raw_ref":"opencode:ses_abc"}
 ```
 
@@ -212,8 +212,8 @@ stateDiagram-v2
 
 ```jsonc
 {"schema_v":1,"as_of":"…",
- "repos":[{"repo":"fed/lyzr/hummus","repo_path":"/Users/min/repos/leyan/hummus",
-   "worktrees":[{"path":"…/hummus-worktree--store-groups","branch":"feat/store-groups","head":"c408ce3",
+ "repos":[{"repo":"org/group/project-a","repo_path":"~/repos/project-a",
+   "worktrees":[{"path":"…/project-a-worktree--store-groups","branch":"feat/store-groups","head":"c408ce3",
      "dirty":4,"dirty_state":"checked","prunable":false,"merged_to_main":false,
      "claim":{"id":"cl-…","holder":"ses_abc","track":"tr-3f9a1c2e","lease":"exclusive","expires_at":"…"},
      "flags":["claimed"]}]}]}
@@ -419,9 +419,9 @@ dia wb gc [--apply] [--json] [--now ISO]
 dia claim <path>|--worktree <path> --track <tr> [--lease exclusive|shared] [--ttl 24h] [--reason R]
 ```
 
-- **键改为 `repo_slug::toplevel_hash::relpath`**：`repo_slug` 用完整 group 路径（`fed/lyzr/hummus`），
+- **键改为 `repo_slug::toplevel_hash::relpath`**：`repo_slug` 用完整 group 路径（`org/group/project-a`），
   `toplevel_hash` 是 worktree 绝对路径的 8 位 hash。解决两个问题：
-  ① `scopeFor()` 只取末两段导致 track 的 `fed/lyzr/hummus` 与 claim 的 `lyzr/hummus` 永不相等；
+  ① `scopeFor()` 只取末两段导致 track 的 `org/group/project-a` 与 claim 的 `group/project-a` 永不相等；
   ② 同仓两棵 wt 的同名文件被误判为同一资源。
 - **旧 claim 一次性清理**（dia 早期，允许有损）：`dia wb migrate` 重算可重算的键，算不出的丢弃并计数；
   当前活跃 claim = 0，实际无损失。不保留 `legacy:true` 分支。
@@ -569,7 +569,7 @@ dia beat [--session S] [--note N]
 as_of 12s ago  sources: opencode ok · dsh cached · git ok · msg ok
 TRACKS  3 active · 2 paused · 1 blocked · 1 awaiting_human
 tr-3f9a1c2e  P1 active        灰度开通服务   next:补幂等单测   wait:human(min)
-             lead@oc:1f3d ✔3m  repo fed/lyzr/hummus+yan-agent  wt 2  !1975 ci:ok
+             lead@oc:1f3d ✔3m  repo org/group/project-a+yan-agent  wt 2  !1975 ci:ok
 tr-8b2d4f01  P2 blocked       商品同步 v2    next:改派 lead    wait:session
              lead@dsh:9ac1 ✖12h(resumable)  → dia wb track handoff …
 tr-c7e10a55  P3 awaiting_human 反馈台账增量   next:等验收      wait:human
@@ -579,7 +579,7 @@ SESSIONS 7 alive · 2 suspect · 11 dead(resumable) · 3 无 track
 ARCHIVE  6 条 dead>7d 且无 track —— 可归档（只建议，不自动删）
 ORPHANS  wt: 4 unclaimed · 1 shared · 1 main-dirty · 12 not_checked
 ALERTS   2 drift · 1 msg stuck 26h · 1 track 无 lead
-CONTEND  fed/lyzr/hummus: tr-3f9a1c2e / tr-8b2d4f01 建议先合 !1975
+CONTEND  org/group/project-a: tr-3f9a1c2e / tr-8b2d4f01 建议先合 !1975
 ```
 
 - 多仓：一行内 `repo a+b`，需要展开用 `--track tr-x --json`。
@@ -663,7 +663,7 @@ CONTEND  fed/lyzr/hummus: tr-3f9a1c2e / tr-8b2d4f01 建议先合 !1975
 | `github.com` 不可达（本次 fetch 75s 超时） | 无法 push/MR | 先本地开发；推送前重试或走镜像 |
 | opencode 再次迁移表 | 采集失效 | `schema` 探测 + `unsupported` 显式告警 + 一次性迁移（不双路径） |
 | dsh 全量解压仍慢 | refresh 慢 | 水位 + 子进程 + `--depth fast` 默认 |
-| cost 恒 0 / 无价格表 | 成本失真 | `priced:false` + `unpriced`，补 leyan 价格表（M4 子任务） |
+| cost 恒 0 / 无价格表 | 成本失真 | `priced:false` + `unpriced`，补 example 价格表（M4 子任务） |
 | 白名单外的临时文件堆积 | 磁盘膨胀 | 写入层拒绝 + `refresh` 末尾自动 gc ephemeral + 配额告警 |
 | 统计被当 KPI | 行为扭曲 | 口径脚注 + 不做人排名（已拍板） |
 | 与 `yan-mr` / `session-diary` 重叠 | 双实现漂移 | 只读引用，不重造 |
@@ -718,5 +718,5 @@ CONTEND  fed/lyzr/hummus: tr-3f9a1c2e / tr-8b2d4f01 建议先合 !1975
 
 - ~~`dia wb --web` 的 track 渲染~~：**已实现**（graph `track-v1` + web「任务线」面板，2026-11-18）。
 - 跨机只读拉取：按决策留到 v2。
-- leyan 型号价格表：现为 `unpriced`（不猜价），补价后成本即可用。
+- example 型号价格表：现为 `unpriced`（不猜价），补价后成本即可用。
 - `dia wt list --orphan` 依赖新版 `dia`（发布后自然可用；开发态用 `DIA_BIN` 指向源码入口）。

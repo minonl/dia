@@ -31,7 +31,7 @@
 `~/.dia/collab/claims.jsonl`，append-only；一行一个事件：
 
 ```json
-{"ts":"...","event":"claim","id":"c-...","path":"install.sh","scope":"repo:/Users/min/repos/github/dia",
+{"ts":"...","event":"claim","id":"c-...","path":"install.sh","scope":"repo:~/repos/github/dia",
  "holder":"ses_...","reason":"发布拆分","expires_at":"...","created_at":"..."}
 {"ts":"...","event":"release","id":"c-...","holder":"ses_..."}
 ```

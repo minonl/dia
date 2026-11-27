@@ -34,7 +34,7 @@
 #      pnpm `isolated` linker 的顶层包链、`link:` 依赖、dsh profile 的 `node_modules/@example/*`、
 #      GVS 的 `<storeDir>/links/**` 都是**合法形态**（`check` 已把 store links 列入白名单）。
 #   ✅ 落地 = `check`（判据 A/B/C/D + 白名单）+ `create` 提示真装/`--install` + `clean` 拒绝软链 worktree；
-#      巡检任务 `com.leyan.yan-nm-check` 每日 14:10 跑 `check --all --quiet`。
+#      巡检任务 `com.example.yan-nm-check` 每日 14:10 跑 `check --all --quiet`。
 # 【GVS 试点结论：暂停启用（用户 2026-10-16 拍板）】pnpm 官方的多 worktree 共享方案
 #   `virtualStoreType: global`（≥11.23.0；老拼写 `enableGlobalVirtualStore`）在 example-repo 实测：
 #   **收益** 新 worktree 安装 **2.9s**（对照 17.5~20.8s）、`node_modules` **1.9M**（对照名义 1.3G）、lockfile 零变更；
@@ -196,7 +196,7 @@ dia_wt_data_root() {
 
 # ── 授权推导的**输入**：产出 scope.json（设计 §4.5 D0–D6；消费方 = dsh 引擎 / P3 兜底插件）──
 #   为什么在这里产出：迭代入口天然知道"本次任务仓库是哪个"，而权限层不知道（这是越权写的根因之一）。
-#   ⚠️ 关键判定：**是否 git 仓库** —— 非 git 仓库（如 ~/repos/example 根）**不派生** worktree 同级目录，
+#   ⚠️ 关键判定：**是否 git 仓库** —— 非 git 仓库（如 ~/repos 根）**不派生** worktree 同级目录，
 #      否则会把兄弟目录（repos/local 等）误算进作用域（用户 2026-10-15 明确）。
 write_scope() {   # write_scope <repo-or-worktree-path> [feature] [session]
   local target="$1" feature="${2:-}" session="${3:-}"
@@ -579,7 +579,7 @@ cmd_list() {
 #   · 删前逐个打印「分支名 + 最后提交日期 + 标题」，可回溯。
 #
 # 用法：prune-merged [<repo>] [--all] [--apply] [--base <ref>] [--protect a,b] [--quiet]
-#   --all  扫已知仓根（数据根 repos/、$DIA_WT_REPOS_ROOT 默认 ~/repos/example）下的主 checkout
+#   --all  扫已知仓根（数据根 repos/、$DIA_WT_REPOS_ROOT 默认 ~/repos）下的主 checkout
 # 退出码：0 = 无待清理 / 已全部清理；1 = 仍有残留（dry-run 发现待清理时也是 1）
 # ═══════════════════════════════════════════════════════════════════════════
 cmd_prune_merged() {
@@ -601,7 +601,7 @@ cmd_prune_merged() {
   if [ "$all" = 1 ]; then
     local dr rr
     dr="$(dia_wt_data_root 2>/dev/null || true)"
-    rr="${DIA_WT_REPOS_ROOT:-$HOME/repos/leyan}"
+    rr="${DIA_WT_REPOS_ROOT:-$HOME/repos}"
     local -a roots=()
     [ -n "$dr" ] && [ -d "$dr/repos" ] && roots+=("$dr/repos")
     [ -d "$rr" ] && roots+=("$rr")
@@ -751,7 +751,7 @@ prune_one() {
 #      判据不区分 → 一旦启用 GVS 全仓误报；判据不查 → 违规静默破坏。
 #
 # 用法：check [<repo>...] [--all] [--deep] [--quiet]
-#   --all    扫已知仓根（`$YAN_DATA_ROOT/repos`、`$DIA_WT_REPOS_ROOT`（默认 `~/repos/example`））下的主 checkout
+#   --all    扫已知仓根（`$YAN_DATA_ROOT/repos`、`$DIA_WT_REPOS_ROOT`（默认 `~/repos`））下的主 checkout
 #            （跳过 `*-worktree--*`：它们的 worktree 由主仓 `worktree list` 覆盖）+ 仓根杂散 node_modules 检测
 #   --deep   递归扫 node_modules 全树（默认只扫顶层；大仓全树需数秒）
 #   --quiet  只输出有问题的 checkout
@@ -920,7 +920,7 @@ cmd_check() {
   if [ "$all" = 1 ]; then
     local dr rr
     dr="$(dia_wt_data_root 2>/dev/null || true)"
-    rr="${DIA_WT_REPOS_ROOT:-$HOME/repos/leyan}"
+    rr="${DIA_WT_REPOS_ROOT:-$HOME/repos}"
     [ -n "$dr" ] && [ -d "$dr/repos" ] && roots+=("$dr/repos")
     [ -d "$rr" ] && roots+=("$rr")
     [ ${#roots[@]} -gt 0 ] || { echo "usage: dia wt adopt --all（未找到仓根：${rr}）" >&2; exit 2; }
@@ -1112,7 +1112,7 @@ cmd_clean() {
 # 配置读取（**数据根为准**，可与个人仓基线合并；三个名单键取**并集**：本地只能增、不能删）：
 #   $YAN_ROUTE_CONFIG                           显式指定（最高优先，一般不用）
 #   $YAN_DATA_ROOT/route.json                   本机主入口 —— **可以是软链**，指向个人仓里的版本化文件
-#   $PERSONAL_AGENT_DIR/config/yan-route.json   个人仓基线（跨设备可版本化，默认 ~/repos/example/personal-agent）
+#   $PERSONAL_AGENT_DIR/config/yan-route.json   个人仓基线（跨设备可版本化，默认 ~/repos/personal-agent）
 #   格式：{ "my_namespaces": ["example-user"], "direct": ["yan-agent"], "mr": [] }
 #   ⚠️ `my_namespaces` 缺失时**绝不瞎猜**（不拿 git author 的 email 前缀自动当命名空间）：
 #      只在输出里给「推测 + 如何确认」，由人核对（glab auth status）后写进配置。
@@ -1144,7 +1144,7 @@ const os = require('node:os');
 const path = require('node:path');
 const dr = process.argv[2] || '';
 const explicit = process.env.DIA_WT_ROUTE_CONFIG || process.env.YAN_ROUTE_CONFIG;
-const pa = process.env.DIA_WT_PERSONAL_DIR || process.env.PERSONAL_AGENT_DIR || path.join(os.homedir(), 'repos/leyan/personal-agent');
+const pa = process.env.DIA_WT_PERSONAL_DIR || process.env.PERSONAL_AGENT_DIR || path.join(os.homedir(), 'repos/personal-agent');
 const cands = explicit ? [explicit] : [path.join(pa, 'config', 'yan-route.json'), path.join(dr, 'route.json')];
 const merged = { my_namespaces: [], direct: [], mr: [] };
 const srcs = [], errs = [];
@@ -1367,14 +1367,28 @@ if ! : 2>/dev/null > "$wt_docs"; then
 fi
 wt_blk="$wt_docs.blocked"; wt_warn="$wt_docs.warn"
 : 2>/dev/null > "$wt_blk"; : 2>/dev/null > "$wt_warn"
+# 私有词表（不入仓）：一行一个 token，# 开头为注释，空行忽略；缺失=不启用。
+# 为什么放仓外：词表本身就是敏感清单，提交进公开仓等于二次泄漏。
+wt_words="${DIA_SENSITIVE_FILE:-$HOME/.config/dia/sensitive.txt}"
+[ -r "$wt_words" ] || wt_words="/dev/null"
 # 第一遍：变更文件集 → 文档白名单（每行一个路径，已去 CR；不做引号/转义处理）
 # 注：NUL 转换行会让「文件名本身含换行」的路径被拆成两条（该文件退化为非文档 → 从严阻断）
 git -c core.quotePath=false diff --name-only -z "$wt_range" -- . 2>/dev/null \
   | tr '\000' '\n' \
   | awk '{ sub(/\r$/, ""); if ($0 ~ /\.(md|markdown|mdx)$/) print }' > "$wt_docs" 2>/dev/null
 # 第二遍：逐行判定（命中项落盘，避免 head -5 的 SIGPIPE 截断 awk 造成漏报）
-git -c core.quotePath=false diff -U0 "$wt_range" -- . 2>/dev/null | awk -v docs="$wt_docs" -v blk="$wt_blk" -v warnf="$wt_warn" '
-  BEGIN { while ((getline d < docs) > 0) if (d != "") isdoc[d] = 1; close(docs) }
+git -c core.quotePath=false diff -U0 "$wt_range" -- . 2>/dev/null | awk -v docs="$wt_docs" -v blk="$wt_blk" -v warnf="$wt_warn" -v words="$wt_words" '
+  BEGIN {
+    while ((getline d < docs) > 0) if (d != "") isdoc[d] = 1; close(docs)
+    # 私有词表：大小写不敏感的子串匹配；token 不回显（避免在终端/日志里二次泄漏）
+    nw = 0
+    while ((getline w < words) > 0) {
+      sub(/\r$/, "", w); sub(/^[ \t]+/, "", w); sub(/[ \t]+$/, "", w)
+      if (w == "" || w ~ /^#/) continue
+      nw++; tok[nw] = tolower(w)
+    }
+    close(words)
+  }
   # ⚠️ 只有紧跟 `diff --git` 的 `+++ ` 才是文件头；否则「内容行恰好以 `++ ` 开头」（diff 里渲染成 `+++ x`）
   #    会被误当成文件头 → 把非文档当文档，从而**把本该阻断的路径降级为告警**（红队 high，2026-11-11）。
   /^diff --git / { expect_hdr = 1; next }
@@ -1395,6 +1409,12 @@ git -c core.quotePath=false diff -U0 "$wt_range" -- . 2>/dev/null | awk -v docs=
     line = $0
     # ① 凭证类：永远阻断（私钥 / AK 风格 key / gh token），文档不豁免
     if (line ~ /-----BEGIN [A-Z ]*PRIVATE KEY-----/ || line ~ /AKIA[0-9A-Z]{16}/ || line ~ /ghp_[A-Za-z0-9]{20,}/ || line ~ /github_pat_[A-Za-z0-9_]{20,}/) { print NR": "line > blk; next }
+    # ①b 私有词表：任何文件类型都阻断（内部品牌/域名/项目名正是从 .md 漏出去的）
+    if (nw > 0) {
+      low = tolower(line); hit = 0
+      for (i = 1; i <= nw; i++) if (index(low, tok[i]) > 0) { hit = i; break }
+      if (hit) { print NR": [private-wordlist] hit #" hit > blk; next }
+    }
     # ② 绝对 home 路径：命中敏感目录 → 阻断（.md 也不豁免）；③ 其余在文档里 → 仅告警
     if (line ~ /(^|[+ "\`(=])\/(Users|home)\/[A-Za-z0-9._-]+/) {
       if (line ~ /\/(Users|home)\/[^\/]+\/(\.ssh|\.aws|\.gnupg|\.kube|\.docker|\.config\/gcloud|\.npmrc|\.pypirc|\.git-credentials|\.env)/) { print NR": "line > blk; next }

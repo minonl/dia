@@ -32,10 +32,13 @@ dia wt adopt --all --apply     # 批量：仓根下所有主 checkout（跳过 *
 pre-push 的敏感扫描按**固定顺序**判定（`packages/wt/bin/dia-wt` `wt_guard_scan`）：
 
 1. 凭证（`BEGIN … PRIVATE KEY` / `AKIA` +16 / `ghp_…` / `github_pat_…`）→ **任何文件**都阻断（文档不豁免）；
-2. 敏感目录（`~/.ssh`、`~/.aws`、`~/.gnupg`、`~/.kube`、`~/.docker`、`~/.config/gcloud`、`~/.npmrc`、`~/.pypirc`、`~/.git-credentials`、`~/.env`）→ 一律阻断（`.md` 也不豁免）；
-3. 其余**绝对 home 路径**：文档（`.md` / `.markdown` / `.mdx`）只告警，其它文件阻断。
+2. **私有词表**（`$DIA_SENSITIVE_FILE`，默认 `~/.config/dia/sensitive.txt`；一行一个 token，`#` 开头为注释）：命中即阻断，**任何文件类型都不豁免**。词表本身**不入仓**——它就是敏感清单，提交进公开仓等于二次泄漏；
+3. 敏感目录（`~/.ssh`、`~/.aws`、`~/.gnupg`、`~/.kube`、`~/.docker`、`~/.config/gcloud`、`~/.npmrc`、`~/.pypirc`、`~/.git-credentials`、`~/.env`）→ 一律阻断（`.md` 也不豁免）；
+4. 其余**绝对 home 路径**：文档（`.md` / `.markdown` / `.mdx`）只告警，其它文件阻断。
 
 告警与阻断**只写 stderr**（stdout 属于 git 协议，保持空白），最多 5 条 + 「另有 N 条已省略」。
+词表命中只报「第几条」，**不回显 token**；词表缺失/为空时该项静默跳过。
+> 升级 dia 后，已 adopt 的仓需要重跑 `dia wt adopt <repo> --apply`（或 `--all --apply`）刷新钩子副本。
 已知缺口（不阻断）：二进制文件（无 `+` 行）、`diff.renames=true` 下的重命名只扫变更行、删分支推送 / root commit 定不出 range 时空 diff 放行。
 
 **钩子链**：本地钩子先跑守卫，再执行 `<common>/hooks/<name>`（simple-git-hooks 等管理器生成处）；`pre-push` 的 stdin 原样转发。

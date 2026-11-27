@@ -60,22 +60,22 @@ function createV2Db(path: string) {
   );
   // 5 分钟前有活动 → alive
   ins.run(
-    "ses_alive001", null, "灰度开通收口", "/tmp/demo", "leyantech/deepseek-v4.1-flash", 0.5,
+    "ses_alive001", null, "灰度开通收口", "/tmp/demo", "example/deepseek-v4.1-flash", 0.5,
     1200, 34, 900, 0, NOW.getTime() - 2 * HOUR, NOW.getTime() - 5 * MIN, null, null,
   );
   // 2 小时前活动 → suspect（靠心跳可路由）
   ins.run(
-    "ses_suspect003", null, "等 CI", "/tmp/demo", "leyantech/deepseek-v4.1-flash", 0,
+    "ses_suspect003", null, "等 CI", "/tmp/demo", "example/deepseek-v4.1-flash", 0,
     10, 2, 0, 0, NOW.getTime() - 3 * HOUR, NOW.getTime() - 2 * HOUR, null, null,
   );
   // 48 小时前活动 → dead（仍 resumable）
   ins.run(
-    "ses_dead002", null, "旧会话", "/tmp/demo", "leyantech/glm-4.6", 0,
+    "ses_dead002", null, "旧会话", "/tmp/demo", "example/glm-4.6", 0,
     7, 1, 0, 0, NOW.getTime() - 60 * HOUR, NOW.getTime() - 48 * HOUR, null, null,
   );
   // 历史 suspended（早于 time_updated）≠ 当前挂起 → 仍 alive（2026-11-18 真机回归）
   ins.run(
-    "ses_resumed004", null, "恢复过的会话", "/tmp/demo", "leyantech/deepseek-v4.1-flash", 0,
+    "ses_resumed004", null, "恢复过的会话", "/tmp/demo", "example/deepseek-v4.1-flash", 0,
     100, 10, 0, 0, NOW.getTime() - 2 * HOUR, NOW.getTime() - 3 * MIN, null, NOW.getTime() - 6 * MIN,
   );
   const msg = db.prepare("INSERT INTO session_message(id,session_id,type,data) VALUES(?,?,?,?)");
@@ -142,7 +142,7 @@ describe("opencode 采集（v2 only）", () => {
     expect(alive.cost_usd).toBe(0.5);
     expect(alive.priced).toBe(true);
     expect(alive.title).toBe("灰度开通收口");
-    expect(alive.models).toEqual(["leyantech/deepseek-v4.1-flash"]);
+    expect(alive.models).toEqual(["example/deepseek-v4.1-flash"]);
     expect(alive.host).toBe("opencode");
 
     const suspect = byId.get("ses_suspect003")!;
@@ -197,29 +197,29 @@ describe("worktree 采集（多仓 / dirty 门控）", () => {
     writeFileSync(join(repo, "a.txt"), "a\n");
     git(["add", "."], repo);
     git(["commit", "-q", "-m", "init"], repo);
-    git(["remote", "add", "origin", "git@git.example.com:fed/lyzr/demo.git"], repo);
+    git(["remote", "add", "origin", "git@git.example.com:org/group/demo.git"], repo);
     const wt = join(work, "wt-feat");
     git(["worktree", "add", "-q", wt, "-b", "feat/demo"], repo);
     return { repo, wt };
   }
 
   test("slug 解析完整 group 路径", () => {
-    expect(slugFromRemote("git@git.leyantech.com:fed/lyzr/hummus.git")).toBe("fed/lyzr/hummus");
-    expect(slugFromRemote("https://git.leyantech.com/fed/lyzr/hummus.git")).toBe("fed/lyzr/hummus");
-    expect(slugFromRemote("ssh://git@host:2222/fed/lyzr/hummus")).toBe("fed/lyzr/hummus");
+    expect(slugFromRemote("git@git.example.com:org/group/project-a.git")).toBe("org/group/project-a");
+    expect(slugFromRemote("https://git.example.com/org/group/project-a.git")).toBe("org/group/project-a");
+    expect(slugFromRemote("ssh://git@host:2222/org/group/project-a")).toBe("org/group/project-a");
   });
 
   test("claimed 才跑 dirty；未认领标 orphan/not_checked", () => {
     const { repo, wt } = makeRepo();
-    // claim 用旧的两段式 scope（lyzr/demo）→ 必须能匹配 fed/lyzr/demo
+    // claim 用旧的两段式 scope（group/demo）→ 必须能匹配 org/group/demo
     writeClaim(join(diaRoot, "collab", "claims.jsonl"), {
-      id: "c-1", path: "a.txt", scope: "lyzr/demo", holder: "ses_alive001", at: iso(10 * MIN),
+      id: "c-1", path: "a.txt", scope: "group/demo", holder: "ses_alive001", at: iso(10 * MIN),
     });
 
     const fast = collectWorktrees({ repoPaths: [repo], depth: "fast", now: NOW, timeoutMs: 4000 });
     expect(fast.worktrees.repos.length).toBe(1);
     const view = fast.worktrees.repos[0];
-    expect(view.repo).toBe("fed/lyzr/demo");
+    expect(view.repo).toBe("org/group/demo");
     expect(view.worktrees.length).toBe(2);
 
     const main = view.worktrees.find((w) => w.path === realpathSync(repo))!;
@@ -270,11 +270,11 @@ describe("collectAll 聚合", () => {
       writeFileSync(join(r, "a.txt"), "a\n");
       git(["add", "."], r);
       git(["commit", "-q", "-m", "init"], r);
-      git(["remote", "add", "origin", "https://git.example.com/fed/lyzr/demo.git"], r);
+      git(["remote", "add", "origin", "https://git.example.com/org/group/demo.git"], r);
       return { repo: r };
     })();
     writeClaim(join(diaRoot, "collab", "claims.jsonl"), {
-      id: "c-9", path: "a.txt", scope: "fed/lyzr/demo", holder: "ses_alive001", at: iso(10 * MIN),
+      id: "c-9", path: "a.txt", scope: "org/group/demo", holder: "ses_alive001", at: iso(10 * MIN),
     });
     mkdirSync(join(diaRoot, "workbench"), { recursive: true });
     writeFileSync(
@@ -284,7 +284,7 @@ describe("collectAll 聚合", () => {
 
     const tracks: Track[] = [{
       id: "tr-demo0001", title: "示例线", goal: "g", status: "active", stage: "dev", next: "x",
-      repo: ["fed/lyzr/demo"], prio: "P1", refs: [], tasks: [],
+      repo: ["org/group/demo"], prio: "P1", refs: [], tasks: [],
       sessions: [{ session_id: "ses_alive001", role: "lead", host: "opencode", bound_at: iso(3 * HOUR) }],
       created_at: iso(3 * HOUR), updated_at: iso(3 * HOUR),
     }];
@@ -306,7 +306,7 @@ describe("collectAll 聚合", () => {
     expect(suspect.route_eligible).toBe(true);
     expect(suspect.liveness_evidence.some((e) => e.source === "beat")).toBe(true);
 
-    expect(c.worktrees.repos[0].repo).toBe("fed/lyzr/demo");
+    expect(c.worktrees.repos[0].repo).toBe("org/group/demo");
     expect(c.worktrees.repos[0].worktrees.some((w) => w.flags.includes("claimed"))).toBe(true);
 
     // DIA_ROOT 隔离：宿主库与 claim 都在临时目录，未污染 ~/.dia

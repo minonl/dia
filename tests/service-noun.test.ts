@@ -668,7 +668,7 @@ describe("service add / 三条阻塞回归", () => {
 
   test("isGitSource：识别 git+ssh / git+https / git@host:owner/repo", () => {
     expect(s.isGitSource("git+ssh://git@github.com/a/b.git")).toBe(true);
-    expect(s.isGitSource("git+https://git.leyantech.com/fed/x.git")).toBe(true);
+    expect(s.isGitSource("git+https://git.example.com/org/x.git")).toBe(true);
     expect(s.isGitSource("git@github.com:a/b.git")).toBe(true);
     expect(s.isGitSource("/local/path")).toBe(false);
     expect(s.isGitSource("./rel")).toBe(false);

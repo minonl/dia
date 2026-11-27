@@ -271,7 +271,7 @@ DIA_PERSONA=yan dia kb query "MR 合并"    # 会议/脚本里设一次
 | 抽取项 | 处理 |
 |---|---|
 | `YAN_DATA_ROOT` / `tasks/scopes` | 参数化为 `DIA_WT_DATA_ROOT`（persona 注入 `~/.yan-agent`） |
-| `~/repos/example` 默认 | `DIA_WT_REPOS_ROOT`，缺失时不猜、报错 |
+| `~/repos` 默认 | `DIA_WT_REPOS_ROOT`，缺失时不猜、报错 |
 | `YAN_SESSION_ID` | `DIA_SESSION` |
 | 直推 vs MR（`my_namespaces`/`direct`/`mr`） | **留 yan 域**，经 §6.3 委派（`dia wt route` → yan 扩展） |
 | `route_config_json` 里的 python3 heredoc | 换 Node JSON（`packages/job` 同款，dia 禁止 python） |

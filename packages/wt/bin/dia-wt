@@ -1367,14 +1367,28 @@ if ! : 2>/dev/null > "$wt_docs"; then
 fi
 wt_blk="$wt_docs.blocked"; wt_warn="$wt_docs.warn"
 : 2>/dev/null > "$wt_blk"; : 2>/dev/null > "$wt_warn"
+# 私有词表（不入仓）：一行一个 token，# 开头为注释，空行忽略；缺失=不启用。
+# 为什么放仓外：词表本身就是敏感清单，提交进公开仓等于二次泄漏。
+wt_words="${DIA_SENSITIVE_FILE:-$HOME/.config/dia/sensitive.txt}"
+[ -r "$wt_words" ] || wt_words="/dev/null"
 # 第一遍：变更文件集 → 文档白名单（每行一个路径，已去 CR；不做引号/转义处理）
 # 注：NUL 转换行会让「文件名本身含换行」的路径被拆成两条（该文件退化为非文档 → 从严阻断）
 git -c core.quotePath=false diff --name-only -z "$wt_range" -- . 2>/dev/null \
   | tr '\000' '\n' \
   | awk '{ sub(/\r$/, ""); if ($0 ~ /\.(md|markdown|mdx)$/) print }' > "$wt_docs" 2>/dev/null
 # 第二遍：逐行判定（命中项落盘，避免 head -5 的 SIGPIPE 截断 awk 造成漏报）
-git -c core.quotePath=false diff -U0 "$wt_range" -- . 2>/dev/null | awk -v docs="$wt_docs" -v blk="$wt_blk" -v warnf="$wt_warn" '
-  BEGIN { while ((getline d < docs) > 0) if (d != "") isdoc[d] = 1; close(docs) }
+git -c core.quotePath=false diff -U0 "$wt_range" -- . 2>/dev/null | awk -v docs="$wt_docs" -v blk="$wt_blk" -v warnf="$wt_warn" -v words="$wt_words" '
+  BEGIN {
+    while ((getline d < docs) > 0) if (d != "") isdoc[d] = 1; close(docs)
+    # 私有词表：大小写不敏感的子串匹配；token 不回显（避免在终端/日志里二次泄漏）
+    nw = 0
+    while ((getline w < words) > 0) {
+      sub(/\r$/, "", w); sub(/^[ \t]+/, "", w); sub(/[ \t]+$/, "", w)
+      if (w == "" || w ~ /^#/) continue
+      nw++; tok[nw] = tolower(w)
+    }
+    close(words)
+  }
   # ⚠️ 只有紧跟 `diff --git` 的 `+++ ` 才是文件头；否则「内容行恰好以 `++ ` 开头」（diff 里渲染成 `+++ x`）
   #    会被误当成文件头 → 把非文档当文档，从而**把本该阻断的路径降级为告警**（红队 high，2026-11-11）。
   /^diff --git / { expect_hdr = 1; next }
@@ -1395,6 +1409,12 @@ git -c core.quotePath=false diff -U0 "$wt_range" -- . 2>/dev/null | awk -v docs=
     line = $0
     # ① 凭证类：永远阻断（私钥 / AK 风格 key / gh token），文档不豁免
     if (line ~ /-----BEGIN [A-Z ]*PRIVATE KEY-----/ || line ~ /AKIA[0-9A-Z]{16}/ || line ~ /ghp_[A-Za-z0-9]{20,}/ || line ~ /github_pat_[A-Za-z0-9_]{20,}/) { print NR": "line > blk; next }
+    # ①b 私有词表：任何文件类型都阻断（内部品牌/域名/项目名正是从 .md 漏出去的）
+    if (nw > 0) {
+      low = tolower(line); hit = 0
+      for (i = 1; i <= nw; i++) if (index(low, tok[i]) > 0) { hit = i; break }
+      if (hit) { print NR": [private-wordlist] hit #" hit > blk; next }
+    }
     # ② 绝对 home 路径：命中敏感目录 → 阻断（.md 也不豁免）；③ 其余在文档里 → 仅告警
     if (line ~ /(^|[+ "\`(=])\/(Users|home)\/[A-Za-z0-9._-]+/) {
       if (line ~ /\/(Users|home)\/[^\/]+\/(\.ssh|\.aws|\.gnupg|\.kube|\.docker|\.config\/gcloud|\.npmrc|\.pypirc|\.git-credentials|\.env)/) { print NR": "line > blk; next }

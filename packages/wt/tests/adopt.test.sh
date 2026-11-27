@@ -46,6 +46,7 @@ echo c > "$TD/repo-worktree--y/c.txt"; git -C "$TD/repo-worktree--y" add c.txt
 git -C "$TD/repo-worktree--y" commit -qm feat-y >/dev/null 2>&1
 [ -f "$TD/repo-worktree--y/chain.log" ] && ok "仓库自己的钩子被链式执行" || bad "仓库钩子未执行"
 rm -f "$TD/repo-worktree--y/chain.log"
+rm -f "$R/.git/hooks/pre-commit"
 
 # simple-git-hooks 仓：走 RC 注入，不碰仓内文件与 .git/hooks
 RN="$TD/npmrepo"; mk_repo "$RN"
@@ -171,6 +172,19 @@ undo_scan
 { i=1; while [ "$i" -le 7 ]; do printf 'p%d=%s/developer/d%d\n' "$i" "/""home" "$i"; i=$((i+1)); done; } > "$SCAN_W/many.md"; commit_scan many
 if try_push && grep -q '另有 2 条已省略' "$TD/push.err"; then ok "告警上限 5 条并提示省略数"; else bad "告警未按上限省略"; fi
 undo_scan
+
+# 私有词表：命中即阻断（文档也不豁免）；词表缺失时不误拦（2026-11-27）
+WL="$HOME/.config/dia/sensitive.txt"; mkdir -p "$(dirname "$WL")"
+TOKEN="$(printf 'in''tranet-marker-9f3a')"
+# ① 词表缺失：同样内容应放行（避免「没配词表就全拦」）
+printf 'x=%s\n' "$TOKEN" > "$SCAN_W/word-allow.md"; commit_scan word-allow
+try_push && ok "未配置词表时不误拦" || bad "未配置词表时误拦"
+# ② 词表命中：.md 也阻断；大小写不敏感
+printf '# comment\n\n%s\n' "$TOKEN" > "$WL"
+printf 'x=%s\n' "$(printf '%s' "$TOKEN" | tr 'a-z' 'A-Z')" > "$SCAN_W/word-block.md"; commit_scan word-block
+try_push; if [ $? -ne 0 ] && grep -q 'private-wordlist' "$TD/push.err"; then ok "私有词表命中（.md，大小写不敏感）阻断"; else bad "私有词表未阻断"; fi
+undo_scan
+rm -f "$WL"
 
 # adopt --all
 AR="$TD/allroot"; mkdir -p "$AR/a" "$AR/b"

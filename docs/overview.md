@@ -66,7 +66,7 @@ dia （控制面：persona / kit / kb / audit / msg / job / wt / service）
 | IM bridge / ACP server | 未做 | `docs/entrypoints.md`、`docs/acp-integration.md` |
 
 > 曾经写进文档但**不存在**的命令：`dia status`、`dia model`（观测入口目前只有 `dia doctor`）。
-> `codex` 渲染已在代码里支持（假 HOME 隔离），但 `docs/platforms/registry.json` 仍标 `supported:false` —— 口径未收口。
+> `codex` 渲染代码已支持（假 HOME 隔离；单测覆盖），但 `docs/platforms/registry.json` 仍标 `supported:false`：未在真实 codex 上冒烟，**有意保守**；翻 true 前先补真机验证（见 registry 的 `tested_note`）。
 
 ---
 

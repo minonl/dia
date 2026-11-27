@@ -1570,16 +1570,21 @@ async function personaCli(argv: string[]): Promise<number> {
     const from = flag(args, "--from") || id;
     if (!from) { err("missing --from"); return 2; }
     try {
-      const r = persona.install(from, { ref: flag(args, "--ref"), host: flag(args, "--host"), home: flag(args, "--home"), dryRun: has(args, "--dry-run"), force: has(args, "--force") });
+      const r = persona.install(from, { ref: flag(args, "--ref"), host: flag(args, "--host"), home: flag(args, "--home"), dryRun: has(args, "--dry-run"), force: has(args, "--force"), rehome: has(args, "--rehome") });
       out(asJson ? JSON.stringify(r) : `installed ${r.id}@${r.version} -> ${r.rendered.join(", ") || "(dry-run)"}` +
         (r.overwrites?.length ? `\n  ⚠ 覆盖 ${r.overwrites.length} 个已存在产物（已备份）：${r.overwrites.join(", ")}` : "") +
+        (r.retired?.length ? `\n  ↳ 已备份并清理旧 HOME 产物：${r.retired.join(", ")}` : "") +
+        (r.retiredKept?.length ? `\n` + persona.retireKeptWarnings(r.retiredKeptDetail ?? r.retiredKept.map((p: string) => ({ path: p, kept: "user-edited" }))).map((w: string) => `  ⚠ ${w}`).join("\n") : "") +
         (r.msgKit && !r.msgKit.ok ? `\n  ⚠ dia-msg 未启用：${r.msgKit.reason}` : ""));
+      for (const w of r.access?.warnings ?? []) if (!asJson) out(`  ⚠ ${w}`);
+      if (!asJson && r.access?.declared) out(`  access: 追加 ${r.access.added} 条（跳过 ${r.access.skipped}）→ ${r.access.root}`);
       if (!has(args, "--dry-run")) await autoIndexPersona(r.id);
       return 0;
     } catch (e: any) {
       err(e?.message || String(e));
       const msg = e?.message || "";
-      if (msg.startsWith("E_CONFLICT") || msg.startsWith("E_MANIFEST")) return 32;
+      if (msg.startsWith("E_USAGE")) return 2;
+      if (msg.startsWith("E_CONFLICT") || msg.startsWith("E_MANIFEST") || msg.startsWith("E_LOCKED")) return 32;
       if (msg.startsWith("E_HOST")) return 33;
       return 31;
     }
@@ -1596,7 +1601,12 @@ async function personaCli(argv: string[]): Promise<number> {
       const r = persona.verify(id, flag(args, "--version"));
       out(asJson ? JSON.stringify(r) : `${r.ok ? "ok" : "MISMATCH"} ${r.dir}${r.ok ? "" : `\n  - ${r.issues.join("\n  - ")}`}`);
       return r.ok ? 0 : 1;
-    } catch (e: any) { err(e?.message || String(e)); return 31; }
+    } catch (e: any) {
+      const m = e?.message || String(e);
+      err(m);
+      if (m.startsWith("E_MANIFEST") || m.startsWith("E_LOCKED")) return 32;
+      return 31;
+    }
   }
   if (sub === "use") {
     const spec = positional(args)[0];
@@ -1604,20 +1614,31 @@ async function personaCli(argv: string[]): Promise<number> {
     const [id, ver] = spec.split("@");
     try {
       const resolved = ver ? persona.resolveVersion(id, ver) : null;
-      const r = active.use(id, resolved || (has(args, "--latest") ? null : null), { reason: flag(args, "--reason") });
+      // access 校验必须先于切指针：失败是 E_MANIFEST（32），不能降级成 warn 后 exit 0。
+      // 目标版本用 active.installedVersions（semver + 安装时间比较）解析——
+      // 与 active.use() 内部同一口径；persona.list() 是字符串排序（0.9.0 > 0.10.0）会分叉。
+      const installed = active.installedVersions(id);
+      if (!installed.length) throw new Error(`E_NOT_INSTALLED: persona ${id}`);
+      const target = resolved ?? installed[installed.length - 1];
+      persona.render(id, { version: target, check: true });
+      const r = active.use(id, target, { reason: flag(args, "--reason") });
       out(asJson ? JSON.stringify(r) : `${id}: ${r.previous ?? "(未设置)"} → ${r.current.version}（${r.current.commit ?? "?"}, by ${r.current.by}）`);
       // 切换版本后宿主产物（agent md / skill 软链 / dsh profile）仍指向旧槽位 → 顺手重渲染，避免 verify 立刻报漂移
       try {
         const rd = persona.render(id);
         if (rd.drift.length) out(`  ↳ 已重渲染 ${rd.drift.length} 个宿主产物`);
       } catch (e: any) {
-        err(`warn: 宿主产物未重渲染（${e?.message || e}）；可稍后运行 dia persona render ${id}`);
+        const m = e?.message || String(e);
+        if (m.startsWith("E_MANIFEST")) throw e;
+        err(`warn: 宿主产物未重渲染（${m}）；可稍后运行 dia persona render ${id}`);
       }
       await autoIndexPersona(id);
       return 0;
     } catch (e: any) {
-      err(e?.message || String(e));
-      return String(e?.message || "").startsWith("E_VERSION") ? 21 : 31;
+      const m = e?.message || String(e);
+      err(m);
+      if (m.startsWith("E_MANIFEST") || m.startsWith("E_LOCKED")) return 32;
+      return m.startsWith("E_VERSION") ? 21 : 31;
     }
   }
   if (sub === "gc") {
@@ -1681,23 +1702,35 @@ async function personaCli(argv: string[]): Promise<number> {
       if (r.relation === "same" || r.relation === "local-only") return 0;
       if (r.relation === "differs") return 1;
       return 3;
-    } catch (e: any) { err(e?.message || String(e)); return 31; }
+    } catch (e: any) {
+      const m = e?.message || String(e);
+      err(m);
+      if (m.startsWith("E_MANIFEST") || m.startsWith("E_LOCKED")) return 32;
+      return 31;
+    }
   }
   if (sub === "update") {
-    const allowed = ["--ref", "--force", "--dry-run", "--json"];
+    const allowed = ["--ref", "--force", "--dry-run", "--rehome", "--json"];
     warnUnknownFlags(args, allowed);
-    const bools = new Set(["--force", "--dry-run", "--json"]);
+    const bools = new Set(["--force", "--dry-run", "--rehome", "--json"]);
     const id = positional(args, bools)[0];
     if (!id) { err("missing id"); return 2; }
     const dryRun = has(args, "--dry-run");
     try {
-      const r = persona.update(id, { ref: flag(args, "--ref"), force: has(args, "--force"), dryRun });
+      const r = persona.update(id, { ref: flag(args, "--ref"), force: has(args, "--force"), dryRun, rehome: has(args, "--rehome") });
       if (asJson) out(JSON.stringify(r));
       else if (dryRun) {
         out(`[dry-run] would update ${id} → ${r.installed.version}（原 ${r.previous ?? "-"}；未写盘、未切 active、未建索引）` +
-          (r.installed.overwrites?.length ? `\n  ⚠ 将覆盖 ${r.installed.overwrites.length} 个产物：${r.installed.overwrites.join(", ")}` : ""));
+          (r.installed.overwrites?.length ? `\n  ⚠ 将覆盖 ${r.installed.overwrites.length} 个产物：${r.installed.overwrites.join(", ")}` : "") +
+          (r.installed.retired?.length ? `\n  ↳ 将清理旧 HOME 产物：${r.installed.retired.join(", ")}` : ""));
       } else {
-        out(`updated ${id} → ${r.installed.version}（${String(r.installed.commit || r.installed.hash || "?").slice(0, 8)}, 原 ${r.previous ?? "-"}）`);
+        out(`updated ${id} → ${r.installed.version}（${String(r.installed.commit || r.installed.hash || "?").slice(0, 8)}, 原 ${r.previous ?? "-"}）` +
+          (r.installed.retired?.length ? `\n  ↳ 已备份并清理旧 HOME 产物：${r.installed.retired.join(", ")}` : ""));
+      }
+      if (!asJson) {
+        for (const w of persona.retireKeptWarnings(r.installed.retiredKeptDetail ?? (r.installed.retiredKept ?? []).map((p: string) => ({ path: p, kept: "user-edited" })))) out(`  ⚠ ${w}`);
+        if (r.installed.access?.declared) out(`  access: 追加 ${r.installed.access.added} 条（跳过 ${r.installed.access.skipped}）→ ${r.installed.access.root}`);
+        for (const w of r.installed.access?.warnings ?? []) out(`  ⚠ ${w}`);
       }
       // dry-run 不得写知识索引（autoIndexPersona 会真建索引）
       if (!dryRun) await autoIndexPersona(id);
@@ -1705,6 +1738,7 @@ async function personaCli(argv: string[]): Promise<number> {
     } catch (e: any) {
       const m = e?.message || String(e);
       err(m);
+      if (m.startsWith("E_CONFLICT") || m.startsWith("E_MANIFEST") || m.startsWith("E_LOCKED")) return 32;
       return m.startsWith("E_SOURCE") ? 34 : 31;
     }
   }
@@ -1746,19 +1780,24 @@ async function personaCli(argv: string[]): Promise<number> {
   }
   if (sub === "render") {
     const id = positional(args)[0];
-    if (!id) { err("usage: dia persona render <id> [--host opencode|dsh|codex] [--home DIR] [--check] [--json]"); return 2; }
+    if (!id) { err("usage: dia persona render <id> [--host opencode|dsh|codex] [--home DIR] [--rehome] [--check] [--json]"); return 2; }
     try {
-      const r = persona.render(id, { host: flag(args, "--host"), home: flag(args, "--home"), check: has(args, "--check") });
+      const r = persona.render(id, { host: flag(args, "--host"), home: flag(args, "--home"), check: has(args, "--check"), rehome: has(args, "--rehome") });
       if (asJson) out(JSON.stringify(r, null, 1));
       else if (r.check) out(r.drift.length ? `drift ${r.drift.length}:\n  ${r.drift.map((d: any) => `${d.action}: ${d.path}`).join("\n  ")}` : "ok（无 drift）");
       else out(`rendered ${r.id}@${r.version}${r.drift.length ? `（修复 ${r.drift.length} 处，备份 ${r.backups.length}）` : "（无变化）"}` +
+        (r.retired?.length ? `\n  ↳ 已备份并清理旧 HOME 产物：${r.retired.join(", ")}` : "") +
+        (r.retiredKept?.length ? `\n` + persona.retireKeptWarnings(r.retiredKeptDetail ?? r.retiredKept.map((p: string) => ({ path: p, kept: "user-edited" }))).map((w: string) => `  ⚠ ${w}`).join("\n") : "") +
         (r.msgKit && !r.msgKit.ok ? `\n  ⚠ dia-msg 未启用：${r.msgKit.reason}` : ""));
+      if (!asJson) for (const w of r.access?.warnings ?? []) out(`  ⚠ ${w}`);
+      if (!asJson && r.access?.declared) out(`  access: 追加 ${r.access.added} 条（跳过 ${r.access.skipped}）→ ${r.access.root}`);
       return r.check && r.drift.length ? 1 : 0;
     } catch (e: any) {
       const m = e?.message || String(e);
       err(m);
+      if (m.startsWith("E_USAGE")) return 2;
       if (m.startsWith("E_NOT_INSTALLED")) return 21;
-      if (m.startsWith("E_MANIFEST")) return 32;
+      if (m.startsWith("E_MANIFEST") || m.startsWith("E_LOCKED")) return 32;
       if (m.startsWith("E_HOST")) return 33;
       return 31;
     }
@@ -1782,6 +1821,7 @@ async function personaCli(argv: string[]): Promise<number> {
       err(m);
       if (m.startsWith("E_VERSION")) return 21;
       if (m.startsWith("E_NOT_INSTALLED")) return 20;
+      if (m.startsWith("E_MANIFEST") || m.startsWith("E_LOCKED")) return 32;
       return 31;
     }
   }

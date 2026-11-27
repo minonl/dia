@@ -48,14 +48,16 @@ function versionCmp(dir: string) {
   };
 }
 
+// `personas/<id>/` 下不是版本槽位的保留目录（含旧版坏 lock 备份 `backups/`）
+const RESERVED_DIRS = new Set(["backups", "current", "latest", "data", "repo", "repo.git", "worktrees", "versions", ".lock"]);
+
 export function installedVersions(id: string): string[] {
   const dir = join(dataDir(), "personas", id);
   if (!existsSync(dir)) return [];
   const cmp = versionCmp(dir);
   const verRoot = join(dir, "versions");
-  if (existsSync(verRoot)) return readdirSync(verRoot).filter((v) => statSync(join(verRoot, v)).isDirectory()).sort(cmp);
-  const skip = new Set(["current", "latest", "data", "repo", "repo.git", "worktrees", "versions", ".lock"]);
-  return readdirSync(dir).filter((v) => !skip.has(v) && !v.startsWith(".staging-") && statSync(join(dir, v)).isDirectory()).sort(cmp);
+  if (existsSync(verRoot)) return readdirSync(verRoot).filter((v) => !RESERVED_DIRS.has(v) && statSync(join(verRoot, v)).isDirectory()).sort(cmp);
+  return readdirSync(dir).filter((v) => !RESERVED_DIRS.has(v) && !v.startsWith(".staging-") && statSync(join(dir, v)).isDirectory()).sort(cmp);
 }
 
 export function read(id: string): ActiveEntry | null {

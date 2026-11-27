@@ -2,11 +2,11 @@
 //
 // 解析优先级：显式 --persona > DIA_PERSONA > 唯一已装 persona（>1 个时必须显式指定，不猜）。
 // 作用域回答三件事：读哪棵知识树、用哪个数据根、有哪些域命令可委派。
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import * as active from "./active.ts";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import * as paths from "./paths.ts";
+import * as persona from "./persona.ts";
 
 // 目录在调用时解析（同 kit.ts：模块加载时固化会污染跨测试/多 persona 场景）
 const dataDir = () => paths.diaHome();
@@ -34,7 +34,6 @@ export interface Scope {
 }
 
 const expand = (p: string) => { const h = homeDir(); return p === "~" ? h : p.startsWith("~/") ? join(h, p.slice(2)) : p; };
-const latest = (dir: string) => readdirSync(dir).filter((v) => statSync(join(dir, v)).isDirectory()).sort().pop();
 
 function readJson(p: string): any {
   try { return JSON.parse(readFileSync(p, "utf8")); } catch { return null; }
@@ -79,8 +78,11 @@ export function current(explicit?: string): Scope | null {
   if (!id) return null;
   const idDir = join(dataDir(), "personas", id);
   if (!existsSync(idDir)) throw new Error(`E_SCOPE: persona not installed: ${id}`);
-  const version = active.effective(id)?.version ?? latest(idDir)!;
-  const dir = join(idDir, version);
+  // 槽位目录解析与 dirOf/versionDirs 同源（嵌套 versions/<v> 优先），
+  // 别在这里自己拼平铺路径——否则嵌套布局下 scope.dir 与 `dia persona path` 分叉。
+  const hit = persona.dirOf(id);
+  if (!hit) throw new Error(`E_SCOPE: persona 无可用版本: ${idDir}`);
+  const { dir, version } = hit;
   const lock = readJson(join(dir, "dia.lock")) ?? {};
   const kits: KitScope[] = [];
   // persona 自带内容优先（它就在 persona 树里，路径即 lock 所在目录）；旧 lock 缺 content 时用 dia.json 兜底

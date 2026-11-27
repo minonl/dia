@@ -342,7 +342,8 @@ export function renderContent(
       if (p.entry.type === "file") throw new Error(`E_CONFLICT: ${p.dest} exists and differs`);
       throw new Error(`E_CONFLICT: ${p.dest} exists and is not managed`);
     }
-    if (!isSymlink(p.dest) && existsSync(p.dest)) {
+    // dry-run 不写盘，自然也不该产生备份（--check / use 预检复用这条路径）
+    if (!opts.dryRun && !isSymlink(p.dest) && existsSync(p.dest)) {
       mkdirSync(backupDir, { recursive: true });
       // ⚠️ 2026-11-16：目标可能是**目录**（宿主已有同名实体目录，如 ~/.agents/skills/dia-msg）
       //   不带 recursive 会抛 `Recursive option not enabled`；postinstall 里被静默吞掉、

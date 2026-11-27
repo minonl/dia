@@ -263,6 +263,7 @@ Agent 入口：[`llms.txt`](https://github.com/minonl/dia/blob/main/llms.txt)（
 
 | 文档 | 一句话 |
 |---|---|
+| [变更契约：persona 数据根授权合成（`access`）](change-contracts/persona-access.md) | 变更：dia.json 新增 access: {read, write, env}，persona add/render/use 在 opencode agent |
 | [跨会话通信：语义、排序与指标（M1）](design/comm-semantics.md) | 状态：M1 已实现（2026-11-06 ~ 11-09）｜代码：src/collab.ts、src/msg-priority.ts、dia collab stats |
 | [优先级 × 依赖：任务编排语义（M1）](design/graph-prio-dag.md) | 状态：已实现（2026-11-06）｜代码：src/plan.ts（派生纯函数）、src/task.ts（split）、src/graph.ts（契约） |
 | [关系图界面：派生量上屏（M1 UI）](design/graph-ui-m1.md) | 状态：已实现（2026-11-09）｜实现：src/graph-html/{render,template}｜上游：graph-prio-dag.md |

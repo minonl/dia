@@ -71,6 +71,8 @@ dia --persona dabo doctor
     "dsh": "platform/dsh/dabo-persona"
   },
   "kits": ["core"],
+  "data_root": "~/.dabo-agent",
+  "access": { "read": true, "write": true, "env": false },
   "capabilities": {
     "tools": ["bash", "git"],
     "network": false,
@@ -250,6 +252,130 @@ dia --persona dabo todo list          # 委派到 scripts/dabo-task；退出码�
 | `commands[].env` | 注入到子进程（值支持 `~` 展开） |
 | 命名冲突 | 内置命令优先（`dia task` 是内置，persona 里请用 `todo` 这类不冲突的名字） |
 | 隔离 | 命令入口必须在 persona 根内（绝对路径 / `../` 穿越 → `E_DELEGATE_SCOPE`）；若 `env` 写死数据根（如 dabo 的 `DABO_ROOT`），会绕过 `DIA_DATA_DIR` 的测试隔离 |
+
+## 5.5 数据根授权：`access`（dia 合成 permissions，2026-11-24；2026-11-25 改用 yaml round-trip）
+
+> **实现依赖**：合成层用 [`yaml`](https://eemeli.org/yaml/)（`yaml@^2.9.1`，ISC）做
+> Document round-trip，不再手写行级解析。dia 因此从「零依赖」变为「依赖 yaml」
+> （`bun build` 后约 +233 KB，可接受）。代价换来的是：注释（列 0 / 缩进 / 行尾）、
+> 块标量里的 `---`、带引号的键（`"permissions":`）、flow 写法、CRLF 都由解析器原样保留，
+> 不会再出现「规则插进 description 块」「重复映射键」这类会让宿主**静默丢弃整个 agent** 的输出。
+
+persona 需要在宿主里读写自己的数据根时，**不要手写 permissions**——在 `dia.json` 里声明，
+由 `dia persona add / render` 合成进 opencode agent 文件的 frontmatter。手写的规则会和 dia
+的合成结果打架（重装必报 `E_CONFLICT`），也不好审计。
+
+```json
+{
+  "data_root": "~/.dabo-agent",
+  "access": { "read": true, "write": true, "env": false }
+}
+```
+
+| 字段 | 类型 | 缺省 | 含义 |
+|---|---|---|---|
+| `data_root` | string | — | 数据根，**必须**形如 `~/.<id>-<后缀>`（直挂家目录一层） |
+| `access.read` | boolean | `false` | 允许读 `<root>/**` |
+| `access.write` | boolean | `false` | 允许写 `<root>/**`（**false 时显式写 deny**） |
+| `access.env` | boolean | `false` | `true` 时**不再加 `.env` ask**：数据根内任意深度的 `*.env` / `*.env.*` 读取全部免确认（含 `romm.env` 这类 token 文件）；`false` 时两条 ask 兜住 |
+
+`read`/`write`/`env` **三者必须都是布尔**；写字符串（如 `"false"`）或数字 → `E_MANIFEST`（退出 32）。
+
+> **`env:true` 的代价必须知情**：`env` 缺省或为 `false` 时，两条 ask 只挂在 `action=read` 上
+> （`read <root>/*.env ask`、`read <root>/*.env.* ask`）；`grep` / `shell` 等其它 action **不受这两条约束**
+> （它们按宿主各自的默认规则走，别以为 shell 读 `.env` 也会被拦）。设 `env:true` 等于把数据根里
+> **所有** `.env`（任意深度，包括保存 token 的 `romm.env`）的**读取**放开，只在确实需要读 token 时才开。
+
+### 5.5.1 合成规则（顺序固定，追加到 `permissions` 序列**尾部**）
+
+| # | 条件 | 规则 |
+|---|---|---|
+| 1 | 总是 | `external_directory <root>/** allow` |
+| 2 | `read=true` | `read <root>/** allow` |
+| 3 | `write` | `edit <root>/** allow`（true）/ `edit <root>/** deny`（false） |
+| 4 | `read=true` 且 `env!=true` | `read <root>/*.env ask`、`read <root>/*.env.* ask` |
+
+第 4 组必须排在第 2 条**之后**（宿主规则后写生效），否则会被 read allow 吃掉。
+`root` 写展开后的**绝对路径**；`env=true` 时**不加第 4 组**（数据根内任意深度 `.env` 读取免确认）。
+
+**`.env` 兜底为什么够**：opencode 的权限 resource 按 glob 匹配，且 `*` **匹配 `/`**（官方文档原文）。
+所以 `read <root>/*.env ask` 已经覆盖 `<root>` 下**任意深度子目录**里的 `.env`（`*` 能跨过 `/`），
+不需要再补 `**/.env`；`*.env.*` 同理覆盖 `x.env.local` 这类。注意这两条只约束 `action=read`，
+`grep` / `shell` 不受控。
+
+### 5.5.2 结构处理（yaml Document round-trip）
+
+- frontmatter 边界：文件首行 `---` 起，到下一条**列 0 且内容为 `---`** 的行结束。
+  块标量里的 `---` 有缩进，不会被误当收尾；
+- 用 `parseDocument` 解析该段，**有任何 `errors` 直接拒绝**（`E_MANIFEST`，退出 32）——
+  不猜、不降级；tab 缩进、重复映射键、括号不配对都由解析器报错；
+- 读 `permissions`：`doc.get("permissions")`。`null`/缺键 → `doc.set(...)`；已是列表 → 追加到尾部；
+  map 形式（V1 的 `key: effect`）→ 拒绝；
+- flow 写法 `permissions: [{action: read, ...}]` 与带注释的 `permissions:` 键行都**合法**（由 yaml 归一）；
+- 带引号的键 `"permissions":` 与不带引号的是同一个键（不会再被当成「没有该键」而重复写入）；
+- 插在序列最后一项之后，`permissions:` 后面的其它顶层键（如 `browser: deny`）原样保留；
+- **字节零变化**：没有规则可追加（全部已存在）时不重新序列化，**原样返回输入**；
+- **幂等**：合成只作用于 persona **源 entry**，不作用于已渲染的 dest；重复 render 字节恒等；
+- **去重**：已存在同一 `(action, 归一化 resource, effect)` 就跳过。归一化只做三件事：`~`/`~/`、`$HOME`/`$HOME/` 展开；尾部后缀保持原样（`/**` 与 `/*` 是**不同**资源，不做包含推断）。
+- **只替换 frontmatter 文本块**：body 逐字节保留（混合换行不会被统一改写）；frontmatter 的换行符按该块自身探测。
+- **顺序校验**：等价规则存在但被后面的规则覆盖（后写生效）时拒绝，而不是 `added=0` 静默成功；
+  不自动重排（重排会改作者语义），报行号让作者自己调。
+
+### 5.5.3 失败矩阵（全部 fail closed：退出 32、不写盘、不改 lock）
+
+| 情形 | 结果 |
+|---|---|
+| `access` 存在但 `data_root` 缺失 | `E_MANIFEST` |
+| `data_root` 是相对路径 / `~user/x` / `~`（家目录本身）/ `~/repos/x`（不直挂） | `E_MANIFEST` |
+| `data_root` 含 `..` 段 或 glob 元字符 `* ? [ ] { }` | `E_MANIFEST` |
+| `data_root` 已存在且是 symlink / realpath 逃出家目录 / 不是目录 | `E_MANIFEST` |
+| 已有更宽的 `deny`（`action` 为 `*` 或目标 action，resource 覆盖 root 的 glob）会覆盖合成 allow/ask | `E_MANIFEST` |
+| 已有同 `(action, resource)` 但 `effect` 不同 | `E_MANIFEST` + **行号**提示 |
+| 等价规则已存在（`added=0`），但它后面还有 `*: ask` / 更宽的 allow 会把它覆盖掉 | `E_MANIFEST` + 行号，提示调整顺序（不自动重排） |
+| `permissions` 项不是 map、缺 `action`/`resource`/`effect`、字段非字符串或为空、`effect` 不是 `allow|deny|ask` | `E_MANIFEST` + 行号（opencode 会静默丢弃整份 agent） |
+| frontmatter 不是合法 YAML（tab 缩进、重复键、括号不配对等） | `E_MANIFEST` |
+| V1 map（`permissions:` 下 `key: effect`）、`permissions` 下非映射列表项、无 frontmatter、缺收尾 `---` | `E_MANIFEST` |
+| `access.read/write/env` 非 boolean | `E_MANIFEST` |
+| `dia.lock` 存在但不是合法 JSON / 顶层为 `null` / 不是对象 | `E_LOCKED`，**退出 32**（`verify`/`render`/`use`/`check`/`update`/`add` 默认不写盘；`add`/`update` 加 `--force` 时先把坏 lock **复制**备份到 `<data>/backups/persona-locks/<id>/`，原文件留在原位；安装成功后才被新 lock 覆盖） |
+| `verify` / `persona use` 遇到上述 access 错误 | `E_MANIFEST`，**退出 32**（不再降级成 warn 或 exit 1） |
+
+**「更宽 deny」的 glob 判定**（覆盖 root 即拒绝，覆盖 root 的写法包括但不限于）：
+`/**`、`/*`、`**/*`、`*`/`**`、`<root>/**`、root 的祖先 glob（`~/*`）、`?` 通配（`~/.<id>-ag?nt/**`）。
+判定用前缀/glob 语义（`*` 匹配 `/`、`?` 匹配单字符），不是字符串 `startsWith`。
+**花括号不是 glob**：opencode 把 `{ } [ ] ( ) |` 当字面量转义，只有 `*` / `?` 通配，
+所以 `{<root>,/tmp}/**` 这种写法**不**被视为覆盖 root（按字面路径处理）。
+**`[ ]` 也不是字符类**：`<root>/.rc[-]agent/**` 是字面路径，不覆盖 `<root>/.rc-agent`。
+
+### 5.5.4 边界与告警
+
+- **本期只对 opencode 生效**：host 为 `dsh` / `codex` 时声明 `access` 只输出一行
+  `access 对 host=<x> 本期不生效`（不阻断安装）。dsh 的权限由 profile 插件决定，codex 没有同款 permissions 结构。
+  这类 `render --host dsh|codex` **不会改写** lock 里的 `access.added/skipped/root`（保留上一次 opencode 合成的值），
+  否则跑一次 dsh 渲染就会把「追加 0 条」永久写进 lock。
+- `access.write=true` 但 `read!=true` → 告警（只加写规则，读仍按宿主默认）；
+- `data_root` 尚不存在 → 告警（不拒绝：数据根通常由 persona 自己首次运行时创建）。
+  **风险**：dia 不负责创建 `data_root`；如果首装时它不存在，之后有别的流程把它建成 **symlink**，
+  合成规则就指向了别处。`verify` 会重新校验 `data_root` 形状（symlink / 非目录 / realpath 逃逸 → 退出 32），
+  但**首装时**没有任何东西阻止后来的 symlink —— 建议 persona 自己 `mkdir` 创建真实目录，别用软链。
+- 合成的字节写进 dest，`dia.lock` 的 `renderedHashes` 与 `access: {declared, added, skipped, root, homedir}`
+  都记**合成后**的结果；lock 里已有 `homedir` 时，`render` / `verify` / `update` / `add` **都以它为准**：
+  **当前 HOME 与记录不一致时一律拒绝（`E_MANIFEST`，退出 32）**，不会「只 warn 后按旧路径渲染」
+  （那会把指向旧家目录的授权写到当前 HOME）。两条出路：① 换回原 HOME；② 显式 `--rehome`
+  （`dia persona render <id> --rehome` / `update <id> --rehome` / `add <id> … --rehome`），同时更新 lock 的 `homedir`；
+  `--rehome` **只在与 opencode 合成的同一次操作里生效**：`render/add --host dsh|codex --rehome` 直接 `E_USAGE`，
+  不会写出 `homedir=B / root=A` 的矛盾 lock。迁移后旧 HOME 的 agent md / codex `AGENTS.md` 会**先备份到 `<data>/backups/rehome-<id>-<ts>/` 再删**，
+  并记入 `lock.renderedRetired` 且从 `rendered`/`renderedHashes` 移除，`verify` 不再报 missing、`remove` 不再退出 30。
+  只有「当前字节 == lock 里记录的哈希」才认定是本 persona 产物；手改过的（或别的 persona 写入的同名
+  codex `AGENTS.md`）**保留不删**，`renderedRetired` 里记为 `{ path, kept: "user-edited" }` 并在 CLI 告警。
+  另加一道共享引用校验：删除前扫描**其它已安装 persona 槽位**的 `dia.lock`（`rendered`/`renderedHashes`/`renderedRetired`），
+  该路径仍被别的 persona 引用时（典型：两个 codex persona 共用同一 home 且 `AGENTS.md` 字节相同）**保留不删**，
+  记 `{ path, kept: "kept-shared", by: "<其它 persona id>" }` 并告警「该产物被其它 persona（<id>）引用，已保留」——
+  否则删掉后对方 `verify` 直接 MISMATCH。
+- 计数字段**只有一个口径**（`render --check --json`、真渲染、`install`/`update` 输出与 lock 相同）：
+  `added` = **本次合成新增的规则条数**；`skipped` = 源里已有等价规则而跳过的条数；
+  `missing` = **dest 相对期望还缺的条数**（只在 `render`/`--check` 报；安装时为 `undefined`）。
+  三者互不混用：`added` 不是「还缺几条」；一致时 `missing=0` 而 `added` 仍是合成规则总数。
+- 「已存在且不同」的冲突判断也按合成期望比较（否则重装必 `E_CONFLICT`）。
 
 ## 6. 当前缺口
 

@@ -170,9 +170,9 @@ bun src/cli.ts version  # 直接跑源码
 | `guard` | `dia guard [--once] [--json]` |  |
 | `run` | `dia run --session S [--tool T] [--agent A] [--waive --risk N] [--redline] -- <cmd> [args...]` |  |
 | `resume` | `dia resume --session S [--json]` |  |
-| `persona` | `dia persona add <id|--from SRC> [--ref REF] [--host opencode|dsh|codex] [--home DIR] [--dry-run] [--force] [--json]` |  |
+| `persona` | `dia persona add <id|--from SRC> [--ref REF] [--host opencode|dsh|codex] [--home DIR] [--dry-run] [--force] [--rehome] [--json]` |  |
 | `persona` | `dia persona create <id> --dir DIR [--host opencode|dsh|codex] [--no-msg] [--dry-run] [--json]` |  |
-| `persona` | `dia persona render <id> [--host opencode|dsh|codex] [--home DIR] [--check] [--json]` |  |
+| `persona` | `dia persona render <id> [--host opencode|dsh|codex] [--home DIR] [--rehome] [--check] [--json]` |  |
 | `persona` | `dia persona list|verify|remove|show <id>|use <id>[@ver]` |  |
 | `persona` | `dia persona path [<id>[@<ver>]] [--json]` | 打印生效版本目录（服务/脚本取代码入口） |
 | `persona` | `dia persona check <id>|update <id> [--ref REF]` |  |

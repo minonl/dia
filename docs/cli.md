@@ -64,7 +64,7 @@ dia persona activation <id> --mode next-session|active-additive|active-all|manua
 
 ```bash
 # 安装 dabo 人格（只新增，不改默认）
-dia persona add dabo --from git+https://github.com/minonl/dabo-agent.git --ref <sha> --dry-run
+dia persona add dabo --from git+https://github.com/example/persona-b.git --ref <sha> --dry-run
 dia persona add dabo --from git+... --ref <sha>
 
 # 从零写一个新人格

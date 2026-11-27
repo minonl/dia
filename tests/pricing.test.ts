@@ -39,13 +39,13 @@ describe("pricing", () => {
 
   // ── §8.1 补强：不猜价 / 归一 / cache_write ────────────────────────────────
 
-  test("未知 leyan 型号不猜价：usd null / priced false / reason unknown-model", () => {
-    const c = costOf("leyantech/deepseek-v4.1-flash", { inputTokens: 1_000_000, outputTokens: 1_000_000 }, {});
+  test("未知 example 型号不猜价：usd null / priced false / reason unknown-model", () => {
+    const c = costOf("example/deepseek-v4.1-flash", { inputTokens: 1_000_000, outputTokens: 1_000_000 }, {});
     expect(c.usd).toBe(null);
     expect(c.priced).toBe(false);
     expect(c.reason).toBe("unknown-model");
     // 0 token 也不等于免费：没价格就不给 0
-    expect(costOf("leyantech/x", {}, {}).usd).toBe(null);
+    expect(costOf("example/x", {}, {}).usd).toBe(null);
   });
 
   test("没给型号 → reason no-model", () => {
@@ -72,8 +72,8 @@ describe("pricing", () => {
   });
 
   test("显式 cache_write 价格被计入", () => {
-    const table = { "leyantech/*": { input: 1, output: 2, cache_read: 0.1, cache_write: 3 } };
-    const c = costOf("leyantech/deepseek-v4.1-flash", { inputTokens: 1_000_000, outputTokens: 0, cacheWriteTokens: 1_000_000 }, table);
+    const table = { "example/*": { input: 1, output: 2, cache_read: 0.1, cache_write: 3 } };
+    const c = costOf("example/deepseek-v4.1-flash", { inputTokens: 1_000_000, outputTokens: 0, cacheWriteTokens: 1_000_000 }, table);
     expect(c.priced).toBe(true);
     expect(c.usd).toBeCloseTo(4, 9); // 1 + 3
   });

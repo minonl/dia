@@ -50,7 +50,7 @@ function git(cwd: string, args: string[], timeoutMs: number): string | null {
   }
 }
 
-/** 远端 URL → 完整 group 路径 slug（fed/lyzr/hummus）。 */
+/** 远端 URL → 完整 group 路径 slug（org/group/project-a）。 */
 export function slugFromRemote(url: string): string | null {
   let s = String(url || "").trim();
   if (!s) return null;
@@ -279,7 +279,7 @@ export function collectWorktrees(opts: WorktreeCollectOpts = {}): WorktreeCollec
     const paths = wts.map((w) => realpathSafe(w.path));
     const mainPath = paths[0]; // git worktree list 首条 = 主 checkout
 
-    // 该仓的活跃 claim（scope 可能是完整 slug，也可能是旧的两段式 lyzr/hummus）
+    // 该仓的活跃 claim（scope 可能是完整 slug，也可能是旧的两段式 group/project-a）
     const repoClaims = active.filter((c) => c.scope === root.repo || root.repo.endsWith("/" + c.scope) || c.scope === `local:${basename(mainPath)}`);
     const claimsByWt = new Map<string, claimsStore.Claim[]>();
     for (const c of repoClaims) {

@@ -33,13 +33,13 @@ describe("workbench track（§6.1）", () => {
     const opened = t.openTrack({
       title: "灰度开通服务",
       goal: "redteam 回灌收口并上线",
-      repo: ["fed/lyzr/yan-agent", "fed/lyzr/hummus"],
+      repo: ["org/group/yan-agent", "org/group/project-a"],
       prio: "P1",
       next: "补 reply 幂等单测",
     });
     expect(opened.id.startsWith("tr-")).toBe(true);
     expect(opened.status).toBe("open");
-    expect(opened.repo).toEqual(["fed/lyzr/yan-agent", "fed/lyzr/hummus"]);
+    expect(opened.repo).toEqual(["org/group/yan-agent", "org/group/project-a"]);
     expect(opened.prio).toBe("P1");
 
     const bound = t.bindTrack(opened.id, { session: "ses_a", role: "lead", host: "opencode" });
@@ -48,11 +48,11 @@ describe("workbench track（§6.1）", () => {
 
     const withNext = t.setNext(opened.id, {
       next: "改派 lead",
-      waiting_on: t.parseWaitingOn("human:min:等验收"),
+      waiting_on: t.parseWaitingOn("human:maintainer:等验收"),
       remind_at: "2026-11-19T09:00:00+08:00",
     });
     expect(withNext.next).toBe("改派 lead");
-    expect(withNext.waiting_on).toEqual({ kind: "human", ref: "min", note: "等验收" });
+    expect(withNext.waiting_on).toEqual({ kind: "human", ref: "maintainer", note: "等验收" });
     expect(withNext.remind_at).toBe("2026-11-19T09:00:00+08:00");
 
     const blocked = t.stage(opened.id, { status: "blocked", reason: "lead dead 12h", stage: "dev" });
@@ -79,10 +79,10 @@ describe("workbench track（§6.1）", () => {
 
   test("同 title + repo 集合（顺序无关）重复 open → E_TRACK_DUP", async () => {
     const t = await wb();
-    const a = t.openTrack({ title: "同一件事", repo: ["fed/lyzr/hummus", "fed/lyzr/yan-agent"] });
+    const a = t.openTrack({ title: "同一件事", repo: ["org/group/project-a", "org/group/yan-agent"] });
     let err: any;
     try {
-      t.openTrack({ title: "同一件事", repo: ["fed/lyzr/yan-agent", "fed/lyzr/hummus"] });
+      t.openTrack({ title: "同一件事", repo: ["org/group/yan-agent", "org/group/project-a"] });
     } catch (e) { err = e; }
     expect(err).toBeTruthy();
     expect(String(err.message)).toMatch(/^E_TRACK_DUP: 已存在 tr-/);
@@ -90,14 +90,14 @@ describe("workbench track（§6.1）", () => {
 
     // 关闭后可重新开
     t.close(a.id, { reason: "accepted" });
-    const again = t.openTrack({ title: "同一件事", repo: ["fed/lyzr/hummus", "fed/lyzr/yan-agent"] });
+    const again = t.openTrack({ title: "同一件事", repo: ["org/group/project-a", "org/group/yan-agent"] });
     expect(again.id).not.toBe(a.id);
   });
 
   test("双 lead → E_TRACK_AMBIGUOUS（同 track 与同会话两侧）", async () => {
     const t = await wb();
-    const one = t.openTrack({ title: "线一", repo: ["fed/lyzr/hummus"] });
-    const two = t.openTrack({ title: "线二", repo: ["fed/lyzr/hummus"] });
+    const one = t.openTrack({ title: "线一", repo: ["org/group/project-a"] });
+    const two = t.openTrack({ title: "线二", repo: ["org/group/project-a"] });
     t.bindTrack(one.id, { session: "ses_a", role: "lead" });
 
     // 同一 track 第二个 lead
@@ -124,7 +124,7 @@ describe("workbench track（§6.1）", () => {
 
   test("stage 不允许直接设终态；close 二次调用报 E_TRACK_CLOSED", async () => {
     const t = await wb();
-    const tr = t.openTrack({ title: "终态门", repo: ["fed/lyzr/hummus"] });
+    const tr = t.openTrack({ title: "终态门", repo: ["org/group/project-a"] });
     expect(() => t.stage(tr.id, { status: "done" })).toThrow(/E_USAGE/);
     t.close(tr.id, { reason: "abandoned" });
     expect(t.getTrack(tr.id)?.status).toBe("abandoned");

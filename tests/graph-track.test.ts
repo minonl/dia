@@ -24,7 +24,7 @@ describe("graph：track 节点与边（track-v1）", () => {
 
     const t = task.add("切片 A", { judge: "bun test" });
     const ts = new Date().toISOString();
-    store.appendTrack({ ts, event: "open", id: "tr-graph01", title: "长任务 A", repo: ["fed/lyzr/hummus"], prio: "P1", next: "下一步" });
+    store.appendTrack({ ts, event: "open", id: "tr-graph01", title: "长任务 A", repo: ["org/group/project-a"], prio: "P1", next: "下一步" });
     store.appendTrack({ ts, event: "bind", id: "tr-graph01", session: "ses_lead", role: "lead", host: "opencode" });
     store.appendTrack({ ts, event: "attach_task", id: "tr-graph01", task: t.id });
 
@@ -32,7 +32,7 @@ describe("graph：track 节点与边（track-v1）", () => {
     const track = g.nodes.find((n) => n.id === "track:tr-graph01")!;
     expect(track.kind).toBe("track");
     expect(track.next).toBe("下一步");
-    expect(track.repo).toEqual(["fed/lyzr/hummus"]);
+    expect(track.repo).toEqual(["org/group/project-a"]);
     expect(track.lead).toBe("ses_lead");
     expect(g.edges.some((e) => e.kind === "belongs_to" && e.from === `task:${t.id}` && e.to === "track:tr-graph01")).toBe(true);
     expect(g.edges.some((e) => e.kind === "serves" && e.from === "session:ses_lead" && e.to === "track:tr-graph01")).toBe(true);

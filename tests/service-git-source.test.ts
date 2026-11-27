@@ -50,7 +50,7 @@ function makeBareRepo(root: string, name: string): { url: string; work: string }
 describe.skipIf(!hasGit)("isGitSource / normalizeGitSource", () => {
   test("识别 git 源，排除本地路径", () => {
     expect(s.isGitSource("git+ssh://git@github.com/a/b.git")).toBe(true);
-    expect(s.isGitSource("git+https://git.leyantech.com/fed/x.git")).toBe(true);
+    expect(s.isGitSource("git+https://git.example.com/org/x.git")).toBe(true);
     expect(s.isGitSource("git+http://host/x.git")).toBe(true);
     expect(s.isGitSource("git+file:///tmp/x.git")).toBe(true);
     expect(s.isGitSource("ssh://git@github.com/a/b.git")).toBe(true);

@@ -29,7 +29,7 @@ describe("jsonc 读取", () => {
 describe("jsonc 顶层键编辑（保留原文）", () => {
   const src = `{
   // 用户注释：别删我
-  "model": "leyan/kimi", /* 行内注释 */
+  "model": "example/kimi", /* 行内注释 */
   "default_agent": "yan",
   "permission": { "read": "allow" }
 }`;
@@ -38,13 +38,13 @@ describe("jsonc 顶层键编辑（保留原文）", () => {
     const next = setTopLevelKey(src, "default_agent", "dabo");
     expect(next).toContain("// 用户注释：别删我");
     expect(next).toContain("/* 行内注释 */");
-    expect(parseJsonc(next)).toMatchObject({ model: "leyan/kimi", default_agent: "dabo", permission: { read: "allow" } });
+    expect(parseJsonc(next)).toMatchObject({ model: "example/kimi", default_agent: "dabo", permission: { read: "allow" } });
   });
 
   test("删键：删完仍是合法 JSON", () => {
     const next = setTopLevelKey(src, "default_agent", null);
     expect(next).not.toContain("default_agent");
-    expect(parseJsonc(next)).toEqual({ model: "leyan/kimi", permission: { read: "allow" } });
+    expect(parseJsonc(next)).toEqual({ model: "example/kimi", permission: { read: "allow" } });
     expect(next).toContain("// 用户注释：别删我");
   });
 

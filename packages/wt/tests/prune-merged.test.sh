@@ -118,7 +118,7 @@ rc="$(run "$R" --base origin/nonexistent)"
 see '基线不存在' && ok '有明确报错' || { bad '缺报错文案'; out; }
 
 echo '== ⑩ --all：批量扫仓（无基线的仓跳过、不中断）=='
-RR="$TD/reposleyan"; mkdir -p "$RR"
+RR="$TD/reposexample"; mkdir -p "$RR"
 A="$RR/repoA"; mkrepo "$A"; mkmerged "$A" feat/a-gone
 B="$RR/repoB"; mkdir -p "$B"; git -C "$B" init -q -b main
 printf 'x\n' > "$B/f"; git -C "$B" add -A

@@ -1,7 +1,18 @@
 # dia 状态页（单一事实源）
 
-> 更新：2026-11-03（复核：`bun test tests` 286/39 全绿）。任何"现在做到哪了"的问题，以本页为准；其他文档是细节。
+> 更新：2026-11-27（补丁；复核：`dia 0.1.8` / `bun test tests` 1192 / `dia doctor` warn）。
+> 本页 §1–§4 仍是 **2026-11-03 快照**，未逐行重写；「现在做到哪了」优先看 [`overview.md`](overview.md) §3。
 > 规则：状态必须能追到**命令/测试/提交**；没有证据的写"未验证"。
+
+---
+
+## 0. 2026-11-27 补丁（最近一次迭代）
+
+- `0.1.7`：公开仓当前树脱敏（#259）；`0.1.8`：pre-push 私有词表（#261，`latest`）。
+- npm：`0.1.6` 已撤回；`0.1.0–0.1.5` 已 deprecate（超 72h，tarball 仍在）。
+- 与 §3 旧数字的偏差：测试 **1192**（不是 286）；job **25**（不是 5）；仓库已 **public**；`doctor` 当前 **warn**（`dws-auth-check` / `case-intake` 两个定时任务失败）。
+- 残留：Git 历史仍有 7 个提交含旧标识；详见 `security/public-release.md` §6。
+
 
 ---
 
@@ -33,7 +44,7 @@
 | `team-automation.md` | 计划→实现→验证全自动循环 | **未实现**（D0.6–D0.9 只跑通 mock / ACP 驱动） |
 | `proposals.md` | `team next` 目标候选 | **v0 已实现**（`dia team next`，纯规则打分） |
 | `security-sandbox.md` | 沙箱单 seam、档位、fail-closed | **部分未实现**（S4–S7） |
-| `security/public-release.md` | 公开 release 门禁 | **BLOCKED until audit** |
+| `security/public-release.md` | 公开 release 门禁 | **部分**：当前树已清洗；Git 历史 7 个提交仍含旧标识（见 §6） |
 | `acp-integration.md` / `ecosystem-*.md` | ACP 与生态选型 | **设计 / 参考**（server 未做） |
 | `model-behavior.md` / `model-baseline-sidecar.md` | 客户端模型调控、基准 sidecar | **有据，未实施**（D2） |
 | `evolution-process.md` | `(T,D,O)`、V 型、压缩 | **理论**（D3 未实施） |

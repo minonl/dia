@@ -196,14 +196,14 @@ Agent 入口：[`llms.txt`](https://github.com/minonl/dia/blob/main/llms.txt)（
 | [dia claim：共享热点文件声明（M1a）](msg-collab-m1.md) | 一句话：在改共享文件前先 dia claim，让其它会话看见“谁在改、为什么、什么时候过期”；只告警，不阻断。 |
 | [msg 存储统一 + 分级日志留痕（2026-11-18）](msg-storage-unify.md) | 状态：实现完成，未 push / 未 merge。分支 feat/msg-storage-unify-r3（worktree .worktrees/msg-storage-unify-r3）。 |
 | [msg 子系统改造：ACP 通道 + 存储统一 + 分级日志](msg-subsystem-2026-11.md) | 2026-11-18。PR #226。 |
-| [dia / yan / dabo 现状总览](overview.md) | 2026-11-03 实测。本条是三方合起来的「现在长什么样」；docs/status.md 管 dia 的阶段与证据， |
+| [dia / yan / dabo 现状总览](overview.md) | 2026-11-27 实测（dia 0.1.8）。本页是三方合起来的「现在长什么样」；docs/status.md 管 dia 的阶段与证据， |
 | [Patch：对已安装 persona / kit 的本地补丁](patching.md) | 参考 npm/patch-package，但只作用于本地安装副本，不改上游。 |
 | [Persona / Kit 安装：用 dia 从 git 地址装](persona-install.md) | 命名已定：persona = 可被选中的 agent 定义，kit = 知识/技能/工具内容，profile = 宿主运行环境（dsh）。 |
 | [价目表（tokens → 金额）](pricing.md) | 原则：没有价格就不编造；unpriced 明确记录，预算按 tokens 兜底。 |
 | [目标提案（team next）](proposals.md) | 定位：团队可以提候选，不能定目标。 |
 | [Sandbox 细化设计（dia）](security-sandbox.md) | 依据：dsh 本机源码实测、Hermes/Pi 取证、[/tmp/dia-sbx 实验]。 |
 | [服务（service）：可托管的执行体](service-noun.md) | 状态：已实现（v0.0.10，脚本型 + agent 型）。脚本型走 entry.cmd，agent 型走 entry.agent + healthcheck.kind="acp"； |
-| [dia 状态页（单一事实源）](status.md) | 任何"现在做到哪了"的问题，以本页为准；其他文档是细节。 |
+| [dia 状态页（单一事实源）](status.md) | 本页 §1–§4 仍是 2026-11-03 快照，未逐行重写；「现在做到哪了」优先看 overview.md §3。 |
 | [全自动团队：人只在验收介入](team-automation.md) | 目标：计划→实现→验证→对抗→修复全自动循环；人只在验收阶段拍板。 |
 | [团队章程：谁来做 dia（开发团队）](team.md) | 2026-10-28 升级：开发团队执行模式改为全自动循环（计划→实现→验证→对抗→修复），人只在验收阶段介入； |
 | [版本与多会话（persona / kit）](versioning.md) | 问题：dia 要支持升级/本地迭代期间不同会话用不同版本 persona；kit 是否也要会话级版本？ |
@@ -221,7 +221,7 @@ Agent 入口：[`llms.txt`](https://github.com/minonl/dia/blob/main/llms.txt)（
 | 文档 | 一句话 |
 |---|---|
 | [凭据管理（现状 + 调研待办）](security/credentials.md) | 2026-11-03。待调研，不是方案定稿。触发：bw CLI 已用于入库，但"按账号分组"决定放行粒度， |
-| [dia Public Release Gate](security/public-release.md) | 状态：已公开（2026-11-05），独立审核整改完成（2026-11-05）。 |
+| [dia Public Release Gate](security/public-release.md) | 状态：已公开（2026-11-05）；2026-11-27 复核：当前树已脱敏，历史仍 blocked（见 §5/§6）。 |
 | [团队快照隔离评估（2026-11-05）](security/snapshot-isolation.md) | 现状：verifier / redteam 跑在系统临时目录的副本里；runs/<id> 0700；gates 现场重跑判据。 |
 
 ## 迁移

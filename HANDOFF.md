@@ -1,5 +1,9 @@
 # HANDOFF — 交接文档（dia / dabo-agent 安装）
 
+> **2026-11-27 复核**：仓库已 **public**；`dia 0.1.8`；`bun test tests` = 1188 pass / 4 skip；`dia job list` = 25 条；
+> `dia doctor` 当前 **warn**（`dws-auth-check` / `case-intake` 两个定时任务失败）；npm `0.1.6` 已撤回、`0.1.0–0.1.5` 已 deprecate。
+> 以下 2026-11-02 正文保留为历史；冲突以本行为准，现状见 [`docs/overview.md`](docs/overview.md) §3。
+
 > **写于 2026-11-02** ｜ 写者：乐小言（yan） ｜ 按手人：待定
 > **读本文的顺序**：先跑 §1 判据 → 不符**以命令输出为准**，先修再看 §2。
 > 状态细节的唯一事实源仍是 `docs/status.md`（本文只做**指针 + 交接上下文**，不复制状态表，避免双源漂移）。
@@ -13,13 +17,13 @@
 ```bash
 git status --short          # 期望：空（工作树干净）
 git log --oneline -1        # 期望：当前 main HEAD（不要写死提交号）
-bun run test                # 期望：188 pass / 0 fail + smoke OK + E2E-1 OK (node)
-dia persona list            # 期望：dabo: 0.1.0 / yan: 0.1.0
+bun test tests              # 期望：1188 pass / 4 skip / 0 fail
+dia persona list            # 期望：yan 23 个版本 / dabo 7 个 / dia-evoler 1 个
 dia persona verify dabo     # 期望：ok <persona 目录>
-dia doctor                  # 期望：verdict: ok（多 persona 时逐项列出 <id>.persona …）
+dia doctor                  # 期望：warn（2 个定时任务失败；persona/kb/deps 应全绿）
 ```
 
-2026-11-02 实测：**上述全部通过**（175 tests / 26 files / 17.09s；doctor 7 项 ✓）。
+2026-11-27 实测：上述除 `doctor` 为 warn（`dws-auth-check` / `case-intake`）外全部通过。
 
 > 判据和本文不符 → 先判定「环境漂移」还是「本文过时」，改完再往下。
 
@@ -29,12 +33,12 @@ dia doctor                  # 期望：verdict: ok（多 persona 时逐项列出
 
 | 项 | 值 |
 |---|---|
-| 仓库 | `~/repos/github/dia`（private `github.com/minonl/dia`），分支 `main`，与 origin 同步 |
+| 仓库 | `~/repos/github/dia`（**public** `github.com/minonl/dia`），分支 `main`，与 origin 同步 |
 | 框架 | D0 ~ D0.16 **全部完成**（kb / ingest / audit / freeze / run / resume / team / monorepo / 全局安装） |
-| persona 安装链 | `add / list / verify / render / update / remove / show / use / path / default / check` **已实现**；`create / render` 于 2026-11-01 落地（含 `--host dsh`） |
-| dabo 落机 | persona `dabo@0.1.0` 已装；`~/.config/opencode/agents/dabo.md` 已渲染；`~/.dsh/profiles/dabo/`（+ builder/planner/redteam/verifier）已存在 |
+| persona 安装链 | `add / list / verify / render / update / remove / show / use / path / default / check / gc` **已实现**；`create / render` 于 2026-11-01 落地（含 `--host dsh`） |
+| dabo 落机 | persona `dabo@0.1.0+gd65941c` 已装；`~/.config/opencode/agents/dabo.md` 已渲染；`~/.dsh/profiles/dabo/`（+ builder/planner/redteam/verifier）已存在 |
 | 默认 agent | **仍是 `yan`**（设计原则：dia 只新增，不抢默认） |
-| 下一步 | D1 doctor 依赖校验 M1 + audit 哈希链 M3（见 `docs/status.md` §3 与 §5 待决策） |
+| 下一步 | ① Git 历史 7 提交待处理；② 0.1.0–0.1.5 npm tarball 待 support；③ W2 文档真相已补；④ W3–W6 见 `docs/overview.md` §4 |
 
 ### 2026-11-01 那一轮的落点（最近 10 个提交，按时间倒序）
 

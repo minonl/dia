@@ -176,7 +176,7 @@ bun src/cli.ts version  # 直接跑源码
 | `persona` | `dia persona list|verify|remove|show <id>|use <id>[@ver]` |  |
 | `persona` | `dia persona path [<id>[@<ver>]] [--json]` | 打印生效版本目录（服务/脚本取代码入口） |
 | `persona` | `dia persona check <id>|update <id> [--ref REF]` |  |
-| `doctor` | `dia doctor [--persona ID] [--paths] [--json]` |  |
+| `doctor` | `dia doctor [--persona ID] [--paths] [--core] [--json]` |  |
 | `deps` | `dia deps list [--json] [--file PATH]` | 派生视图：登记 + 实测 |
 | `deps` | `dia deps record --id ID --kind K --version V [--resolved R] [--role required|optional] [--result pass|fail|unknown] [--evidence P]` |  |
 | `cache` | `dia cache list [--root NAME] [--json]` | 缓存条目：体积/引用/是否有本地独有内容 |

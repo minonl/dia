@@ -343,6 +343,12 @@ describe("dia doctor: 知识根目录缺失 / 重建命令转义", () => {
     }
   });
 
+  test("doctor --core 排除 job / collab（升级验证只看核心面）", () => {
+    const r = run(["doctor", "--core", "--json"]);
+    const d = JSON.parse(r.stdout);
+    expect(d.checks.some((c: any) => c.name.startsWith("job") || c.name.startsWith("collab"))).toBe(false);
+  });
+
   test("detail 里的重建命令按 shell 规则转义（含空格 / 引号也能复制执行）", () => {
     expect(quoteArg("yan")).toBe("yan");
     expect(quoteArg("a-b_c.d")).toBe("a-b_c.d");

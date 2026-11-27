@@ -249,7 +249,7 @@ usage:
   dia persona list|verify|remove|show <id>|use <id>[@ver]
   dia persona path [<id>[@<ver>]] [--json]   # 打印生效版本目录（服务/脚本取代码入口）
   dia persona check <id>|update <id> [--ref REF]
-  dia doctor [--persona ID] [--paths] [--json]
+  dia doctor [--persona ID] [--paths] [--core] [--json]
   dia deps list [--json] [--file PATH]        # 派生视图：登记 + 实测
   dia deps record --id ID --kind K --version V [--resolved R] [--role required|optional] [--result pass|fail|unknown] [--evidence P]
   dia cache list [--root NAME] [--json]        # 缓存条目：体积/引用/是否有本地独有内容
@@ -338,7 +338,7 @@ usage:
     `用法: dia persona add|create|render|list|verify|remove|show|use|path|check|update|gc|default [--json]
       dia persona add <id|--from SRC> [--ref REF] [--host opencode|dsh|codex] [--home DIR] [--dry-run] [--force]`,
   "doctor":
-    `用法: dia doctor [--persona ID] [--paths] [--json]   # 体检；verdict=ok/warn/fail → 退出码 0/1/2`,
+    `用法: dia doctor [--persona ID] [--paths] [--core] [--json]   # 体检；--core 排除 job/collab；verdict=ok/warn/fail → 退出码 0/1/2`,
   "deps":
     `用法: dia deps list [--json] [--file PATH] | dia deps record --id ID --kind K --version V [--resolved R] [--role R]`,
   "cache":

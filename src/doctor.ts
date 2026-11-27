@@ -4,6 +4,7 @@
 //   persona verify / kit verify / default_agent / kb 索引 / wt 包 / job 包
 // 退出码：0 全绿；1 有 warn；2 有 fail（便于脚本与 CI 判定）
 import { closeSync, existsSync, openSync, readFileSync, readSync, realpathSync, statSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -415,6 +416,37 @@ async function personaChecks(id: string, prefix: string, shared: Map<string, { c
     checks.push({ name: `${prefix}persona.render`, status: "ok", detail: `跳过（${e?.message || String(e)}）` });
   }
 
+  // access 能力（0.2.0+）：源声明了 access，但当前安装版本/ lock 没有合成记录 ⇒ 需要 persona update/render。
+  // 只读，不改任何东西；解析失败交给 verify/render 报，不重复刷屏。
+  try {
+    const lock = JSON.parse(readFileSync(join(sc.dir, "dia.lock"), "utf8"));
+    const installed = JSON.parse(readFileSync(join(sc.dir, "dia.json"), "utf8"));
+    const lockAccess = lock.access?.declared === true;
+    let upstream: any = null;
+    const src = typeof lock.source === "string" ? lock.source : "";
+    if (src && existsSync(src) && statSync(src).isDirectory() && existsSync(join(src, "dia.json"))) {
+      try { upstream = JSON.parse(readFileSync(join(src, "dia.json"), "utf8")); } catch { /* 源坏不阻断 */ }
+    }
+    const installedAccess = installed.access !== undefined;
+    const upstreamAccess = upstream?.access !== undefined;
+    if ((installedAccess || upstreamAccess) && !lockAccess) {
+      checks.push({
+        name: `${prefix}persona.access`, status: "warn",
+        detail: `源声明 access，但当前安装版本没合成；运行 dia persona update ${quoteArg(sc.id)}（或 render）启用`,
+      });
+    } else if (lockAccess && !installedAccess && upstream && !upstreamAccess) {
+      checks.push({
+        name: `${prefix}persona.access`, status: "warn",
+        detail: `lock 记录 access，但源已移除；重渲染会移除合成规则（dia persona render ${quoteArg(sc.id)}）`,
+      });
+    } else if (lockAccess) {
+      checks.push({
+        name: `${prefix}persona.access`, status: "ok",
+        detail: `已合成 ${lock.access.added ?? 0} 条（跳过 ${lock.access.skipped ?? 0}）`,
+      });
+    }
+  } catch { /* 坏 lock/manifest 已由 verify/render 报 */ }
+
   // kit 校验
   // 只校验该 persona 引用的 kit；未引用的“孤儿 kit”不拖红（它们不属于这个 persona）
   let refs: { id: string; version: string; range?: string }[] = [];
@@ -456,13 +488,43 @@ async function personaChecks(id: string, prefix: string, shared: Map<string, { c
   return checks;
 }
 
-export async function run(opts: { persona?: string } = {}): Promise<{
+/** 已 adopt 仓的钩子是**生成副本**：dia 升级后不会自动刷新（simple-git-hooks RC 走 live guard，不受影响）。 */
+function wtHookCheck(): Check {
+  const name = "wt.hook";
+  try {
+    const cwd = process.cwd();
+    const commonRaw = execFileSync("git", ["rev-parse", "--git-common-dir"], {
+      cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    const common = resolve(cwd, commonRaw);
+    if (!existsSync(join(common, "dia", "config.json"))) {
+      return { name, status: "ok", detail: "当前目录未 adopt（跳过）" };
+    }
+    const wt = join(paths.installDir(), "packages/wt/bin/dia-wt");
+    const want = existsSync(wt)
+      ? (readFileSync(wt, "utf8").match(/^DIA_WT_GUARD_VERSION=(\d+)/m)?.[1] ?? "")
+      : "";
+    if (!want) return { name, status: "warn", detail: "读不到 dia-wt 模板版本（npm 包不完整？dia postinstall）" };
+    const hook = join(common, "dia", "hooks", "pre-push");
+    const have = existsSync(hook)
+      ? (readFileSync(hook, "utf8").match(/^# dia-wt guard-version: (\d+)/m)?.[1] ?? "")
+      : "";
+    if (have !== want) {
+      return { name, status: "warn", detail: `钩子模板 ${have || "无标记"} != ${want}；修复：dia wt adopt . --apply` };
+    }
+    return { name, status: "ok", detail: `钩子模板 ${want}` };
+  } catch {
+    return { name, status: "ok", detail: "当前目录不是 git 仓（跳过）" };
+  }
+}
+
+export async function run(opts: { persona?: string; core?: boolean } = {}): Promise<{
   persona: string | null;
   personas: string[];
   checks: Check[];
   verdict: "ok" | "warn" | "fail";
 }> {
-  const checks: Check[] = [];
+  let checks: Check[] = [];
   const explicit = opts.persona || process.env.DIA_PERSONA;
 
   // 不指定 persona：装了多个就**逐个自检**（旧行为是整体 fail，等于多 persona 机器上 doctor 不可用）。
@@ -520,6 +582,7 @@ export async function run(opts: { persona?: string } = {}): Promise<{
   checks.push({ name: "wt", status: existsSync(wt) ? "ok" : "warn", detail: existsSync(wt) ? wt : "dia wt 未安装（npm 包不完整？npm i -g @minonl/dia@latest 重装）" });
 
   checks.push(collabObserverCheck());
+  checks.push(wtHookCheck());
 
   const jobRoot = job.jobRootResolved();
   checks.push({
@@ -528,6 +591,8 @@ export async function run(opts: { persona?: string } = {}): Promise<{
     detail: `${jobRoot}${existsSync(jobRoot) ? "" : "（未创建；dia job install 首次运行会建）"}`,
   });
 
+  // --core：只判「升级/配置是否到位」，把定时任务与协作面排除（它们有自己的健康口径）
+  if (opts.core) checks = checks.filter((c) => !c.name.startsWith("job") && !c.name.startsWith("collab"));
   const verdict = checks.some((c) => c.status === "fail") ? "fail" : checks.some((c) => c.status === "warn") ? "warn" : "ok";
   return { persona: ids.length === 1 ? ids[0] : null, personas: ids, checks, verdict };
 }

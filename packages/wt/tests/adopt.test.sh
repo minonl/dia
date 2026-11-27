@@ -35,6 +35,17 @@ bash "$WT" adopt "$R" --apply >/dev/null 2>&1 && ok "重复 apply 幂等" || bad
 bash "$WT" adopt "$R" --check >/dev/null 2>&1 && ok "check 通过" || bad "check 失败"
 bash "$WT" doctor "$R" >/dev/null 2>&1 && ok "doctor 通过" || bad "doctor 失败"
 
+# D21 钩子模板漂移：dia 升级后旧钩子副本不会自动刷新
+python3 - "$R/.git/dia/hooks/pre-push" <<'PY'
+import sys
+p=sys.argv[1]; s=open(p).read().replace("guard-version: 2","guard-version: 1")
+open(p,"w").write(s)
+PY
+out="$(bash "$WT" doctor "$R" 2>&1)"
+printf '%s' "$out" | grep -q 'D21' && ok "doctor 报钩子模板过期" || bad "doctor 未报钩子模板过期"
+bash "$WT" doctor "$R" --fix >/dev/null 2>&1
+grep -q 'guard-version: 2' "$R/.git/dia/hooks/pre-push" && ok "doctor --fix 刷新钩子模板" || bad "doctor --fix 未刷新钩子模板"
+
 echo b > "$R/b.txt"; git -C "$R" add b.txt
 if git -C "$R" commit -qm should-block 2>/dev/null; then bad "主 checkout main 提交未被拦截"; else ok "主 checkout main 提交被拦截"; fi
 git -C "$R" reset -q

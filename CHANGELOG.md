@@ -4,6 +4,19 @@
 
 ## Unreleased
 
+### feat(doctor): 升级自检（钩子模板 / persona access / --core）
+
+- `dia doctor` 新增 `wt.hook`：已 adopt 仓的钩子副本与当前 `dia-wt` 模板版本不一致时 warn（修复：`dia wt adopt . --apply`）。
+- `dia wt doctor` 新增 D21：本地钩子缺版本标记/版本过期时 warn；`--fix` 会重写钩子。
+- `dia doctor` 新增 `persona.access`：源声明 `access` 但当前安装版本/lock 没合成时 warn（`dia persona update <id>`）；lock 有记录但源已移除时提示重渲染。
+- `dia doctor --core`：排除 `job.*` / `collab.*`，只判升级/配置核心面（persona / kit / kb / deps / platform / wt）。
+
+### fix(cli): persona add/render/update 的 --help 补 --rehome
+
+- 跨 HOME 迁移实际支持 `--rehome`，但 help 没列，升级后不可发现。
+
+## 0.2.0 — 2026-11-27
+
 ### fix(persona): access 评审第六轮（备份位置 / 产物归属 / 失败可恢复）
 
 - **坏 lock 备份移出 persona 目录**：改到 `<data>/backups/persona-locks/<id>/dia.lock.bak-<slot>-<ts>`，

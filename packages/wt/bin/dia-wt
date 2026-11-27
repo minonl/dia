@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# 守卫模板版本：改了 wt_guard_body 就 +1（doctor 用它检测已 adopt 仓的钩子副本是否过期）
+DIA_WT_GUARD_VERSION=2
 # ============================================================================
 # dia wt —— worktree 目录形式选型 + 创建（**唯一实现**，2026-10-12）
 #
@@ -1298,6 +1300,7 @@ wt_default_branch() {
 wt_guard_body() {
   cat <<'HOOKBODY'
 set -uo pipefail
+# dia-wt guard-version: 2
 # 钩子名：生成的钩子用 basename $0；`dia wt guard` 用环境变量指定
 name="${DIA_WT_HOOK_NAME:-$(basename "$0")}"
 top="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
@@ -1853,6 +1856,12 @@ RC
       for h in pre-commit pre-push post-checkout; do
         [ -x "$hooksdir/$h" ] || { echo "FAIL D02 $repo 缺 $h"; bad=1; }
       done
+      # D21 钩子模板漂移：dia 升级后旧钩子副本不会自动刷新（simple-git-hooks RC 走 live `dia wt guard`，不受影响）
+      local hv=""
+      [ -f "$hooksdir/pre-push" ] && hv="$(sed -n 's/^# dia-wt guard-version: //p' "$hooksdir/pre-push" | head -1)"
+      if [ "$hv" != "$DIA_WT_GUARD_VERSION" ]; then
+        echo "WARN D21 $repo 钩子模板过期（${hv:-无标记} != $DIA_WT_GUARD_VERSION）；修复：dia wt adopt $repo --apply"
+      fi
       if [ -n "$def" ] && wt_is_main_checkout "$repo" && [ "$(git -C "$repo" symbolic-ref --short HEAD 2>/dev/null)" = "$def" ]; then
         ( cd "$repo" && DIA_WT_GUARD_PROBE=1 "$hooksdir/pre-commit" >/dev/null 2>&1 ) \
           && { echo "FAIL D03 $repo 守卫未拦截 $def 提交"; bad=1; }

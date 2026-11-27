@@ -2122,7 +2122,7 @@ export async function main(rawArgv: string[]): Promise<number> {
       r = spawnSync("npm", ["i", "-g", "@minonl/dia@latest"], { stdio: "inherit" });
       if (r.status !== 0) { err("E_UPDATE: npm 安装失败（可能需要 sudo 或调整 npm prefix）"); return r.status || 1; }
     }
-    out(`已更新到 ${latest}（重新打开终端/会话生效）`);
+    out(`已更新到 ${latest}（已生效；新终端/会话直接使用）`);
     // npm 11 起默认屏蔽安装脚本（allowScripts）→ 升级后在本进程内补一次自举，保证「装完即用」
     try {
       const b = defaultMsg.ensure(undefined, { force: true });
@@ -2130,6 +2130,26 @@ export async function main(rawArgv: string[]): Promise<number> {
       const jr = refreshJobCopy();
       if (jr?.updated) out(`dia-job 副本已刷新（${jr.path}）`);
     } catch { /* 自举失败不影响升级结果 */ }
+    // 升级只换 CLI；已 adopt 仓的钩子是生成副本，模板版本不一致时提醒（不自动改别的仓）
+    try {
+      const commonRaw = execFileSync("git", ["rev-parse", "--git-common-dir"], {
+        cwd: process.cwd(), encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+      }).trim();
+      const common = resolvePath(commonRaw);
+      if (existsSync(join(common, "dia", "config.json"))) {
+        const wtbin = join(paths.installDir(), "packages/wt/bin/dia-wt");
+        const want = existsSync(wtbin)
+          ? (readFileSync(wtbin, "utf8").match(/^DIA_WT_GUARD_VERSION=(\d+)/m)?.[1] ?? "")
+          : "";
+        const hook = join(common, "dia", "hooks", "pre-push");
+        const have = existsSync(hook)
+          ? (readFileSync(hook, "utf8").match(/^# dia-wt guard-version: (\d+)/m)?.[1] ?? "")
+          : "";
+        if (want && have !== want) {
+          out(`提示：当前仓钩子模板过期（${have || "无标记"} != ${want}）；运行 dia wt adopt . --apply 刷新`);
+        }
+      }
+    } catch { /* 非 git 仓 / 无权限：不影响升级结果 */ }
     return 0;
   }
   if (cmd === "kb") {
@@ -2274,7 +2294,7 @@ export async function main(rawArgv: string[]): Promise<number> {
       out(has(argv, "--json") ? JSON.stringify(roots, null, 1) : Object.entries(roots).map(([k, v]) => `${k.padEnd(9)} ${v}`).join("\n"));
       return 0;
     }
-    const r = await doctor.run({ persona: flag(argv, "--persona") });
+    const r = await doctor.run({ persona: flag(argv, "--persona"), core: has(argv, "--core") });
     if (has(argv, "--json")) out(JSON.stringify(r, null, 1));
     else {
       for (const c of r.checks) out(`${c.status === "ok" ? "✓" : c.status === "warn" ? "!" : "✗"} ${c.name.padEnd(20)} ${c.detail}`);

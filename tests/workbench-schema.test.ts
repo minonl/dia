@@ -35,7 +35,7 @@ describe("dia wb（M0 契约）", () => {
 
   test("同一个 --now 两次输出字节一致（去 duration_ms）", () => {
     writeTracks([
-      { ts: "2026-01-01T00:00:00.000Z", event: "open", id: "tr-aaaa1111", title: "示例线", goal: "g", repo: ["fed/lyzr/hummus"], prio: "P1", next: "写测试" },
+      { ts: "2026-01-01T00:00:00.000Z", event: "open", id: "tr-aaaa1111", title: "示例线", goal: "g", repo: ["org/group/project-a"], prio: "P1", next: "写测试" },
     ]);
     const now = "2026-01-02T03:04:05.000Z";
     const a = json(run(["wb", "--json", "--now", now]).stdout);
@@ -52,10 +52,10 @@ describe("dia wb（M0 契约）", () => {
 
   test("折叠 tracks.jsonl：open/bind/stage/next", () => {
     writeTracks([
-      { ts: "2026-01-01T00:00:00.000Z", event: "open", id: "tr-bbbb2222", title: "灰度开通", goal: "收口", repo: ["fed/lyzr/hummus"], prio: "P1", next: "补单测" },
+      { ts: "2026-01-01T00:00:00.000Z", event: "open", id: "tr-bbbb2222", title: "灰度开通", goal: "收口", repo: ["org/group/project-a"], prio: "P1", next: "补单测" },
       { ts: "2026-01-01T01:00:00.000Z", event: "bind", id: "tr-bbbb2222", session: "ses_x", role: "lead", host: "opencode" },
       { ts: "2026-01-01T02:00:00.000Z", event: "stage", id: "tr-bbbb2222", status: "blocked", reason: "等 CI" },
-      { ts: "2026-01-01T03:00:00.000Z", event: "next", id: "tr-bbbb2222", next: "改派 lead", waiting_on: { kind: "human", ref: "min" } },
+      { ts: "2026-01-01T03:00:00.000Z", event: "next", id: "tr-bbbb2222", next: "改派 lead", waiting_on: { kind: "human", ref: "maintainer" } },
     ]);
     const s = json(run(["wb", "--json"]).stdout);
     expect(s.tracks.length).toBe(1);
@@ -90,7 +90,7 @@ describe("dia wb（M0 契约）", () => {
 
   test("gc：白名单外一律可清，durable 保留", () => {
     mkdirSync(join(root, "workbench", "derived"), { recursive: true });
-    writeTracks([{ ts: "2026-01-01T00:00:00.000Z", event: "open", id: "tr-keep0001", title: "保留", repo: ["fed/lyzr/hummus"], prio: "P2", next: "x" }]);
+    writeTracks([{ ts: "2026-01-01T00:00:00.000Z", event: "open", id: "tr-keep0001", title: "保留", repo: ["org/group/project-a"], prio: "P2", next: "x" }]);
     writeFileSync(join(root, "workbench", "stray.json"), "{}");
     writeFileSync(join(root, "workbench", "derived", "snapshot.json"), "{}");
 

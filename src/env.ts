@@ -1,7 +1,7 @@
 // env.ts — 白名单键按需注入子进程（不 source、不长期 export、不回显值）
 //
 // 为什么在框架里：任何 agent 都要「从纯文本凭据文件取 key 给子进程」，而 key 清单是域的
-// （yan 有 LEYAN_*，dabo 有 DABO_*）⇒ 机制进 dia，清单由 persona 声明。
+// （yan 有 YAN_*，dabo 有 DABO_*）⇒ 机制进 dia，清单由 persona 声明。
 //
 // 硬约束（沿用 R37）：
 //   · 不 source 环境文件（会灌进该 shell 的每个子进程）

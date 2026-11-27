@@ -31,7 +31,7 @@ updated: 2026-11-09
 
 ### 评审路由（R1.7）：**配置驱动，禁止硬编码仓名**（2026-10-16 用户指正）
 
-> 原先 `route` 把仓名写在脚本里（`yan-agent|personal-agent` → 内部仓；`hummus|*-qa|…` → 业务仓）。
+> 原先 `route` 把仓名写在脚本里（`yan-agent|personal-agent` → 内部仓；`project-a|*-qa|…` → 业务仓）。
 > **错在三处**：① 「哪些仓是我的/业务仓」是**环境事实**，换个人全错；② 它含「**我是谁**」成分 ——
 > 仓归属因人而异（本人的自持仓 / 别人的仓），合并通道结论因此不同；
 > ③ 每加一个仓都要改共享配方库 ⇒ 漂移。⇒ **规则留在脚本，数据只落本地**（数据根 / personal-agent）。
@@ -67,7 +67,7 @@ $PERSONAL_AGENT_DIR/config/yan-route.json    个人仓基线（跨设备可版�
 
 ## 1. 默认：平级目录
 
-`<parent>/<repo>-worktree--<feature>`（如 `~/repos/leyan/hummus-worktree--<feature>`）
+`<parent>/<repo>-worktree--<feature>`（如 `~/repos/project-a-worktree--<feature>`）
 
 理由：
 
@@ -79,7 +79,7 @@ $PERSONAL_AGENT_DIR/config/yan-route.json    个人仓基线（跨设备可版�
 
 `<repo>/.worktrees/<feature>`
 
-1. 该仓**无 `node_modules`**（纯文档/脚本/元数据仓：yan-agent、leyan-skills、dockerfiles-v2、hasura-metadata、redmine-tools…）；
+1. 该仓**无 `node_modules`**（纯文档/脚本/元数据仓：yan-agent、example-skills、images、metadata、ticket-tools…）；
 2. 该仓**无仓库级扫描工具**（无 nx / eslint / tsc / vite / CRA 的全仓扫描）；
 3. `.gitignore` 已加 `.worktrees/`（否则主 worktree 出现 `?? .worktrees/`）。
 
@@ -90,8 +90,8 @@ $PERSONAL_AGENT_DIR/config/yan-route.json    个人仓基线（跨设备可版�
 | 条件 | 目录形式 |
 |---|---|
 | 需要 `pnpm`/`yarn install` | **平级** |
-| 使用 nx（如 hummus） | **平级** |
-| 需要 `leyan-scripts release` / changesets release（前端仓） | **平级** |
+| 使用 nx（如 project-a） | **平级** |
+| 需要 `example-scripts release` / changesets release（前端仓） | **平级** |
 | 需要并行 `serve` / 构建 | **平级** |
 | 纯文档/脚本仓、无依赖安装、无扫描工具 | 隐藏目录可接受（默认仍建议平级） |
 | 拿不准 | **平级**（兜底） |
@@ -114,7 +114,7 @@ mtime = 操作时刻），此时工具可能"还能跑一半"，但 pnpm 语义/
   （pnpm 按 realpath 把软链目标当自己的目录处理 → 改写目标仓）。
 - **正确姿势**：`dia wt create <repo> <feature> --install`（依赖真装在 worktree 内）+ 开工/收工跑 `check`。
 - **worktree 里要不要真装依赖、钩子报错怎么办（2026-10-26 两轮 grill 定论）**：
-  - **有 `devDependencies` 的仓 → 必须真装**（含 hasura-metadata 这类只有 prettier/lint-staged/env-cmd 的元数据仓）：
+  - **有 `devDependencies` 的仓 → 必须真装**（含 metadata 这类只有 prettier/lint-staged/env-cmd 的元数据仓）：
     `pnpm install --frozen-lockfile`（实测 **1.1s / 15M**）。
   - **为什么**：仓内钩子普遍写成 `npx <tool>`；**本地没依赖时 `npx` 会下载最新版**——实测仓内 pinned
     `prettier 2.8.8`，钩子实际跑 **3.9.10**，格式规则不同 ⇒ **假红**（反向的假绿同样可能）。
@@ -125,7 +125,7 @@ mtime = 操作时刻），此时工具可能"还能跑一半"，但 pnpm 语义/
 
 **判据与体检（2026-10-15 落地）**：禁的是「**顶层 `node_modules` 本身是软链 / 跨 checkout 共享**」，
 **不是** node_modules 内部有软链（pnpm `isolated` linker 的顶层包链、`link:` 依赖、dsh profile 的
-`node_modules/@leyantech/*`、GVS 的 `<store>/links` 链都是**合法形态**）。机械判据：
+`node_modules/@example/*`、GVS 的 `<store>/links` 链都是**合法形态**）。机械判据：
 
 ```bash
 bash `dia wt` check <repo> [--all] [--deep]    # A 顶层软链 / B 逃出 checkout / C 悬空 / D 深层逃逸
@@ -138,7 +138,7 @@ bash `dia wt` check <repo> [--all] [--deep]    # A 顶层软链 / B 逃出 check
 
 1. **每个 worktree 各装自己的 `node_modules`**：进入该 worktree 跑
    **`pnpm install --frozen-lockfile`**（默认即复用全局内容寻址 store 的硬链接）。
-   **实测（2026-09-30，hummus）**：`--frozen-lockfile` 真装 **~22s（release worktree）/ ~34s（feature worktree）**，
+   **实测（2026-09-30，project-a）**：`--frozen-lockfile` 真装 **~22s（release worktree）/ ~34s（feature worktree）**，
    产物 `node_modules` ~1.3G；对比「软链共享」省下的那点时间，**完全不成比例**——软链会把另一 checkout 的
    链接改写指向本 worktree（删除后对方全部悬空，实测 198 条），**绝对不要**。
 2. **可选提速（pnpm 官方共享方案）= 全局虚拟存储（GVS）**：`pnpm-workspace.yaml` 加
@@ -157,7 +157,7 @@ bash `dia wt` check <repo> [--all] [--deep]    # A 顶层软链 / B 逃出 check
      或全局 `~/.config/pnpm/config.yaml`。**实测判据**：中性目录 `pnpm config get enableGlobalVirtualStore` → `undefined`。
      （顺带澄清：`<store>/links/@/` 里那 128 条 9 月的残留**不是**项目启用过 GVS——`pnpm dlx` / `pnpm add -g`
      **默认就用 GVS**。）
-   - **本机现状（2026-10-15 实测）：项目级全部未启用**——hummus 11.15.1 / jd-qa 11.3.0 / ks-qa·pdd-qa·prokaryote 11.18.0，
+   - **本机现状（2026-10-15 实测）：项目级全部未启用**——project-a 11.15.1 / project-c 11.3.0 / project-d·project-e·project-b 11.18.0，
      `.modules.yaml` 一律 `virtualStoreDir: .pnpm`（本地）；且**版本都 < 11.23.0**（正式拼写不可用）。
    - 局限（官方文档口径）：① **CI 无用**（无热 store）；② 属共享可写状态，**仅同一信任域**使用；
      ③ ESM 提升依赖走 `NODE_PATH`——**≥11.23.0 起 pnpm 自己 spawn 的进程**（`pnpm run/exec/dlx`、生命周期脚本）
@@ -167,11 +167,11 @@ bash `dia wt` check <repo> [--all] [--deep]    # A 顶层软链 / B 逃出 check
      不建议用全局 config 一刀切。
    - **决策（2026-10-15，用户拍板）**：本轮**只做治理**（`check` 判据 + 守卫 + 巡检），GVS **试点另开任务**；
      两者互补——GVS 是**正向提速**，禁跨 checkout 软链是**禁危险捷径**。
-   - ⛔ **试点结果（2026-10-16，hummus）= 暂停启用**：收益实测很实在（**新 worktree 安装 2.9s**、
+   - ⛔ **试点结果（2026-10-16，project-a）= 暂停启用**：收益实测很实在（**新 worktree 安装 2.9s**、
      `node_modules` **1.9M** vs 名义 1.3G、lockfile 零变更），但 GVS 使「每个包的依赖图目录」实体化 ⇒
      `@types/react` 出现 **6 个不同 realpath 副本** ⇒ TS 按 realpath 归并 ⇒ **CI 同款 `nx typecheck web-hub` 40 错**
      （单变量对照：同 `pnpm@11.28.2` 关 GVS 则通过；`pnpm@12.11.2` 同样错 ⇒ 是 GVS 本身、上游未修）。
-     绕法（tsconfig `paths` 钉 `react`）能救 TS，但被 hummus 的 `resolve.tsconfigPaths: true` 带到运行时 ⇒ vitest 挂。
+     绕法（tsconfig `paths` 钉 `react`）能救 TS，但被 project-a 的 `resolve.tsconfigPaths: true` 带到运行时 ⇒ vitest 挂。
      **完整数据/复现命令/失败尝试见 `kit/node`（`dia --persona yan kb query --tag node "pnpm"`）**。当前维持「真装 + 禁软链」。
 3. 相关坑：pnpm 11 起 `pnpm run` 默认 `verifyDepsBeforeRun=install` → **在无 `node_modules` 的 worktree 里跑
    `pnpm run`/`pnpm exec` 会触发 install**（可能触发上面的 purge 逻辑）；WORKTREE 里优先用
@@ -185,13 +185,13 @@ bash `dia wt` check <repo> [--all] [--deep]    # A 顶层软链 / B 逃出 check
 - **路径绑定**：`.modules.yaml` 中 `storeDir` = 绝对路径（可用 `--store-dir` 重定向）、`virtualStoreDir` = 相对 `.pnpm`；
   本机各仓均 `nodeLinker: isolated`，**无仓启用 global virtual store**（故暂无法享受瞬时 install）。
 - **pnpm 版本差异**：pnpm 11 起 `pnpm run` 默认 `verifyDepsBeforeRun=install`（会先触发 install），pnpm 9/10 默认不触发
-  ——这解释了「release 触发 install」为何主要出现在 hummus / jd-qa / prokaryote（pnpm 11 仓）。
-- **`@leyan/scripts release`**（读 `node_modules/@leyan/scripts/scripts/release.js`）：standard-version（skip commit/tag）
+  ——这解释了「release 触发 install」为何主要出现在 project-a / project-c / project-b（pnpm 11 仓）。
+- **`@example/scripts release`**（读 `node_modules/@example/scripts/scripts/release.js`）：standard-version（skip commit/tag）
   + `git checkout -b release-<ver>` + `git add . && git commit`；只用共享 refs 的 git 操作 →
   **与目录形式无关**（隐藏目录也能跑），但与「是否有真实 node_modules」有关（见 §3）。
 - **changesets**：只用 `merge-base`/`diff`/`log`/`rev-parse` 等共享 refs 操作；风险 = **多 worktree 并发 release
   争用 tag/ref** → 发布必须串行。
-- **nx（hummus nx 23.2 实证）**：`workspaceId` 由 **git remote 身份**派生（非路径）→ cache + project graph DB
+- **nx（project-a nx 23.2 实证）**：`workspaceId` 由 **git remote 身份**派生（非路径）→ cache + project graph DB
   **有意跨 worktree 共享**（`~/.nx/<hash>`）；本地运行态（`.nx/workspace-data`、daemon socket）按 worktree 隔离；
   `nx reset` 清的是**共享**目录（影响该仓所有 worktree）；**worktree 放仓库内会被主 worktree 的 nx 当项目扫描**
   → nx 仓必须平级。

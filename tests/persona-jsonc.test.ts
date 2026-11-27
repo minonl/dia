@@ -9,7 +9,7 @@ let dir: string, data: string;
 
 const JSONC = `{
   // 用户注释，写回时必须保留
-  "model": "leyan/kimi",
+  "model": "example/kimi",
   "default_agent": "yan",
   "permission": { "read": "allow" },
 }`;
@@ -49,7 +49,7 @@ describe("在 .jsonc 上写默认 agent", () => {
     const raw = readFileSync(join(dir, "opencode.jsonc"), "utf8");
     expect(raw).toContain("// 用户注释，写回时必须保留");
     expect(raw).toContain('"default_agent": "dabo"');
-    expect(raw).toContain('"model": "leyan/kimi"');
+    expect(raw).toContain('"model": "example/kimi"');
     expect(persona.showDefaultAgent().current).toBe("dabo");
   });
 

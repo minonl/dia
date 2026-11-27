@@ -17,7 +17,7 @@
   {
    "severity": "P2",
    "area": "tree",
-   "evidence": "leyan-skills / ~/repos/leyan / .env.leyan 等内部命名",
+   "evidence": "example-skills / ~/repos / .env.example 等内部命名",
    "fix": "已替换为 example-*"
   },
   {

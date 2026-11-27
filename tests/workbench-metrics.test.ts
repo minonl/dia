@@ -17,7 +17,7 @@ function mkTrack(over: Partial<Track> = {}): Track {
     status: "active",
     stage: "dev",
     next: "补幂等单测",
-    repo: ["fed/lyzr/hummus"],
+    repo: ["org/group/project-a"],
     prio: "P1",
     refs: [],
     sessions: [],
@@ -40,7 +40,7 @@ const BASE: MetricsInput = {
       session_id: "ses_root",
       host: "opencode",
       tokens: { input: 1000, output: 200, cache_read: 5000, cache_write: 0 },
-      models: ["leyantech/deepseek-v4.1-flash"],
+      models: ["example/deepseek-v4.1-flash"],
       turns: 4,
       tools: { bash: 3, edit: 1 },
       tool_errors: 1,
@@ -53,7 +53,7 @@ const BASE: MetricsInput = {
       parent_id: "ses_root",
       host: "opencode",
       tokens: { input: 100, output: 20, cache_read: 0, cache_write: 0 },
-      models: ["leyantech/deepseek-v4.1-flash"],
+      models: ["example/deepseek-v4.1-flash"],
       turns: 2,
       turn_times: [at(31), at(33)],
       first_seen: at(31),
@@ -93,7 +93,7 @@ describe("workbench metrics（§8.1 口径）", () => {
     expect(m.cost_usd).toBe(null);
     expect(m.priced).toBe(false);
     expect(m.unpriced.sessions).toBe(2);
-    expect(m.unpriced.models).toEqual(["leyantech/deepseek-v4.1-flash"]);
+    expect(m.unpriced.models).toEqual(["example/deepseek-v4.1-flash"]);
     expect(m.cost_basis).toBe("none");
   });
 
@@ -139,14 +139,14 @@ describe("workbench metrics（§8.1 口径）", () => {
       ...BASE,
       prices: PRICES,
       sessions: [
-        { session_id: "a", host: "dsh", cost_usd: 0.5, tokens: {}, models: ["leyantech/unknown"] },
+        { session_id: "a", host: "dsh", cost_usd: 0.5, tokens: {}, models: ["example/unknown"] },
         { session_id: "b", host: "dsh", tokens: { input: 1_000_000 }, models: ["deepseek/deepseek-flash"] },
-        { session_id: "c", host: "dsh", tokens: { input: 10 }, models: ["leyantech/unknown"] },
+        { session_id: "c", host: "dsh", tokens: { input: 10 }, models: ["example/unknown"] },
       ],
     });
     expect(m.cost_usd).toBeCloseTo(0.65, 6);
     expect(m.priced).toBe(false);
-    expect(m.unpriced).toEqual({ sessions: 1, models: ["leyantech/unknown"] });
+    expect(m.unpriced).toEqual({ sessions: 1, models: ["example/unknown"] });
     expect(m.cost_basis).toBe("mixed");
   });
 
@@ -236,12 +236,12 @@ describe("workbench metrics（§8.2 团队模式与对照）", () => {
       ...BASE,
       tracks,
       runs: [{ role: "builder" }, { role: "verifier" }],
-      goal_type: { repo: "fed/lyzr/hummus", tag: "release" },
+      goal_type: { repo: "org/group/project-a", tag: "release" },
     });
     expect(m.compare.n).toBe(5);
     expect(m.compare.conclusive).toBe(true);
     expect(m.compare.need_more).toBe(0);
-    expect(m.goal_type).toBe("fed/lyzr/hummus::release");
+    expect(m.goal_type).toBe("org/group/project-a::release");
     expect(m.compare.team.n).toBe(5);
     expect(m.compare.solo.n).toBe(0);
   });
@@ -260,7 +260,7 @@ describe("workbench metrics（确定性）", () => {
       runs: [{ role: "builder" }, { role: "verifier" }, { role: "redteam-1" }],
       tasks: [{ id: "t-1", status: "done", judge: "bun test" }],
       tracks: [mkTrack({ id: "tr-1", status: "done" })],
-      goal_type: { repo: "fed/lyzr/hummus", tag: "feature" },
+      goal_type: { repo: "org/group/project-a", tag: "feature" },
     };
     expect(JSON.stringify(buildMetrics(input))).toBe(JSON.stringify(buildMetrics(input)));
   });

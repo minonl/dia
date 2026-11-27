@@ -19,7 +19,7 @@ function mkTrack(over: Partial<Track> & { status_since?: string } = {}): DueTrac
     status: "active",
     stage: "dev",
     next: "补幂等单测",
-    repo: ["fed/lyzr/hummus"],
+    repo: ["org/group/project-a"],
     prio: "P1",
     refs: [],
     sessions: [{ session_id: "ses_a", role: "lead", host: "opencode", bound_at: ago(2 * H) }],
@@ -113,7 +113,7 @@ describe("computeDue（§9.3 命中与排序）", () => {
   test("waiting_on 超 stale_wait_days（默认 3 天）命中，2 天不命中", () => {
     const stale = computeDue({
       now: NOW,
-      tracks: [mkTrack({ waiting_on: { kind: "human", ref: "min" }, updated_at: ago(4 * D) })],
+      tracks: [mkTrack({ waiting_on: { kind: "human", ref: "maintainer" }, updated_at: ago(4 * D) })],
       sessions: alive,
     });
     expect(stale.items[0].reasons.map((x) => x.kind)).toEqual(["stale_wait"]);
@@ -122,7 +122,7 @@ describe("computeDue（§9.3 命中与排序）", () => {
 
     const ok = computeDue({
       now: NOW,
-      tracks: [mkTrack({ waiting_on: { kind: "human", ref: "min" }, updated_at: ago(2 * D) })],
+      tracks: [mkTrack({ waiting_on: { kind: "human", ref: "maintainer" }, updated_at: ago(2 * D) })],
       sessions: alive,
     });
     expect(ok.items).toEqual([]);

@@ -158,7 +158,7 @@ opencode v2 的 `session/load` 通道用 `tests/fixtures/mock-acp-session.mjs`�
 | **P0** | 事件流 `events.jsonl` + `dia msg trace` + `stats` 加 attempt 分母 + fake-tmux e2e + 修 `escalated` 不在 TERMINAL、`in` 先输出后落盘两个语义坑 | 低（不改消息路径） |
 | **P1** | session→pane 绑定（注册采集 `TMUX_PANE`+pid+start+cwd，带 TTL 心跳）；`dia msg send` best-effort 注入一次（5s 超时，失败不阻断，打印 `notified: tmux|mailbox-only(reason)`） | 中（误投/重复注入，必须有指纹与幂等） |
 | **P2** | 退避重投（job 300s 扫 pending，≤3 次）+ escalate 接线 + `context.exposed`（hook/`seen`） | 中 |
-| **P3** | webhook transport + 本地服务端实测；dsh 插件 + 安装器；**运行时已实测**（`dia-test` profile 接乐言网关，`dsh headless` 输出注入行） | 完成 |
+| **P3** | webhook transport + 本地服务端实测；dsh 插件 + 安装器；**运行时已实测**（`dia-test` profile 接示例网关，`dsh headless` 输出注入行） | 完成 |
 
 ## 8. 不做的
 

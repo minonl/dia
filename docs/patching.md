@@ -40,7 +40,7 @@ patches/<id>/<patch-id>/
   "base_hash": "sha256:...",
   "files": ["agents/dabo.md"],
   "reason": "本地实验：调整排障口吻",
-  "author": "min",
+  "author": "maintainer",
   "created_at": "2026-10-28T12:00:00Z"
 }
 ```

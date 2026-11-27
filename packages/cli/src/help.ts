@@ -243,9 +243,9 @@ usage:
   dia guard [--once] [--json]
   dia run --session S [--tool T] [--agent A] [--waive --risk N] [--redline] -- <cmd> [args...]
   dia resume --session S [--json]
-  dia persona add <id|--from SRC> [--ref REF] [--host opencode|dsh|codex] [--home DIR] [--dry-run] [--force] [--json]
+  dia persona add <id|--from SRC> [--ref REF] [--host opencode|dsh|codex] [--home DIR] [--dry-run] [--force] [--rehome] [--json]
   dia persona create <id> --dir DIR [--host opencode|dsh|codex] [--no-msg] [--dry-run] [--json]
-  dia persona render <id> [--host opencode|dsh|codex] [--home DIR] [--check] [--json]
+  dia persona render <id> [--host opencode|dsh|codex] [--home DIR] [--rehome] [--check] [--json]
   dia persona list|verify|remove|show <id>|use <id>[@ver]
   dia persona path [<id>[@<ver>]] [--json]   # 打印生效版本目录（服务/脚本取代码入口）
   dia persona check <id>|update <id> [--ref REF]
@@ -481,11 +481,11 @@ usage:
   "msg analyze-storage":
     `用法: dia msg analyze-storage [--json]   # 只读体检：v1 残留 / v2 现状 / 事件流健康度`,
   "persona add":
-    `用法: dia persona add <id|--from SRC> [--ref REF] [--host opencode|dsh|codex] [--home DIR] [--dry-run] [--force] [--json]`,
+    `用法: dia persona add <id|--from SRC> [--ref REF] [--host opencode|dsh|codex] [--home DIR] [--dry-run] [--force] [--rehome] [--json]`,
   "persona create":
     `用法: dia persona create <id> --dir DIR [--host opencode|dsh|codex] [--no-msg] [--dry-run] [--json]`,
   "persona render":
-    `用法: dia persona render <id> [--host opencode|dsh|codex] [--home DIR] [--check] [--json]`,
+    `用法: dia persona render <id> [--host opencode|dsh|codex] [--home DIR] [--rehome] [--check] [--json]`,
   "persona list":
     `用法: dia persona list [--json]   # 已安装 persona 及版本（完整参数见 dia --help）`,
   "persona show":
@@ -503,7 +503,7 @@ usage:
   "persona check":
     `用法: dia persona check <id> [--json]   # 检查远端是否有新版本（只读）（完整参数见 dia --help）`,
   "persona update":
-    `用法: dia persona update <id> [--ref REF] [--force] [--dry-run] [--json]   # 拉取并安装新版本（--dry-run 只报告）`,
+    `用法: dia persona update <id> [--ref REF] [--force] [--dry-run] [--rehome] [--json]   # 拉取并安装新版本（--dry-run 只报告）`,
   "persona default":
     `用法: dia persona default <id> | --unset | --show [--host opencode]   # 各 host 的默认 persona`,
   "service add":
